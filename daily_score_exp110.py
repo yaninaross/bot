@@ -50,7 +50,7 @@ except Exception:
 # CONSTANTS
 # ==============================================================================
 BUCKET_NAME    = "time-series-bucket-ys"
-GCS_MODEL_PATH = "Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
+GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 BQ_TABLE       = "ys-time-series.scoring_logs.live_predictions"
 INFERENCE_DIR  = "Data/Inference"
 TAIL_DAYS      = 7
@@ -70,7 +70,7 @@ ASSET_COLS = (['Gap_Pct', 'RSI_14', 'RSI_60', 'RVOL', 'Compression',
               [f'ROC_{h}m' for h in ROC_HORIZONS] + MICRO_COLS)
 
 MODEL_ID = "110_MICRO"
-STATS_PATH = f"Data/Inference/scaling_stats_experiment_{MODEL_ID}.json"
+STATS_PATH = f"Data/Inference_v2/scaling_stats_experiment_{MODEL_ID}.json"
 
 TRAIN_TEACHERS = [
     'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'CORZ', 'MSTR',

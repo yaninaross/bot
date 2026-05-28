@@ -65,7 +65,7 @@ except Exception:
 PST = pytz.timezone('America/Los_Angeles')
 BUCKET_NAME = "time-series-bucket-ys"
 GCS_INFERENCE_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
-GCS_MODEL_PATH = "Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
+GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 ROC_HORIZONS = [5, 30, 60, 120]
 TIME_STEPS = 240
 EMBED_DIM = 16
@@ -102,7 +102,7 @@ EXP_97 = {
     'ticker_file_map': {'BITF': 'KEEL'},
     'seeds': list(range(9701, 9716)),
     'has_smh_rsi': True,
-    'results_path': 'Algos/Results_all/Universal_Exp97_MICRO',
+    'results_path': 'Algos/Results_all_v2/Universal_Exp97_MICRO',
     'scoring_tickers': [
         'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'CORZ', 'MSTR', 'COIN',
         'BITF', 'HUT', 'CIFR', 'BTBT', 'MIGI', 'HOOD', 'SMLR',
@@ -130,7 +130,7 @@ EXP_103 = {
     'ticker_file_map': {},
     'seeds': list(range(10301, 10316)),
     'has_smh_rsi': False,
-    'results_path': 'Algos/Results_all/Universal_Exp103_DEFENSE',
+    'results_path': 'Algos/Results_all_v2/Universal_Exp103_DEFENSE',
     'scoring_tickers': [
         'AVAV', 'KTOS', 'PLTR', 'BBAI', 'RKLB', 'ASTS', 'LUNR', 'SPIR', 'JOBY', 'NNDM', 'MVIS',
         'GD', 'LMT', 'NOC', 'RTX', 'LHX', 'GE', 'RCAT', 'ACHR',
@@ -289,7 +289,7 @@ def engineer_asset(ticker, market_df, exp_cfg, target_date, mode):
 # ==============================================================================
 def load_stats(model_id):
     blob = gcs_client.bucket(BUCKET_NAME).blob(
-        f"Data/Inference/scaling_stats_experiment_{model_id}.json")
+        f"Data/Inference_v2/scaling_stats_experiment_{model_id}.json")
     return json.loads(blob.download_as_text())
 
 

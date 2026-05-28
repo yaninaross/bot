@@ -296,7 +296,7 @@ def run_backtester():
         vix_raw = heal_data(vix_raw)
         vix_raw.index = vix_raw.index.tz_convert(PST)
 
-    stats_blob = client.bucket(BUCKET_NAME).blob(f"Data/Inference/{STATS_FILE_NAME}")
+    stats_blob = client.bucket(BUCKET_NAME).blob(f"Data/Inference_v2/{STATS_FILE_NAME}")
     if not stats_blob.exists():
         sys.exit(f"Stats missing: {STATS_FILE_NAME}")
     stats = json.loads(stats_blob.download_as_string())
@@ -310,7 +310,7 @@ def run_backtester():
 
         seed = config['seed']
         if seed not in model_cache:
-            model_path = f"Algos/to_deploy/Saved_models/UNIVERSAL/Direction/UNIVERSAL_S{seed}_M{MODEL_ID}.h5"
+            model_path = f"Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction/UNIVERSAL_S{seed}_M{MODEL_ID}.h5"
             blob = client.bucket(BUCKET_NAME).blob(model_path)
             if not blob.exists():
                 print(f"   Model missing for seed {seed} at {model_path}")

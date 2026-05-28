@@ -73,9 +73,9 @@ DATA_START_DATE    = "2022-01-01"
 
 BUCKET_NAME      = "time-series-bucket-ys"
 INFERENCE_DIR    = "Data/Inference"
-GCS_MODEL_PATH   = "Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
-GCS_RESULTS_PATH = f"Algos/Results_all/Universal_Exp{MODEL_ID}"
-STATS_PATH       = f"Data/Inference/scaling_stats_experiment_{MODEL_ID}.json"
+GCS_MODEL_PATH   = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
+GCS_RESULTS_PATH = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
+STATS_PATH       = f"Data/Inference_v2/scaling_stats_experiment_{MODEL_ID}.json"
 
 SPIKE_THRESHOLD = 0.10
 

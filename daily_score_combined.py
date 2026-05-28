@@ -1,21 +1,25 @@
 """
-Daily Scoring — 14 Tickers (v2_bar_is_real) across 3 Experiments
-=================================================================
-Self-contained. Scores tickers across multiple experiments.
-Includes data loading, healing, regime filter, and BQ logging.
+Daily Scoring — v5 WF optimized (152 + 160 + 170)
+===================================================
+Self-contained. Scores 17 tickers across 3 experiments.
+Includes data loading, healing, dynamic TP/SL, regime filter, and BQ logging.
 
-Exp-105 (Defense cluster):  RCAT, SPIR, ASTS, HUT
-Exp-106 (Defense 8% clust): CIFR, WULF, RKLB, APLD
-Exp-152 (Cross-sector):     LUNR, ALAB, BBAI, BE, FCEL, RIOT
+Active experiments:
+  Exp-152 (Cross-sector, late cutoff):   1 ticker  (RCAT)
+  Exp-160 (Cross-sector, early cutoff):  4 tickers (KEEL, PLUG, RIOT, IREN)
+  Exp-170 (Cross-sector, walkforward):  12 tickers (ALAB, APLD, ASTS, BBAI, BE, BTBT,
+                                                     CIFR, CLSK, FCEL, HUT, JOBY, LUNR)
 
-Selection: best seed per ticker by VAL-A PnL across all v2 experiments.
-Criteria: VAL-A PnL ≥ 1.8%, N ≥ 8, survived_a = True.
-Configs from pull_v2_deploy_configs.py run 2026-05-19.
+Selection: best composite score per ticker from robust_wf_v5 optimization.
+Dynamic TP/SL modes: static, atr, atr_adaptive, regime_scaled, trailing_decay.
+170 uses fold-175 models (latest walkforward cutoff).
 
-Each ticker is scored at its configured entry_minute bar (not last bar).
-Only tickers whose entry bar is available at runtime are scored.
+Confidence tiers:
+  HIGH  — N>=12 TEST trades, reliable signal
+  MED   — N=5-11 TEST trades, moderate sample
+  LOW   — N<=4 TEST trades, may be noise
 
-Run AFTER daily_data_all.py has finished updating GCS.
+Run AFTER daily_ohlcv scripts have finished updating GCS.
 Usage:  python daily_score_combined.py
 """
 
@@ -37,14 +41,18 @@ except ImportError:
     import pandas_ta as ta
 
 import tensorflow as tf
+from tensorflow.keras import mixed_precision
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
     Input, Dense, Dropout, GlobalAveragePooling1D,
     LayerNormalization, MultiHeadAttention, Add,
-    BatchNormalization, Concatenate, Embedding, Flatten,
+    Concatenate, Embedding, Flatten,
 )
 from tensorflow.keras.regularizers import l2
 from google.cloud import storage as gcs_storage
+
+if tf.config.list_physical_devices('GPU'):
+    mixed_precision.set_global_policy('mixed_float16')
 
 try:
     from google.cloud import bigquery
@@ -55,10 +63,10 @@ except Exception:
 # SHARED CONSTANTS
 # ==============================================================================
 BUCKET_NAME    = "time-series-bucket-ys"
-GCS_MODEL_PATH = "Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
+GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 BQ_TABLE       = "ys-time-series.scoring_logs.live_predictions"
-INFERENCE_DIR  = "Data/Inference"
-TAIL_DAYS      = 7
+INFERENCE_DIR  = "Data/Inference_v2"
+TAIL_DAYS      = 25
 VOL_LOOKBACK_DAYS = 30
 TIME_STEPS     = 240
 EMBED_DIM      = 16
@@ -72,7 +80,7 @@ MICRO_COLS = ['Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
 ROC_HORIZONS = [5, 30, 60, 120]
 
 ASSET_COLS = (['Gap_Pct', 'RSI_14', 'RSI_60', 'RVOL', 'Compression',
-               'ATR_14', 'Dist_to_PM_High'] +
+               'ATR_14', 'Dist_to_PM_High', 'Bar_Is_Real'] +
               [f'ROC_{h}m' for h in ROC_HORIZONS] + MICRO_COLS)
 
 # ==============================================================================
@@ -90,176 +98,6 @@ def _build_context_cols(context_assets, has_smh_rsi):
     return cols
 
 
-EXP_97 = {
-    'model_id': '97_MICRO',
-    'label': 'EXP-97 CRYPTO',
-    'train_teachers': [
-        'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'CORZ', 'MSTR',
-        'COIN', 'BITF', 'HUT', 'CIFR', 'BTBT', 'MIGI', 'HOOD', 'SMLR',
-    ],
-    'context_assets': ['SMH', 'MOD', 'TLT', 'IWM', 'VIX', 'BTCUSD'],
-    'has_smh_rsi': True,
-    'asset_configs': {},
-}
-
-EXP_110 = {
-    'model_id': '110_MICRO',
-    'label': 'EXP-110 CRYPTO (micro)',
-    'train_teachers': [
-        'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'CORZ', 'MSTR',
-        'COIN', 'BITF', 'HUT', 'CIFR', 'BTBT', 'HOOD',
-    ],
-    'context_assets': ['SMH', 'MOD', 'TLT', 'IWM', 'VIX', 'BTCUSD'],
-    'has_smh_rsi': True,
-    'asset_configs': {},
-}
-
-EXP_112 = {
-    'model_id': '112_MICRO',
-    'label': 'EXP-112 CRYPTO (8% spike)',
-    'train_teachers': [
-        'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'CORZ', 'MSTR',
-        'COIN', 'BITF', 'HUT', 'CIFR', 'BTBT', 'HOOD',
-    ],
-    'context_assets': ['SMH', 'MOD', 'TLT', 'IWM', 'VIX', 'BTCUSD'],
-    'has_smh_rsi': True,
-    'asset_configs': {},
-}
-
-EXP_113 = {
-    'model_id': '113_MICRO',
-    'label': 'EXP-113 CRYPTO (6% spike)',
-    'train_teachers': [
-        'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'CORZ', 'MSTR',
-        'COIN', 'BITF', 'HUT', 'CIFR', 'BTBT', 'HOOD',
-    ],
-    'context_assets': ['SMH', 'MOD', 'TLT', 'IWM', 'VIX', 'BTCUSD'],
-    'has_smh_rsi': True,
-    'asset_configs': {},
-}
-
-EXP_103 = {
-    'model_id': '103_DEFENSE',
-    'label': 'EXP-103 DEFENSE',
-    'train_teachers': [
-        'AVAV', 'KTOS', 'PLTR', 'BBAI',
-        'RKLB', 'ASTS', 'LUNR', 'SPIR',
-        'JOBY', 'NNDM', 'MVIS',
-    ],
-    'context_assets': ['ITA', 'VIX', 'TLT', 'IWM'],
-    'has_smh_rsi': False,
-    'asset_configs': {},
-}
-
-EXP_104 = {
-    'model_id': '104_DEFENSE',
-    'label': 'EXP-104 DEFENSE (8% spike)',
-    'train_teachers': [
-        'AVAV', 'KTOS', 'PLTR', 'BBAI',
-        'RKLB', 'ASTS', 'LUNR', 'SPIR',
-        'JOBY', 'NNDM', 'MVIS',
-    ],
-    'context_assets': ['ITA', 'VIX', 'TLT', 'IWM'],
-    'has_smh_rsi': False,
-    'asset_configs': {},
-}
-
-EXP_105 = {
-    'model_id': '105_DEFENSE',
-    'label': 'EXP-105 DEFENSE (cluster)',
-    'train_teachers': [
-        'LUNR', 'RCAT', 'SPIR', 'ASTS', 'BBAI',
-        'CIFR', 'IREN', 'HUT', 'MARA', 'KEEL',
-        'MVIS', 'APLD', 'ACHR',
-    ],
-    'context_assets': ['ITA', 'VIX', 'TLT', 'IWM'],
-    'has_smh_rsi': False,
-    'asset_configs': {
-        'RCAT': {
-            'seed': 10512, 'prob_threshold': 0.510,
-            'tp_pct': 0.16, 'sl_pct': 0.140, 'entry_minute': 360,
-            'vix_threshold': 10.0, 'tlt_crash': -0.10, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '71%', 'avg_pnl': '7.2%', 'freq': '1.1/mo'},
-        },
-        'SPIR': {
-            'seed': 10511, 'prob_threshold': 0.510,
-            'tp_pct': 0.10, 'sl_pct': 0.040, 'entry_minute': 390,
-            'vix_threshold': 15.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '71%', 'avg_pnl': '4.8%', 'freq': '1.2/mo'},
-        },
-        'ASTS': {
-            'seed': 10512, 'prob_threshold': 0.545,
-            'tp_pct': 0.10, 'sl_pct': 0.080, 'entry_minute': 370,
-            'vix_threshold': 15.0, 'tlt_crash': -0.20, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '83%', 'avg_pnl': '3.2%', 'freq': '1.4/mo'},
-        },
-        'HUT': {
-            'seed': 10502, 'prob_threshold': 0.510,
-            'tp_pct': 0.21, 'sl_pct': 0.080, 'entry_minute': 360,
-            'vix_threshold': 16.0, 'tlt_crash': -0.10, 'spy_ignore': 0.18,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '67%', 'avg_pnl': '2.8%', 'freq': '1.1/mo'},
-        },
-    },
-    'asset_cols': ASSET_COLS + ['Bar_Is_Real'],
-}
-
-EXP_106 = {
-    'model_id': '106_DEFENSE',
-    'label': 'EXP-106 DEFENSE (8% cluster)',
-    'train_teachers': [
-        'LUNR', 'RCAT', 'SPIR', 'ASTS', 'BBAI',
-        'CIFR', 'IREN', 'HUT', 'MARA', 'KEEL',
-        'MVIS', 'APLD', 'ACHR',
-    ],
-    'context_assets': ['ITA', 'VIX', 'TLT', 'IWM'],
-    'has_smh_rsi': False,
-    'asset_configs': {
-        'CIFR': {
-            'seed': 10613, 'prob_threshold': 0.515,
-            'tp_pct': 0.14, 'sl_pct': 0.100, 'entry_minute': 366,
-            'vix_threshold': 10.0, 'tlt_crash': -0.10, 'spy_ignore': 0.06,
-            'vol_filter_pct': 25,
-            'stats': {'win_rate': '83%', 'avg_pnl': '4.0%', 'freq': '1.2/mo'},
-        },
-        'WULF': {
-            'seed': 10612, 'prob_threshold': 0.510,
-            'tp_pct': 0.16, 'sl_pct': 0.045, 'entry_minute': 385,
-            'vix_threshold': 10.0, 'tlt_crash': -0.20, 'spy_ignore': 0.18,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '60%', 'avg_pnl': '3.5%', 'freq': '1.3/mo'},
-        },
-        'RKLB': {
-            'seed': 10601, 'prob_threshold': 0.510,
-            'tp_pct': 0.05, 'sl_pct': 0.060, 'entry_minute': 380,
-            'vix_threshold': 10.0, 'tlt_crash': -0.10, 'spy_ignore': 0.26,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '80%', 'avg_pnl': '2.5%', 'freq': '1.2/mo'},
-        },
-        'APLD': {
-            'seed': 10607, 'prob_threshold': 0.530,
-            'tp_pct': 0.08, 'sl_pct': 0.120, 'entry_minute': 376,
-            'vix_threshold': 22.0, 'tlt_crash': -0.10, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '71%', 'avg_pnl': '2.3%', 'freq': '1.3/mo'},
-        },
-    },
-    'asset_cols': ASSET_COLS + ['Bar_Is_Real'],
-}
-
-EXP_150 = {
-    'model_id': '150_ENERGY',
-    'label': 'EXP-150 ENERGY (AI power)',
-    'train_teachers': [
-        'VST', 'CEG', 'GEV', 'BE', 'CCJ', 'NEE', 'DUK',
-    ],
-    'context_assets': ['XLE', 'VIX', 'TLT', 'IWM', 'SMH'],
-    'has_smh_rsi': False,
-    'asset_configs': {},
-}
 
 EXP_152 = {
     'model_id': '152_XSECTOR',
@@ -271,70 +109,201 @@ EXP_152 = {
     'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
     'has_smh_rsi': False,
     'asset_configs': {
-        'LUNR': {
-            'seed': 15210, 'prob_threshold': 0.510,
-            'tp_pct': 0.21, 'sl_pct': 0.050, 'entry_minute': 370,
-            'vix_threshold': 16.0, 'tlt_crash': -0.10, 'spy_ignore': 0.20,
+        'RCAT': {
+            'seed': 15211, 'prob_threshold': 0.500, 'entry_minute': 380,
+            'tpsl_mode': 'trailing_decay',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'sl_mult': 2.0, 'trail_start_mult': 2.0, 'trail_end_mult': 1.0,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
             'vol_filter_pct': 0,
-            'stats': {'win_rate': '83%', 'avg_pnl': '6.0%', 'freq': '1.2/mo'},
-        },
-        'ALAB': {
-            'seed': 15201, 'prob_threshold': 0.495,
-            'tp_pct': 0.13, 'sl_pct': 0.035, 'entry_minute': 384,
-            'vix_threshold': 10.0, 'tlt_crash': -0.22, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '83%', 'avg_pnl': '3.3%', 'freq': '1.1/mo'},
-        },
-        'BBAI': {
-            'seed': 15204, 'prob_threshold': 0.510,
-            'tp_pct': 0.10, 'sl_pct': 0.030, 'entry_minute': 368,
-            'vix_threshold': 22.0, 'tlt_crash': -0.10, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '57%', 'avg_pnl': '3.0%', 'freq': '1.4/mo'},
-        },
-        'BE': {
-            'seed': 15201, 'prob_threshold': 0.525,
-            'tp_pct': 0.26, 'sl_pct': 0.115, 'entry_minute': 360,
-            'vix_threshold': 10.0, 'tlt_crash': -0.08, 'spy_ignore': 0.10,
-            'vol_filter_pct': 25,
-            'stats': {'win_rate': '44%', 'avg_pnl': '2.8%', 'freq': '1.4/mo'},
-        },
-        'FCEL': {
-            'seed': 15202, 'prob_threshold': 0.450,
-            'tp_pct': 0.20, 'sl_pct': 0.060, 'entry_minute': 365,
-            'vix_threshold': 15.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '67%', 'avg_pnl': '2.5%', 'freq': '1.2/mo'},
-        },
-        'RIOT': {
-            'seed': 15201, 'prob_threshold': 0.510,
-            'tp_pct': 0.06, 'sl_pct': 0.085, 'entry_minute': 382,
-            'vix_threshold': 18.0, 'tlt_crash': -0.06, 'spy_ignore': 0.10,
-            'vol_filter_pct': 0,
-            'stats': {'win_rate': '89%', 'avg_pnl': '2.1%', 'freq': '1.1/mo'},
+            'confidence': 'MED', 'confidence_note': 'N=5 trades, moderate sample',
+            'stats': {'win_rate': '80%', 'avg_pnl': '3.6%', 'freq': '3.0/mo'},
         },
     },
-    'asset_cols': ASSET_COLS + ['Bar_Is_Real'],
+    'asset_cols': ASSET_COLS,
 }
 
-EXP_200 = {
-    'model_id': '200_XSECTOR8',
-    'label': 'EXP-200 XSECTOR8',
+EXP_160 = {
+    'model_id': '160_XSECTOR',
+    'label': 'EXP-160 XSECTOR (early cutoff)',
     'train_teachers': [
-        'CIFR', 'WULF', 'MARA',
-        'LUNR', 'ASTS', 'RKLB', 'SPIR',
-        'PLUG', 'BE',
-        'BBAI', 'APLD',
-        'ACHR',
-        'RCAT',
+        'BBAI', 'RCAT', 'LUNR', 'ASTS', 'ACHR', 'MVIS', 'WULF',
+        'CIFR', 'IREN', 'KEEL', 'HUT', 'CLSK', 'APLD',
     ],
     'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
     'has_smh_rsi': False,
-    'asset_configs': {},
-    'asset_cols': ASSET_COLS + ['Bar_Is_Real'],
+    'asset_configs': {
+        'KEEL': {
+            'seed': 16006, 'prob_threshold': 0.500, 'entry_minute': 375,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.25, 'sl_pct': 0.14,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=4 trades, perfect WR likely noise',
+            'stats': {'win_rate': '100%', 'avg_pnl': '6.2%', 'freq': '2.6/mo'},
+        },
+        'PLUG': {
+            'seed': 16011, 'prob_threshold': 0.500, 'entry_minute': 380,
+            'tpsl_mode': 'trailing_decay',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'sl_mult': 2.0, 'trail_start_mult': 2.0, 'trail_end_mult': 1.5,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=4 trades, perfect WR likely noise',
+            'stats': {'win_rate': '100%', 'avg_pnl': '5.6%', 'freq': '2.6/mo'},
+        },
+        'RIOT': {
+            'seed': 16008, 'prob_threshold': 0.400, 'entry_minute': 375,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.08, 'sl_pct': 0.05,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.20,
+            'vol_filter_pct': 0,
+            'confidence': 'HIGH', 'confidence_note': 'N=12 trades, strong sample',
+            'stats': {'win_rate': '83%', 'avg_pnl': '3.5%', 'freq': '7.3/mo'},
+        },
+        'IREN': {
+            'seed': 16006, 'prob_threshold': 0.400, 'entry_minute': 385,
+            'tpsl_mode': 'atr_adaptive',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'tp_mult': 2.0, 'sl_mult': 1.5,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'MED', 'confidence_note': 'N=7 trades, moderate sample',
+            'stats': {'win_rate': '57%', 'avg_pnl': '3.3%', 'freq': '4.5/mo'},
+        },
+    },
+    'asset_cols': ASSET_COLS,
 }
 
-for _exp in (EXP_97, EXP_103, EXP_104, EXP_105, EXP_106, EXP_110, EXP_112, EXP_113, EXP_150, EXP_152, EXP_200):
+EXP_170 = {
+    'model_id': '175_XSECTOR',
+    'label': 'EXP-170 XSECTOR (walkforward)',
+    'train_teachers': [
+        'BBAI', 'RCAT', 'LUNR', 'ASTS', 'ACHR', 'MVIS', 'WULF',
+        'CIFR', 'IREN', 'KEEL', 'HUT', 'CLSK', 'APLD',
+    ],
+    'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
+    'has_smh_rsi': False,
+    'asset_configs': {
+        'ALAB': {
+            'seed': 17501, 'prob_threshold': 0.500, 'entry_minute': 375,
+            'tpsl_mode': 'trailing_decay',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'sl_mult': 2.0, 'trail_start_mult': 2.0, 'trail_end_mult': 1.0,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'MED', 'confidence_note': 'N=8 trades, moderate sample',
+            'stats': {'win_rate': '75%', 'avg_pnl': '5.1%', 'freq': '4.9/mo'},
+        },
+        'APLD': {
+            'seed': 17515, 'prob_threshold': 0.400, 'entry_minute': 375,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.12, 'sl_pct': 0.05,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 25,
+            'confidence': 'HIGH', 'confidence_note': 'N=23 trades, strong sample',
+            'stats': {'win_rate': '70%', 'avg_pnl': '2.0%', 'freq': '14.0/mo'},
+        },
+        'ASTS': {
+            'seed': 17512, 'prob_threshold': 0.600, 'entry_minute': 385,
+            'tpsl_mode': 'regime_scaled',
+            'tp_pct': 0.08, 'sl_pct': 0.05,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST, perfect WR likely noise',
+            'stats': {'win_rate': '100%', 'avg_pnl': '7.7%', 'freq': '1.8/mo'},
+        },
+        'BBAI': {
+            'seed': 17512, 'prob_threshold': 0.600, 'entry_minute': 375,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.08, 'sl_pct': 0.08,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST, perfect WR likely noise',
+            'stats': {'win_rate': '100%', 'avg_pnl': '7.7%', 'freq': '1.8/mo'},
+        },
+        'BE': {
+            'seed': 17505, 'prob_threshold': 0.600, 'entry_minute': 385,
+            'tpsl_mode': 'atr_adaptive',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'tp_mult': 1.5, 'sl_mult': 1.0,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=4 trades in TEST',
+            'stats': {'win_rate': '75%', 'avg_pnl': '4.8%', 'freq': '2.4/mo'},
+        },
+        'BTBT': {
+            'seed': 17507, 'prob_threshold': 0.500, 'entry_minute': 380,
+            'tpsl_mode': 'atr_adaptive',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'tp_mult': 1.5, 'sl_mult': 1.5,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST, perfect WR likely noise',
+            'stats': {'win_rate': '100%', 'avg_pnl': '4.0%', 'freq': '1.9/mo'},
+        },
+        'CIFR': {
+            'seed': 17512, 'prob_threshold': 0.500, 'entry_minute': 375,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.16, 'sl_pct': 0.14,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'MED', 'confidence_note': 'N=8 trades, moderate sample',
+            'stats': {'win_rate': '88%', 'avg_pnl': '5.4%', 'freq': '4.9/mo'},
+        },
+        'CLSK': {
+            'seed': 17502, 'prob_threshold': 0.400, 'entry_minute': 380,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.12, 'sl_pct': 0.08,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.20,
+            'vol_filter_pct': 25,
+            'confidence': 'HIGH', 'confidence_note': 'N=14 trades, strong sample',
+            'stats': {'win_rate': '86%', 'avg_pnl': '2.5%', 'freq': '8.5/mo'},
+        },
+        'FCEL': {
+            'seed': 17507, 'prob_threshold': 0.400, 'entry_minute': 375,
+            'tpsl_mode': 'atr_adaptive',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'tp_mult': 3.0, 'sl_mult': 0.5,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'HIGH', 'confidence_note': 'N=13 trades, strong sample',
+            'stats': {'win_rate': '54%', 'avg_pnl': '5.4%', 'freq': '7.9/mo'},
+        },
+        'HUT': {
+            'seed': 17508, 'prob_threshold': 0.400, 'entry_minute': 385,
+            'tpsl_mode': 'atr',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'tp_mult': 2.0, 'sl_mult': 1.0,
+            'vix_threshold': 20.0, 'tlt_crash': -0.50, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'MED', 'confidence_note': 'N=10 trades, moderate sample',
+            'stats': {'win_rate': '70%', 'avg_pnl': '3.5%', 'freq': '6.1/mo'},
+        },
+        'JOBY': {
+            'seed': 17512, 'prob_threshold': 0.500, 'entry_minute': 385,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.16, 'sl_pct': 0.03,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST',
+            'stats': {'win_rate': '67%', 'avg_pnl': '5.3%', 'freq': '1.9/mo'},
+        },
+        'LUNR': {
+            'seed': 17513, 'prob_threshold': 0.500, 'entry_minute': 380,
+            'tpsl_mode': 'atr',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'tp_mult': 1.5, 'sl_mult': 1.5,
+            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=4 trades in TEST',
+            'stats': {'win_rate': '75%', 'avg_pnl': '4.7%', 'freq': '2.4/mo'},
+        },
+    },
+    'asset_cols': ASSET_COLS,
+}
+
+for _exp in (EXP_152, EXP_160, EXP_170):
     _acols = _exp.get('asset_cols', ASSET_COLS)
     _exp['asset_cols'] = _acols
     _exp['context_cols'] = _build_context_cols(
@@ -348,9 +317,9 @@ for _exp in (EXP_97, EXP_103, EXP_104, EXP_105, EXP_106, EXP_110, EXP_112, EXP_1
     _exp['asset_index'] = _idx
     _exp['n_assets'] = len(_exp['train_teachers']) + 1
     _exp['other_idx'] = len(_exp['train_teachers'])
-    _exp['stats_path'] = f"Data/Inference/scaling_stats_experiment_{_exp['model_id']}.json"
+    _exp['stats_path'] = f"Data/Inference_v2/scaling_stats_experiment_{_exp['model_id']}.json"
 
-EXPERIMENTS = [EXP_97, EXP_103, EXP_104, EXP_105, EXP_106, EXP_110, EXP_112, EXP_113, EXP_150, EXP_152, EXP_200]
+EXPERIMENTS = [EXP_152, EXP_160, EXP_170]
 
 # ==============================================================================
 # GCS CLIENT
@@ -417,10 +386,11 @@ def load_master(ticker, tail_days=None):
 # ==============================================================================
 def heal_data(df):
     df = df.resample('1min').asfreq()
-    for c in ['Open', 'High', 'Low', 'Close', 'Spread', 'OBI', 'bsize', 'asize']:
+    for c in ['Open', 'High', 'Low', 'Close']:
         if c in df.columns:
             df[c] = df[c].ffill()
-    for c in ['Volume', 'Total_Vol', 'Volume_Delta', 'Trade_Count', 'Delta_Pct']:
+    for c in ['Volume', 'Total_Vol', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
+              'Spread', 'OBI', 'bsize', 'asize']:
         if c in df.columns:
             df[c] = df[c].fillna(0)
     return df
@@ -462,15 +432,18 @@ def build_market_context(exp):
 # FEATURE ENGINEERING
 # ==============================================================================
 def engineer_features(df, market_df):
-    daily_c = df['Close'].resample('D').last().shift(1).reindex(
+    daily_c = df['Close'].resample('D').last().ffill().shift(1).reindex(
         df.index, method='ffill')
     df['Gap_Pct'] = (df['Open'] - daily_c) / daily_c
     df['PM_High'] = df.groupby(df.index.date)['High'].cummax()
     df['Dist_to_PM_High'] = (df['Close'] - df['PM_High']) / (df['PM_High'] + 1e-9)
     df['RSI_14'] = ta.rsi(df['Close'], length=14)
     df['RSI_60'] = ta.rsi(df['Close'], length=60)
-    df['RVOL'] = df['Volume'] / df['Volume'].rolling(50).mean().clip(lower=1e-9)
-    df['ATR_14'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    vol_real = df['Volume'].where(df['Volume'] > 0)
+    df['RVOL'] = df['Volume'] / vol_real.rolling(50, min_periods=5).mean().ffill().clip(lower=1e-9)
+    real_mask = df['Volume'] > 0
+    atr_raw = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['ATR_14'] = atr_raw.where(real_mask).ffill().fillna(0)
     df['Compression'] = (df['High'] - df['Low']) / (df['ATR_14'] + 1e-9)
     for h in ROC_HORIZONS:
         df[f'ROC_{h}m'] = df['Close'].pct_change(h)
@@ -526,7 +499,7 @@ def build_model(n_context_cols, n_assets, n_asset_cols=None):
     in_id = Input(shape=(1,), dtype=tf.int32,          name='asset_id')
     x = transformer_encoder(Dense(128)(in_a), 128, 4, 128)
     x = GlobalAveragePooling1D()(transformer_encoder(x, 128, 4, 128))
-    y = Dense(128, activation='relu')(BatchNormalization()(in_c))
+    y = Dense(128, activation='relu')(LayerNormalization()(in_c))
     e = Embedding(n_assets, EMBED_DIM, name='asset_embed')(in_id)
     e = Flatten()(e)
     e = Dense(32, activation='relu')(e)
@@ -574,7 +547,8 @@ def _check_vol_filter(ticker, entry_minute, vol_filter_pct):
     at_entry = df_pst[mins == entry_minute]
     today = datetime.now(PST).date()
     today_bar = at_entry[at_entry.index.date == today]
-    past_bars = at_entry[at_entry.index.date < today].tail(VOL_LOOKBACK_DAYS)
+    past_real = at_entry[(at_entry.index.date < today) & (at_entry['Volume'] > 0)]
+    past_bars = past_real.tail(VOL_LOOKBACK_DAYS)
     if len(today_bar) == 0 or len(past_bars) < 5:
         return True, None, None
     entry_vol = float(today_bar['Volume'].iloc[-1])
@@ -592,20 +566,66 @@ REGIME_TP_SCALE = [0.70, 0.85, 1.00, 1.30, 1.60]
 REGIME_SL_SCALE = [0.60, 0.80, 1.00, 1.30, 1.80]
 
 
+def _daily_atr_pct(df_raw, row_idx, period=14):
+    daily = df_raw[['High', 'Low', 'Close']].resample('D').agg(
+        {'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+    if len(daily) < 2:
+        return 0.05
+    prev_close = daily['Close'].shift(1)
+    tr = pd.concat([
+        daily['High'] - daily['Low'],
+        (daily['High'] - prev_close).abs(),
+        (daily['Low'] - prev_close).abs()
+    ], axis=1).max(axis=1)
+    atr_series = tr.rolling(period, min_periods=max(period // 2, 3)).mean()
+    atr_pct = atr_series / daily['Close']
+    atr_pct = atr_pct.reindex(df_raw.index, method='ffill')
+    val = float(atr_pct.iloc[row_idx]) if row_idx < len(atr_pct) else np.nan
+    if np.isnan(val) or val <= 0:
+        return 0.05
+    return val
+
+
+def _adaptive_atr_pct(df_raw, row_idx, short=5, long=22, base=14):
+    daily = df_raw[['High', 'Low', 'Close']].resample('D').agg(
+        {'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+    if len(daily) < 2:
+        return 0.05
+    prev_close = daily['Close'].shift(1)
+    tr = pd.concat([
+        daily['High'] - daily['Low'],
+        (daily['High'] - prev_close).abs(),
+        (daily['Low'] - prev_close).abs()
+    ], axis=1).max(axis=1)
+    atr_base  = tr.rolling(base).mean()
+    atr_short = tr.rolling(short).mean()
+    atr_long  = tr.rolling(long).mean()
+    accel = (atr_short / atr_long).clip(0.5, 3.0)
+    atr_adaptive = atr_base * accel
+    atr_pct = atr_adaptive / daily['Close']
+    atr_pct = atr_pct.reindex(df_raw.index, method='ffill')
+    val = float(atr_pct.iloc[row_idx]) if row_idx < len(atr_pct) else np.nan
+    if np.isnan(val) or val <= 0:
+        return 0.05
+    return val
+
+
 def compute_dynamic_tpsl(cfg, df_raw, row_idx, vix_value):
     mode = cfg.get('tpsl_mode', 'static')
 
     if mode == 'atr':
-        atr_dollar = float(df_raw['ATR_14'].iloc[row_idx])
-        close = float(df_raw['Close'].iloc[row_idx])
-        atr_pct = atr_dollar / close if close > 0 else 0.05
-        if atr_pct <= 0 or np.isnan(atr_pct):
-            atr_pct = 0.05
+        atr_pct = _daily_atr_pct(df_raw, row_idx)
         tp = min(max(atr_pct * cfg['tp_mult'], 0.02), 0.60)
         sl = min(max(atr_pct * cfg['sl_mult'], 0.01), 0.25)
         return tp, sl, {'atr_pct': round(atr_pct, 6), 'mode': 'atr'}
 
-    elif mode == 'regime':
+    elif mode == 'atr_adaptive':
+        atr_pct = _adaptive_atr_pct(df_raw, row_idx)
+        tp = min(max(atr_pct * cfg['tp_mult'], 0.02), 0.60)
+        sl = min(max(atr_pct * cfg['sl_mult'], 0.01), 0.25)
+        return tp, sl, {'atr_pct': round(atr_pct, 6), 'mode': 'atr_adaptive'}
+
+    elif mode in ('regime', 'regime_scaled'):
         regime_idx = 2
         if vix_value is not None:
             if vix_value <= 15: regime_idx = 0
@@ -615,14 +635,10 @@ def compute_dynamic_tpsl(cfg, df_raw, row_idx, vix_value):
             else: regime_idx = 4
         tp = cfg['tp_pct'] * REGIME_TP_SCALE[regime_idx]
         sl = cfg['sl_pct'] * REGIME_SL_SCALE[regime_idx]
-        return tp, sl, {'vix_regime': regime_idx, 'mode': 'regime'}
+        return tp, sl, {'vix_regime': regime_idx, 'mode': mode}
 
-    elif mode == 'trail':
-        atr_dollar = float(df_raw['ATR_14'].iloc[row_idx])
-        close = float(df_raw['Close'].iloc[row_idx])
-        atr_pct = atr_dollar / close if close > 0 else 0.05
-        if atr_pct <= 0 or np.isnan(atr_pct):
-            atr_pct = 0.05
+    elif mode in ('trail', 'trailing_decay'):
+        atr_pct = _daily_atr_pct(df_raw, row_idx)
         sl = min(max(atr_pct * cfg['sl_mult'], 0.01), 0.25)
         trail_start = atr_pct * cfg['trail_start_mult']
         trail_end = atr_pct * cfg['trail_end_mult']
@@ -630,7 +646,7 @@ def compute_dynamic_tpsl(cfg, df_raw, row_idx, vix_value):
             'atr_pct': round(atr_pct, 6),
             'trail_start': round(trail_start, 6),
             'trail_end': round(trail_end, 6),
-            'mode': 'trail',
+            'mode': mode,
         }
 
     return cfg['tp_pct'], cfg['sl_pct'], {'mode': 'static'}
@@ -672,11 +688,33 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
     XA_b  = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
     XC_b  = XC[row_idx - 1][np.newaxis]
     XID_b = np.array([[exp['asset_index'].get(ticker, exp['other_idx'])]], dtype=np.int32)
-    model = get_model(exp, cfg['seed'])
-    prob = float(model(
-        {'asset_in': XA_b, 'context_in': XC_b, 'asset_id': XID_b},
-        training=False
-    ).numpy().flatten()[0])
+
+    is_ensemble = cfg.get('is_ensemble', False)
+    if is_ensemble:
+        base_num = int(exp['model_id'].split('_')[0])
+        seed_list = list(range(base_num * 100 + 1, base_num * 100 + 16))
+        all_probs = []
+        for s in seed_list:
+            try:
+                m = get_model(exp, s)
+                p = float(m(
+                    {'asset_in': XA_b, 'context_in': XC_b, 'asset_id': XID_b},
+                    training=False
+                ).numpy().flatten()[0])
+                all_probs.append(p)
+            except Exception:
+                continue
+        if not all_probs:
+            print(f"      {ticker}: SKIP — no ensemble models loaded")
+            return None
+        prob = float(np.mean(all_probs))
+    else:
+        model = get_model(exp, cfg['seed'])
+        prob = float(model(
+            {'asset_in': XA_b, 'context_in': XC_b, 'asset_id': XID_b},
+            training=False
+        ).numpy().flatten()[0])
+
     signal = prob >= cfg['prob_threshold']
     bar_ts = df_scaled.index[row_idx]
     close  = (float(df_scaled['Close'].iloc[row_idx])
@@ -796,81 +834,78 @@ def _filter_pass(cfg, regime):
 # ==============================================================================
 # DASHBOARD
 # ==============================================================================
+_MODE_LABELS = {
+    'static': 'STATIC', 'atr': 'ATR', 'atr_adaptive': 'ATR-ADP',
+    'trailing_decay': 'TRAIL', 'trail': 'TRAIL',
+    'regime_scaled': 'REGIME', 'regime': 'REGIME',
+}
+
+
 def print_experiment_section(exp, results):
-    W = 155
+    W = 120
     asset_configs = exp['asset_configs']
     print()
-    print("-" * W)
-    print(f"  {exp['label']}   ({exp['model_id']})")
-    print("-" * W)
+    print(f"  {'─'*W}")
+    print(f"  {exp['label']}   ({exp['model_id']})   [{len(results)} tickers]")
+    print(f"  {'─'*W}")
+    print(f"  {'Ticker':<6}  {'Seed':>5}  {'SIG':<7}  {'Prob':>5} / {'Thr':>5}  "
+          f"{'Entry':>5}  {'Mode':<8}  {'TP target':>14}  {'SL stop':>14}  "
+          f"{'Close':>8}  {'CONF':<4}  {'Filter'}")
+    print(f"  {'─'*W}")
+
     for r in results:
         cfg = asset_configs.get(r['ticker'], {})
         trade_ok = r.get('filter_ok', True)
+        conf = cfg.get('confidence', '??')
+
         if r['signal']:
-            sig_str = ("\033[92mGO\033[0m     " if trade_ok
-                       else "\033[31mBLOCK\033[0m  ")
+            sig_str = ("\033[92m GO  \033[0m" if trade_ok
+                       else "\033[31mBLOCK\033[0m")
         else:
-            sig_str = "--     "
-        stats    = cfg.get('stats', {})
-        win_str  = stats.get('win_rate', '--%')
-        pnl_str  = stats.get('avg_pnl', '--%')
-        freq_str = stats.get('freq', '--/mo')
-        close  = r['close']
-        mode_tag = r.get('tpsl_mode', 'static')[0].upper()
-        if r.get('tpsl_mode') == 'trail' or r.get('tp_pct') is None:
+            sig_str = "  --  "
+
+        close = r['close']
+        mode_label = _MODE_LABELS.get(r.get('tpsl_mode', 'static'), '??')
+
+        if r.get('tpsl_mode') in ('trail', 'trailing_decay') or r.get('tp_pct') is None:
             ts = r.get('trail_start', 0)
-            tp_str = f" TRAIL(ts={ts:.1%})"
+            tp_str = f"TRAIL(ts={ts:.1%})"
         else:
-            tp_str = f"${close*(1+r['tp_pct']):.2f}(+{r['tp_pct']*100:.0f}%)"
-        sl_str = f"${close*(1-r['sl_pct']):.2f}(-{r['sl_pct']*100:.0f}%)"
-        vix_t = f"{cfg['vix_threshold']:.0f}" if cfg else "--"
-        tlt_t = f"{cfg['tlt_crash']:+.2f}"    if cfg else "--"
-        spy_t = f"{cfg['spy_ignore']:+.2f}"   if cfg else "--"
+            tp_str = f"${close*(1+r['tp_pct']):.2f} (+{r['tp_pct']*100:.0f}%)"
+        sl_str = f"${close*(1-r['sl_pct']):.2f} (-{r['sl_pct']*100:.0f}%)"
+
         if trade_ok:
-            filt_str = " OK"
+            filt_str = "OK"
         else:
             parts = []
-            if r.get('vix_value') is not None:
+            if r.get('vix_value') is not None and cfg:
                 parts.append(f"VIX:{r['vix_value']:.1f}>{cfg['vix_threshold']:.0f}")
-            if r.get('tlt_gap_pct') is not None:
+            if r.get('tlt_gap_pct') is not None and cfg:
                 parts.append(f"TLT:{r['tlt_gap_pct']:+.2f}<{cfg['tlt_crash']:+.2f}")
-            if r.get('spy_gap_pct') is not None:
+            if r.get('spy_gap_pct') is not None and cfg:
                 parts.append(f"SPY:{r['spy_gap_pct']:+.2f}>{cfg['spy_ignore']:+.2f}")
             if not r.get('vol_filter_ok', True):
-                ev = r.get('entry_volume')
-                vm = r.get('vol_median')
-                vp = cfg.get('vol_filter_pct', 0)
-                if ev is not None and vm is not None and vm > 0:
-                    parts.append(f"VOL:{ev:.0f}<{vp}%of{vm:.0f}")
-                else:
-                    parts.append(f"VOL<{vp}%")
-            filt_str = f" BLOCKED {' & '.join(parts)}"
-        em        = r['entry_minute']
+                parts.append("VOL")
+            filt_str = f"BLOCKED {' & '.join(parts)}"
+
+        em = r['entry_minute']
         entry_str = f"{em // 60}:{em % 60:02d}"
-        prob_str  = f"{r['prob']:.3f}"
-        bar_str   = r['bar_ts'].astimezone(PST).strftime('%m-%d %H:%M PST')
-        print(
-            f"  {r['ticker']:<6}  {r['seed']:>5}  "
-            f"{sig_str}  {prob_str:>6}  {r['threshold']:>5.3f}  "
-            f"{entry_str:>7}  {tp_str:>13}  {sl_str:>13}  {close:>8.2f}  "
-            f"{bar_str:<16}  {vix_t:>5}  {tlt_t:>6}  {spy_t:>6}  "
-            f"{win_str:>6}  {pnl_str:>8}  {freq_str:>8}  {mode_tag}{filt_str}"
-        )
+        seed_str = 'ENS' if cfg.get('is_ensemble') else str(r['seed'])
+
+        print(f"  {r['ticker']:<6}  {seed_str:>5}  {sig_str}  "
+              f"{r['prob']:>5.3f} / {r['threshold']:>5.3f}  "
+              f"{entry_str:>5}  {mode_label:<8}  {tp_str:>14}  {sl_str:>14}  "
+              f"{close:>8.2f}  {conf:<4}  {filt_str}")
 
 
 def print_dashboard(all_results, run_ts):
-    W       = 155
+    W = 120
     pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %H:%M PST')
+
     print()
-    print("=" * W)
-    print(f"  COMBINED DAILY SIGNALS   run: {pst_str}")
-    exp_tags = []
-    for exp, _ in all_results:
-        tickers = sorted(exp.get('asset_configs', {}).keys())
-        if tickers:
-            exp_tags.append(f"{exp['label']}({','.join(tickers)})")
-    for i in range(0, len(exp_tags), 3):
-        print(f"  {'  +  '.join(exp_tags[i:i+3])}")
+    print(f"  {'='*W}")
+    print(f"  DAILY SIGNALS   {pst_str}")
+    print(f"  {'='*W}")
 
     all_flat_r = [r for _, results in all_results for r in results]
     if all_flat_r:
@@ -878,39 +913,88 @@ def print_dashboard(all_results, run_ts):
         vix_s = f"{last_r['vix_value']:.1f}"       if last_r.get('vix_value')   is not None else "N/A"
         tlt_s = f"{last_r['tlt_gap_pct']:+.2f}%"   if last_r.get('tlt_gap_pct') is not None else "N/A"
         spy_s = f"{last_r['spy_gap_pct']:+.2f}%"   if last_r.get('spy_gap_pct') is not None else "N/A"
-        print(f"  VIX={vix_s}  TLT={tlt_s}  SPY={spy_s}  (at entry {last_r['entry_minute']//60}:{last_r['entry_minute']%60:02d})")
-
-    print("=" * W)
-    print(f"  {'Ticker':<6}  {'Seed':>5}  {'SIG':>6}  {'Prob':>6}  {'Thr':>5}  "
-          f"{'Entry':>7}  {'TP tgt':>13}  {'SL stop':>13}  {'Close':>8}  "
-          f"{'Score bar':<16}  {'VIX<':>5}  {'TLT>':>6}  {'SPY<':>6}  "
-          f"{'WR':>6}  {'AvgPnL':>8}  {'Freq':>8}  M FILT")
+        print(f"  Market:  VIX={vix_s}   TLT={tlt_s}   SPY={spy_s}")
 
     for exp, results in all_results:
-        print_experiment_section(exp, results)
+        if results:
+            print_experiment_section(exp, results)
 
-    print("=" * W)
-
-    all_flat = []
-    for exp, results in all_results:
-        for r in results:
-            all_flat.append(r)
-
-    signals = [r for r in all_flat if r['signal']]
+    # ── SUMMARY ──────────────────────────────────────────────────────────────
+    all_flat = [r for _, results in all_results for r in results]
+    signals   = [r for r in all_flat if r['signal']]
     go_trades = [r for r in signals if r.get('filter_ok', True)]
     blocked   = [r for r in signals if not r.get('filter_ok', True)]
 
-    total = len(all_flat)
-    print(f"  GO signals: {len(signals)}/{total}", end="")
-    if signals:
-        print(f"  ->  {', '.join(r['ticker'] for r in signals)}", end="")
-    if blocked:
-        print(f"  |  blocked: {', '.join(r['ticker'] for r in blocked)}", end="")
     print()
+    print(f"  {'='*W}")
+    print(f"  SUMMARY")
+    print(f"  {'─'*W}")
+
+    total = len(all_flat)
+    print(f"  Scored:    {total} tickers")
+    print(f"  Signals:   {len(signals)}/{total}" +
+          (f"  ({', '.join(r['ticker'] for r in signals)})" if signals else ""))
+    if blocked:
+        print(f"  Blocked:   {', '.join(r['ticker'] for r in blocked)}")
+
     if go_trades:
-        print(f"  TRADE: {', '.join(r['ticker'] for r in go_trades)}"
-              f"  ({len(go_trades)} position{'s' if len(go_trades) != 1 else ''})")
-    print("=" * W)
+        print()
+        print(f"  \033[92mTRADE: {', '.join(r['ticker'] for r in go_trades)}"
+              f"  ({len(go_trades)} position{'s' if len(go_trades) != 1 else ''})\033[0m")
+
+    # ── ASSET DETAILS ────────────────────────────────────────────────────────
+    print()
+    print(f"  {'─'*W}")
+    print(f"  ASSET DETAILS (WF optimization stats)")
+    print(f"  {'─'*W}")
+    print(f"  {'Ticker':<6}  {'Exp':<14}  {'CONF':<4}  {'WR':>5}  {'AvgPnL':>7}  "
+          f"{'Freq':>8}  {'Mode':<8}  {'Regime':>20}  {'Note'}")
+    print(f"  {'─'*W}")
+
+    for exp, results in all_results:
+        for r in results:
+            cfg = exp.get('asset_configs', {}).get(r['ticker'], {})
+            conf = cfg.get('confidence', '??')
+            note = cfg.get('confidence_note', '')
+            stats = cfg.get('stats', {})
+            mode_label = _MODE_LABELS.get(cfg.get('tpsl_mode', 'static'), '??')
+
+            vix_t = cfg.get('vix_threshold', 999)
+            tlt_t = cfg.get('tlt_crash', -999)
+            spy_t = cfg.get('spy_ignore', 999)
+            if vix_t >= 999 and tlt_t <= -999 and spy_t >= 999:
+                regime_str = "no filter"
+            else:
+                parts = []
+                if vix_t < 999:
+                    parts.append(f"VIX<{vix_t:.0f}")
+                if tlt_t > -999:
+                    parts.append(f"TLT>{tlt_t:+.2f}")
+                if spy_t < 999:
+                    parts.append(f"SPY<{spy_t:+.2f}")
+                regime_str = ' '.join(parts)
+
+            conf_color = ''
+            conf_reset = ''
+            if conf == 'LOW':
+                conf_color = '\033[33m'
+                conf_reset = '\033[0m'
+            elif conf == 'MED':
+                conf_color = '\033[36m'
+                conf_reset = '\033[0m'
+
+            print(f"  {r['ticker']:<6}  {exp['model_id']:<14}  "
+                  f"{conf_color}{conf:<4}{conf_reset}  "
+                  f"{stats.get('win_rate', '--'):>5}  {stats.get('avg_pnl', '--'):>7}  "
+                  f"{stats.get('freq', '--'):>8}  {mode_label:<8}  "
+                  f"{regime_str:>20}  {note}")
+
+    print()
+    print(f"  Confidence: "
+          f"\033[92mHIGH\033[0m = N>=12 reliable   "
+          f"\033[36mMED\033[0m = N=5-11 moderate   "
+          f"\033[33mLOW\033[0m = N<=4 possible noise")
+    print(f"  {'='*W}")
 
 
 # ==============================================================================
@@ -1019,8 +1103,14 @@ def run_experiment(exp, run_ts):
 
     market_df = build_market_context(exp)
 
-    needed_seeds = sorted(set(cfg['seed'] for cfg in exp['asset_configs'].values()))
-    for seed in needed_seeds:
+    needed_seeds = set()
+    base_num = int(model_id.split('_')[0])
+    for cfg in exp['asset_configs'].values():
+        if cfg.get('is_ensemble', False):
+            needed_seeds.update(range(base_num * 100 + 1, base_num * 100 + 16))
+        else:
+            needed_seeds.add(cfg['seed'])
+    for seed in sorted(needed_seeds):
         try:
             get_model(exp, seed)
         except Exception as e:

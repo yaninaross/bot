@@ -111,7 +111,7 @@ if go_signals.empty:
 def load_ohlcv_pst(ticker):
     clean = TICKER_FILE_MAP.get(ticker, ticker)
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             df = pd.read_parquet(uri)
             df = df.reset_index()

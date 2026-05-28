@@ -28,6 +28,10 @@ from google.cloud import bigquery
 BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
 W = 120
 
+CLEAN_EXP_BASES = ('105_DEFENSE', '106_DEFENSE', '152_XSECTOR', '160_XSECTOR',
+                   '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
+                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR')
+
 client = bigquery.Client()
 query = f"SELECT * FROM `{BQ_TABLE}` ORDER BY experiment, ticker, seed"
 df = client.query(query).to_dataframe()
@@ -38,6 +42,7 @@ if df.empty:
 
 df['run_timestamp'] = pd.to_datetime(df['run_timestamp'], utc=True)
 df['survived_a'] = df['survived_a'].fillna(False).astype(bool)
+df = df[df['experiment'].apply(lambda e: any(e == b or e.startswith(b + '_') for b in CLEAN_EXP_BASES))]
 
 experiments = sorted(df['experiment'].unique())
 

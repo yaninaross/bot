@@ -46,7 +46,7 @@ from google.cloud import storage
 # ==============================================================================
 BUCKET_NAME   = "time-series-bucket-ys"
 INFERENCE_DIR = "Data/Inference"
-GCS_MODEL_PATH = "Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
+GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 TIME_STEPS    = 240
 EMBED_DIM     = 16
 BACKTEST_DAYS = 150
@@ -238,7 +238,7 @@ for _exp in (EXP_97, EXP_110, EXP_112, EXP_103):
     _exp['asset_index'] = _idx
     _exp['n_assets'] = len(_exp['train_teachers']) + 1
     _exp['other_idx'] = len(_exp['train_teachers'])
-    _exp['stats_path'] = f"Data/Inference/scaling_stats_experiment_{_exp['model_id']}.json"
+    _exp['stats_path'] = f"Data/Inference_v2/scaling_stats_experiment_{_exp['model_id']}.json"
 
 EXPERIMENTS = [EXP_97, EXP_110, EXP_112, EXP_103]
 

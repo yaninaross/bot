@@ -139,7 +139,7 @@ SCORING_POOL   = [
     'KEEL', 'HUT', 'CIFR', 'BTBT', 'BGDE', 'HOOD', 'SMCI', 'NVDA',
     'VRT', 'AMD', 'PLTR', 'TSLA', 'SMH', 'IWM',
 ]
-RESULTS_DIR    = f"Algos/Results_all/Universal_Exp{MODEL_ID}"
+RESULTS_DIR    = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
 BUCKET_NAME    = "time-series-bucket-ys"
 
 # Walk-forward windows
@@ -286,7 +286,7 @@ def preload_regime_data(eval_start, eval_end):
 
     def _load_regime_asset(ticker):
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{ticker}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{ticker}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -359,7 +359,7 @@ def preload_regime_data(eval_start, eval_end):
 def load_ticker_ohlcv(ticker):
     clean = ticker.replace("I:", "").replace("X:", "")
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:

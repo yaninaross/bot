@@ -144,7 +144,7 @@ SCORING_POOL   = [
     'JOBY', 'NNDM', 'MVIS', 'GD', 'LMT', 'NOC', 'RTX', 'LHX', 'GE',
     'RCAT', 'ACHR',
 ]
-RESULTS_DIR    = f"Algos/Results_all/Universal_Exp{MODEL_ID}"
+RESULTS_DIR    = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
 BUCKET_NAME    = "time-series-bucket-ys"
 
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
@@ -302,7 +302,7 @@ def preload_regime_data(eval_start, eval_end):
     def _load_regime_asset(ticker):
         clean = TICKER_FILE_MAP.get(ticker, ticker)
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -376,7 +376,7 @@ def load_ticker_ohlcv(ticker):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:

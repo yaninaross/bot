@@ -48,7 +48,12 @@ VAL_START = '2026-01-02'
 VAL_END   = '2026-04-29'
 BUCKET_NAME = "time-series-bucket-ys"
 EXIT_TIME_MIN = 780
+SLIPPAGE_PCT = 0.0015
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
+
+CLEAN_EXP_BASES = ('105_DEFENSE', '106_DEFENSE', '152_XSECTOR', '160_XSECTOR',
+                   '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
+                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR')
 
 W = 120
 
@@ -89,6 +94,9 @@ DEPLOY_CONFIGS = [
     # --- Exp-150 Energy ---
     {'ticker': 'BE',   'experiment': '150_ENERGY',    'seed': 15007, 'entry_minute': 379, 'prob_thresh': 0.410, 'tp_pct': 0.240, 'sl_pct': 0.055, 'vix_threshold': 10.0, 'tlt_crash': -0.10, 'spy_ignore': 0.30},
 ]
+
+DEPLOY_CONFIGS = [c for c in DEPLOY_CONFIGS
+                  if any(c['experiment'] == b or c['experiment'].startswith(b + '_') for b in CLEAN_EXP_BASES)]
 
 print(f"{'='*W}")
 print(f"  PORTFOLIO BACKTEST — VAL-A Period ({VAL_START} → {VAL_END})")
@@ -143,9 +151,14 @@ def run_trade_sim(entry_indices, prices, highs, lows, date_ints, time_mins, tp, 
             if date_ints[k] != entry_date:
                 outcome = (prices[k-1] - entry_price) / entry_price
                 exit_idx = k; trade_done = True; break
-            if lows[k] <= stop_price:
+            sl_hit = lows[k] <= stop_price
+            tp_hit = highs[k] >= target_price
+            if sl_hit and tp_hit:
+                outcome = -sl if np.random.random() < 0.5 else tp
+                exit_idx = k; trade_done = True; break
+            if sl_hit:
                 outcome = -sl; exit_idx = k; trade_done = True; break
-            if highs[k] >= target_price:
+            if tp_hit:
                 outcome = tp;  exit_idx = k; trade_done = True; break
             if time_mins[k] >= exit_time:
                 outcome = (prices[k] - entry_price) / entry_price
@@ -194,7 +207,7 @@ def _load_parquet_with_dt_index(gcs_uri, tz_out='America/Los_Angeles'):
 def load_ticker_ohlcv(ticker):
     clean = TICKER_FILE_MAP.get(ticker, ticker)
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:
@@ -204,7 +217,7 @@ def load_ticker_ohlcv(ticker):
 
 def load_single_seed_scores(ticker, experiment, seed):
     clean = TICKER_FILE_MAP.get(ticker, ticker)
-    results_dir = f"Algos/Results_all/Universal_Exp{experiment}"
+    results_dir = f"Algos/Results_all_v2/Universal_Exp{experiment}"
     path = f"{results_dir}/{clean}/Seed_{seed}_Results.csv"
     blob = gcs_client.bucket(BUCKET_NAME).blob(path)
     if not blob.exists():
@@ -242,7 +255,7 @@ def preload_regime_data(eval_start, eval_end):
 
     def _load_regime_asset(ticker):
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{ticker}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{ticker}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -392,6 +405,8 @@ for _, cfg in configs_df.iterrows():
     if len(raw_pnl) == 0:
         print(f"  {ticker}: No trades simulated")
         continue
+
+    raw_pnl = raw_pnl - 2 * SLIPPAGE_PCT
 
     n = len(raw_pnl)
     trade_vix, trade_tlt, trade_spy = _attach_regime(raw_dates, regime_dict, n, entry_minute)

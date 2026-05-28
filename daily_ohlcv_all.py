@@ -5,10 +5,11 @@ Fetches 1-minute OHLCV bars from Polygon for ALL assets needed by
 daily scoring, then stitches each master_inference.parquet by joining
 OHLCV with the micro parquet already written by daily_micro_all.py.
 
-Scored (14 tickers — v2_bar_is_real only):
-  - Exp-105: RCAT, SPIR, ASTS, HUT
-  - Exp-106: CIFR, WULF, RKLB, APLD
-  - Exp-152: LUNR, ALAB, BBAI, BE, FCEL, RIOT
+Scored (21 tickers):
+  - Exp-152: RCAT
+  - Exp-160: KEEL, PLUG, RIOT, IREN
+  - Exp-170: ALAB, APLD, ASTS, BBAI, BE, BTBT, CIFR, CLSK, FCEL, HUT, JOBY, LUNR
+  + monitoring: SPIR, WULF, RKLB, MVIS, ACHR
   Context: ITA, I:VIX, TLT, IWM, SPY
 
 Run AFTER daily_micro_all.py has finished updating GCS.
@@ -31,14 +32,12 @@ warnings.filterwarnings('ignore')
 # ⚙️  CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # --- Exp-105 Defense (cluster) — v2_bar_is_real ---
-    'RCAT', 'SPIR', 'ASTS', 'HUT',
-    # --- Exp-106 Defense (8% cluster) — v2_bar_is_real ---
+    # --- Exp-152 / 160 / 170 Cross-sector ---
+    'RCAT', 'ASTS', 'HUT', 'SPIR',
     'CIFR', 'WULF', 'RKLB', 'APLD',
-    # --- Exp-152 Cross-sector — v2_bar_is_real ---
     'LUNR', 'ALAB', 'BBAI', 'BE', 'FCEL', 'RIOT',
-    # --- Exp-200 additions ---
-    'MARA', 'PLUG', 'ACHR',
+    'KEEL', 'IREN', 'CLSK', 'MVIS', 'PLUG',
+    'BTBT', 'JOBY',
 ]
 
 CONTEXT_ASSETS = ['ITA', 'I:VIX', 'TLT', 'IWM', 'SPY']
@@ -46,8 +45,9 @@ CONTEXT_ASSETS = ['ITA', 'I:VIX', 'TLT', 'IWM', 'SPY']
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
 BUCKET_NAME     = "time-series-bucket-ys"
 
-GCS_OHLCV_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
-GCS_MICRO_DIR = f"gs://{BUCKET_NAME}/Data/Inference/Microstructure"
+GCS_OHLCV_DIR   = f"gs://{BUCKET_NAME}/Data/Inference"
+GCS_MICRO_DIR   = f"gs://{BUCKET_NAME}/Data/Inference/Microstructure"
+GCS_MASTER_DIR  = f"gs://{BUCKET_NAME}/Data/Inference_v2"
 
 poly_client = RESTClient(POLYGON_API_KEY)
 gcs_client  = gcs_storage.Client()
@@ -100,9 +100,10 @@ def fetch_polygon_aggs(ticker, start_dt, end_dt, chunk_months=1, sleep_secs=2):
 # ==============================================================================
 def heal_data(df):
     df = df.resample('1min').asfreq()
-    for c in ['Open', 'High', 'Low', 'Close', 'Spread', 'OBI', 'bsize', 'asize']:
+    for c in ['Open', 'High', 'Low', 'Close']:
         if c in df.columns: df[c] = df[c].ffill()
-    for c in ['Volume', 'Total_Vol', 'Volume_Delta', 'Trade_Count', 'Delta_Pct']:
+    for c in ['Volume', 'Total_Vol', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
+              'Spread', 'OBI', 'bsize', 'asize']:
         if c in df.columns: df[c] = df[c].fillna(0)
     return df
 
@@ -126,7 +127,7 @@ if __name__ == "__main__":
 
         ohlcv_uri  = f"{GCS_OHLCV_DIR}/{clean_ticker}_1m_full_historical_data.parquet"
         micro_uri  = f"{GCS_MICRO_DIR}/{clean_ticker}_1m_microstructure.parquet"
-        master_uri = f"{GCS_OHLCV_DIR}/{clean_ticker}_master_inference.parquet"
+        master_uri = f"{GCS_MASTER_DIR}/{clean_ticker}_master_inference.parquet"
 
         # ── A. Load existing OHLCV ───────────────────────────────────────────────
         try:
@@ -141,7 +142,6 @@ if __name__ == "__main__":
             ohlcv_start = pd.Timestamp("2022-01-01", tz='UTC')
 
         # ── B. Fetch new OHLCV ──────────────────────────────────────────────────
-        gap_days = (fetch_end - ohlcv_start).days if not df_ohlcv.empty else 0
         new_bars_fetched = False
         if ohlcv_start < fetch_end:
             print(f"   ⏳ Fetching OHLCV from {ohlcv_start.date()}...")
@@ -191,23 +191,22 @@ if __name__ == "__main__":
             else:
                 df_unified = df_ohlcv.copy()
 
-            # Gap detection: if script hasn't run for >3 days, heal entire file
-            if gap_days > 3:
-                print(f"   !! Gap of {gap_days} days detected — healing entire dataset")
+            # Tail-only heal: load existing master, heal only the new portion
+            try:
+                df_existing_master = pd.read_parquet(master_uri)
+                if df_existing_master.index.tz is None:
+                    df_existing_master.index = df_existing_master.index.tz_localize('UTC')
+                tail_start = df_existing_master.index.max() - timedelta(days=3)
+                df_tail = df_unified[df_unified.index >= tail_start]
+                df_tail = heal_data(df_tail)
+                df_head = df_existing_master[df_existing_master.index < tail_start]
+                df_unified = pd.concat([df_head, df_tail])
+                df_unified = df_unified[~df_unified.index.duplicated(keep='last')]
+                del df_existing_master, df_head, df_tail
+                print(f"   📐 Tail-only heal from {tail_start.date()}")
+            except Exception:
+                print(f"   📐 No existing master — full heal")
                 df_unified = heal_data(df_unified)
-            else:
-                tail_size = max(1500, (len(new_aggs) if new_bars_fetched else 0) + 500)
-                if len(df_unified) > tail_size:
-                    df_head = df_unified.iloc[:-tail_size]
-                    df_tail = df_unified.tail(tail_size)
-
-                    df_tail = pd.concat([df_head.tail(1), df_tail])
-
-                    df_tail_healed = heal_data(df_tail)
-
-                    df_unified = pd.concat([df_head.iloc[:-1], df_tail_healed])
-                else:
-                    df_unified = heal_data(df_unified)
 
             df_unified = df_unified[df_unified.index.notna()].sort_index()
             df_unified.to_parquet(master_uri, engine='pyarrow')

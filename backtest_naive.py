@@ -74,9 +74,7 @@ W = 130
 # EXPERIMENTS — all experiments with seed score files
 # ==============================================================================
 EXPERIMENTS = [
-    '97_MICRO', '103_DEFENSE', '104_DEFENSE', '105_DEFENSE', '106_DEFENSE',
-    '110_MICRO', '111_MICRO', '112_MICRO', '113_MICRO',
-    '150_ENERGY', '152_XSECTOR', '153_XSECTOR', '200_XSECTOR8',
+    '105_DEFENSE', '106_DEFENSE', '152_XSECTOR',
 ]
 
 # ==============================================================================
@@ -175,7 +173,7 @@ def load_ohlcv(ticker):
         return _ohlcv_cache[ticker]
     clean = TICKER_FILE_MAP.get(ticker, ticker)
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             df = pd.read_parquet(uri)
             df = df.reset_index()
@@ -214,7 +212,7 @@ def compute_daily_atr_series(df_ohlcv, period=14):
 def load_seed_scores(ticker, experiment):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                 ticker.replace("I:", "").replace("X:", ""))
-    results_dir = f"Algos/Results_all/Universal_Exp{experiment}"
+    results_dir = f"Algos/Results_all_v2/Universal_Exp{experiment}"
     prefix = f"{results_dir}/{clean}/Seed_"
     blobs = list(gcs_client.bucket(BUCKET_NAME).list_blobs(prefix=prefix))
 
@@ -274,7 +272,7 @@ print("\nScanning for experiment-ticker pairs with seed scores...")
 
 exp_ticker_pairs = []
 for exp in EXPERIMENTS:
-    prefix = f"Algos/Results_all/Universal_Exp{exp}/"
+    prefix = f"Algos/Results_all_v2/Universal_Exp{exp}/"
     tickers_found = set()
     all_blobs = list(gcs_client.bucket(BUCKET_NAME).list_blobs(prefix=prefix))
     for b in all_blobs:
@@ -295,71 +293,84 @@ print(f"  Found {len(exp_ticker_pairs)} experiment-ticker pairs across {len(EXPE
 # RUN NAIVE BACKTEST
 # ==============================================================================
 all_results = []
-ticker_cache = {}
 n_total = len(exp_ticker_pairs)
 
-for pair_idx, (exp, ticker) in enumerate(exp_ticker_pairs):
-    if pair_idx % 20 == 0:
-        print(f"\n  [{pair_idx+1}/{n_total}] Processing {exp}/{ticker}...")
+exp_groups = {}
+for exp, ticker in exp_ticker_pairs:
+    exp_groups.setdefault(exp, []).append(ticker)
 
-    df_ohlcv = load_ohlcv(ticker)
-    if df_ohlcv is None:
-        continue
+pair_idx = 0
+for exp, tickers in exp_groups.items():
+    print(f"\n  Experiment {exp}: {len(tickers)} tickers")
+    ticker_cache = {}
 
-    if ticker not in ticker_cache:
-        atr_series = compute_daily_atr_series(df_ohlcv)
-        arrays = precompute_arrays(df_ohlcv, EVAL_START, EVAL_END, atr_series)
-        ticker_cache[ticker] = arrays
-    else:
-        arrays = ticker_cache[ticker]
+    for ticker in tickers:
+        pair_idx += 1
+        if pair_idx % 10 == 0:
+            print(f"    [{pair_idx}/{n_total}] {exp}/{ticker}...")
 
-    if arrays is None:
-        continue
-
-    seed_scores = load_seed_scores(ticker, exp)
-    if not seed_scores:
-        continue
-
-    for seed_id, seed_prob in seed_scores.items():
-        common = arrays['index'].intersection(seed_prob.index)
-        if len(common) == 0:
+        df_ohlcv = load_ohlcv(ticker)
+        if df_ohlcv is None:
             continue
 
-        probs = np.zeros(len(arrays['index']), dtype=np.float64)
-        common_locs = arrays['index'].get_indexer(common)
-        probs[common_locs] = seed_prob.loc[common].values
+        if ticker not in ticker_cache:
+            atr_series = compute_daily_atr_series(df_ohlcv)
+            arrays = precompute_arrays(df_ohlcv, EVAL_START, EVAL_END, atr_series)
+            ticker_cache[ticker] = arrays
+        else:
+            arrays = ticker_cache[ticker]
 
-        for prob_thresh in PROB_THRESHOLDS:
-            mask = (probs >= prob_thresh) & (arrays['times'] == ENTRY_MINUTE)
-            indices = np.where(mask)[0]
-            if len(indices) == 0:
+        if arrays is None:
+            continue
+
+        seed_scores = load_seed_scores(ticker, exp)
+        if not seed_scores:
+            continue
+
+        for seed_id, seed_prob in seed_scores.items():
+            common = arrays['index'].intersection(seed_prob.index)
+            if len(common) == 0:
                 continue
 
-            pnl, tp_used, sl_used = run_sim_atr_naive(
-                indices, arrays['prices'], arrays['highs'], arrays['lows'],
-                arrays['dates'], arrays['times'], arrays['atr_pct'],
-                TP_ATR_MULT, SL_ATR_MULT, EXIT_TIME_MIN,
-                TP_FLOOR, TP_CAP, SL_FLOOR, SL_CAP
-            )
+            probs = np.zeros(len(arrays['index']), dtype=np.float64)
+            common_locs = arrays['index'].get_indexer(common)
+            probs[common_locs] = seed_prob.loc[common].values
 
-            if len(pnl) == 0:
-                continue
+            for prob_thresh in PROB_THRESHOLDS:
+                mask = (probs >= prob_thresh) & (arrays['times'] == ENTRY_MINUTE)
+                indices = np.where(mask)[0]
+                if len(indices) == 0:
+                    continue
 
-            all_results.append({
-                'experiment': exp,
-                'ticker': ticker,
-                'seed': seed_id,
-                'prob_thresh': prob_thresh,
-                'n_trades': len(pnl),
-                'avg_pnl': float(np.mean(pnl)),
-                'win_rate': float(np.mean(pnl > 0)),
-                'total_pnl': float(np.sum(pnl)),
-                'avg_tp': float(np.mean(tp_used)),
-                'avg_sl': float(np.mean(sl_used)),
-                'months': arrays['months'],
-            })
+                pnl, tp_used, sl_used = run_sim_atr_naive(
+                    indices, arrays['prices'], arrays['highs'], arrays['lows'],
+                    arrays['dates'], arrays['times'], arrays['atr_pct'],
+                    TP_ATR_MULT, SL_ATR_MULT, EXIT_TIME_MIN,
+                    TP_FLOOR, TP_CAP, SL_FLOOR, SL_CAP
+                )
 
-    gc.collect()
+                if len(pnl) == 0:
+                    continue
+
+                all_results.append({
+                    'experiment': exp,
+                    'ticker': ticker,
+                    'seed': seed_id,
+                    'prob_thresh': prob_thresh,
+                    'n_trades': len(pnl),
+                    'avg_pnl': float(np.mean(pnl)),
+                    'win_rate': float(np.mean(pnl > 0)),
+                    'total_pnl': float(np.sum(pnl)),
+                    'avg_tp': float(np.mean(tp_used)),
+                    'avg_sl': float(np.mean(sl_used)),
+                    'months': arrays['months'],
+                })
+
+        del seed_scores; gc.collect()
+
+    _ohlcv_cache.clear()
+    del ticker_cache; gc.collect()
+    print(f"    {exp} done — {len(all_results)} results so far")
 
 df = pd.DataFrame(all_results)
 

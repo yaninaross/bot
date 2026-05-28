@@ -45,8 +45,12 @@ BT_START = '2026-02-03'
 BT_END   = '2026-05-02'
 BUCKET_NAME = "time-series-bucket-ys"
 EXIT_TIME_MIN = 780
-TICKER_FILE_MAP = {'BITF': 'KEEL'}
+TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 EXCLUDED_TICKERS = ['SMLR', 'SPIR']
+
+CLEAN_EXP_BASES = ('105_DEFENSE', '106_DEFENSE', '152_XSECTOR', '160_XSECTOR',
+                   '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
+                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR')
 
 MAX_SEEDS = 5
 STRATEGIES = {
@@ -143,7 +147,7 @@ def _load_parquet_with_dt_index(gcs_uri, tz_out='America/Los_Angeles'):
 def load_ticker_ohlcv(ticker):
     clean = TICKER_FILE_MAP.get(ticker, ticker)
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:
@@ -153,7 +157,7 @@ def load_ticker_ohlcv(ticker):
 
 def load_single_seed_scores(ticker, experiment, seed):
     clean = TICKER_FILE_MAP.get(ticker, ticker)
-    results_dir = f"Algos/Results_all/Universal_Exp{experiment}"
+    results_dir = f"Algos/Results_all_v2/Universal_Exp{experiment}"
     path = f"{results_dir}/{clean}/Seed_{seed}_Results.csv"
     blob = gcs_client.bucket(BUCKET_NAME).blob(path)
     if not blob.exists():
@@ -191,7 +195,7 @@ def preload_regime_data(eval_start, eval_end):
 
     def _load_regime_asset(ticker):
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{ticker}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{ticker}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -299,6 +303,7 @@ if df_bq.empty:
 
 df_bq['survived_a'] = df_bq['survived_a'].fillna(False).astype(bool)
 df_bq['run_timestamp'] = pd.to_datetime(df_bq['run_timestamp'], utc=True)
+df_bq = df_bq[df_bq['experiment'].apply(lambda e: any(e == b or e.startswith(b + '_') for b in CLEAN_EXP_BASES))]
 
 # Deduplicate: keep latest run_id per experiment
 for exp in df_bq['experiment'].unique():

@@ -5,12 +5,12 @@ client = storage.Client()
 bucket = client.bucket("time-series-bucket-ys")
 
 renames = [
-    ("Data/Inference/MIGI_1m_full_historical_data.parquet",
-     "Data/Inference/BGDE_1m_full_historical_data.parquet"),
-    ("Data/Inference/Microstructure/MIGI_1m_microstructure.parquet",
-     "Data/Inference/Microstructure/BGDE_1m_microstructure.parquet"),
-    ("Data/Inference/MIGI_master_inference.parquet",
-     "Data/Inference/BGDE_master_inference.parquet"),
+    ("Data/Inference_v2/MIGI_1m_full_historical_data.parquet",
+     "Data/Inference_v2/BGDE_1m_full_historical_data.parquet"),
+    ("Data/Inference_v2/Microstructure/MIGI_1m_microstructure.parquet",
+     "Data/Inference_v2/Microstructure/BGDE_1m_microstructure.parquet"),
+    ("Data/Inference_v2/MIGI_master_inference.parquet",
+     "Data/Inference_v2/BGDE_master_inference.parquet"),
 ]
 
 for old_path, new_path in renames:

@@ -91,8 +91,8 @@ EMBED_DIM      = 16
 TAIL_DAYS = 7  # Need 7 days for feature warmup (RSI, RVOL, ATR) + resample density
 
 GCS_INFERENCE_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
-GCS_MODEL_PATH    = f"Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
-GCS_STATS_PATH    = f"Data/Inference/scaling_stats_experiment_{MODEL_ID}.json"
+GCS_MODEL_PATH    = f"Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
+GCS_STATS_PATH    = f"Data/Inference_v2/scaling_stats_experiment_{MODEL_ID}.json"
 
 BQ_TABLE = "ys-time-series.scoring_logs.live_predictions"
 

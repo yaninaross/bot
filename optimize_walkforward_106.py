@@ -70,6 +70,7 @@ def _ensure_wf_table(bq_client, table_id):
         SchemaField('val_b_start', 'STRING'),
         SchemaField('val_b_end', 'STRING'),
         SchemaField('model_version', 'STRING'),
+        SchemaField('v0_fixed', 'BOOL'),
     ]
     bq_client.create_table(Table(table_id, schema=schema), exists_ok=True)
     # Schema evolution: add any new columns to existing table
@@ -126,6 +127,7 @@ def save_row_to_bq(row_dict, run_id, model_id, opt_s, opt_e,
             'val_a_start': va_s, 'val_a_end': va_e,
             'val_b_start': vb_s or '', 'val_b_end': vb_e or '',
             'model_version': 'v2_bar_is_real',
+            'v0_fixed': True,
         }
         errors = _bq_client.insert_rows_json(BQ_TABLE_ID, [row])
         if errors:
@@ -147,7 +149,7 @@ SCORING_POOL   = [
     # 7 scoring-only
     'CLSK', 'WULF', 'BTBT', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
 ]
-RESULTS_DIR    = f"Algos/Results_all/Universal_Exp{MODEL_ID}"
+RESULTS_DIR    = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
 BUCKET_NAME    = "time-series-bucket-ys"
 
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
@@ -305,7 +307,7 @@ def preload_regime_data(eval_start, eval_end):
     def _load_regime_asset(ticker):
         clean = TICKER_FILE_MAP.get(ticker, ticker)
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -379,7 +381,7 @@ def load_ticker_ohlcv(ticker):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:

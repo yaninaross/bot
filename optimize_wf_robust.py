@@ -1,21 +1,15 @@
 """
-optimize_wf_robust.py — Robust Walk-Forward Optimizer (Anti-Overfit)
-====================================================================
-Addresses the critical overfitting problem in the original WF optimizer:
+optimize_wf_robust.py — Rolling Walk-Forward Optimizer v3
+=========================================================
+Anchored expanding-window walk-forward optimization in 2 rounds:
 
-  Original: 1M parameter combos / 6-12 trades = 75,000:1 ratio → massive overfitting
-  Robust:   10K parameter combos / 12-24 trades = ~500:1 ratio → much more robust
+  R1 (broad):   OPT Oct-Nov   → VAL Dec-Jan    sparse grid, no filters
+  R2 (refine):  OPT Oct-Jan   → VAL Feb-Mar    expand around R1 survivors + filters
+  TEST:         Apr 1 → May 21                  2-month pure holdout
 
-Key changes from optimize_wf_dynamic.py:
-  1. OPT window expanded: 3mo → 6mo (Oct 2025 - Mar 2026)
-  2. VAL window: Apr-May 2026 (most recent, no OPT overlap)
-  3. Strategy grid: 60x smaller (375 × 27 = 10K vs 600K combos)
-  4. Fine-tuning stages 2-3: REMOVED (biggest overfitting source)
-  5. Min OPT trades: 15 (was ~3)
-  6. Stability-weighted selection: avg_pnl × neighbor_stability
-  7. Results tagged 'robust_v1' in BQ for comparison
-
-Still supports all 5 TPSL modes. Same Numba sim engines, data loading, BQ.
+Per-seed optimization + ensemble evaluation (average probs across all seeds,
+test with best seed's params). Results tagged 'robust_wf_v3' in BQ.
+Supports all 5 TPSL modes. Same Numba sim engines, data loading, BQ.
 Run in Colab with GPU (for numba JIT).
 """
 
@@ -92,6 +86,9 @@ def _ensure_wf_table(bq_client, table_id):
         SchemaField('trail_start_mult', 'FLOAT64'),
         SchemaField('trail_end_mult', 'FLOAT64'),
         SchemaField('model_version', 'STRING'),
+        SchemaField('v0_fixed', 'BOOL'),
+        SchemaField('is_ensemble', 'BOOL'),
+        SchemaField('n_seeds_avg', 'INT64'),
     ]
     bq_client.create_table(Table(table_id, schema=schema), exists_ok=True)
     table = bq_client.get_table(table_id)
@@ -144,13 +141,17 @@ def save_row_to_bq(row_dict, run_id, experiment,
             'sl_mult': float(row_dict.get('sl_mult', 0)) if TPSL_MODE in ('atr', 'atr_adaptive', 'trailing_decay') else None,
             'trail_start_mult': float(row_dict.get('trail_start_mult', 0)) if TPSL_MODE == 'trailing_decay' else None,
             'trail_end_mult': float(row_dict.get('trail_end_mult', 0)) if TPSL_MODE == 'trailing_decay' else None,
-            'model_version': 'robust_v1',
+            'model_version': MODEL_VERSION_TAG,
+            'v0_fixed': True,
+            'is_ensemble': bool(row_dict.get('is_ensemble', False)),
+            'n_seeds_avg': int(row_dict.get('n_seeds_avg', 0)),
         }
         errors = _bq_client.insert_rows_json(BQ_TABLE_ID, [row])
         if errors:
             print(f"      BQ error: {errors[0]}")
         else:
-            print(f"      BQ: saved {row_dict['Ticker']}/S{row_dict['Seed']}")
+            label = "ENS" if row_dict.get('is_ensemble') else f"S{row_dict['Seed']}"
+            print(f"      BQ: saved {row_dict['Ticker']}/{label}")
     except Exception as e:
         print(f"      BQ save failed: {e}")
 
@@ -165,46 +166,160 @@ EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
 DEPLOY_PNL_THRESHOLD = 0.018
 MIN_BQ_TRADES   = 3
 
-OPT_START   = '2025-10-02'
-OPT_END     = '2026-03-31'
-VAL_A_START = '2026-04-01'
-VAL_A_END   = '2026-05-21'
-VAL_B_START = ''
-VAL_B_END   = ''
+EXP_FAMILIES = {
+    'late_cutoff': {
+        'label': 'Late Cutoff (Oct 2025)',
+        'experiments': {'105_DEFENSE', '106_DEFENSE', '152_XSECTOR'},
+        'wf_rounds': [
+            {'name': 'R1', 'opt': ('2025-10-02', '2025-11-30'),
+                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 6},
+            {'name': 'R2', 'opt': ('2025-12-01', '2026-01-31'),
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 10},
+        ],
+        'test_start': '2026-04-01',
+        'test_end':   '2026-05-21',
+        'fallback_tickers': [
+            'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
+            'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
+            'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
+            'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+        ],
+    },
+    'early_cutoff': {
+        'label': 'Early Cutoff (Mar 2025)',
+        'experiments': {'160_XSECTOR'},
+        'wf_rounds': [
+            {'name': 'R1', 'opt': ('2025-04-01', '2025-07-31'),
+                           'val': ('2025-08-01', '2025-09-30'), 'min_trades': 6},
+            {'name': 'R2', 'opt': ('2025-08-01', '2025-11-30'),
+                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 8},
+            {'name': 'R3', 'opt': ('2025-12-01', '2026-01-31'),
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 10},
+        ],
+        'test_start': '2026-04-01',
+        'test_end':   '2026-05-21',
+        'fallback_tickers': [
+            'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
+            'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
+            'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
+            'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+        ],
+    },
+    'walkforward': {
+        'label': 'Walk-Forward (6 folds)',
+        'experiments': {'170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
+                        '173_XSECTOR', '174_XSECTOR', '175_XSECTOR'},
+        'wf_rounds': [
+            {'name': 'R1', 'opt': ('2025-04-01', '2025-07-31'),
+                           'val': ('2025-08-01', '2025-09-30'), 'min_trades': 6},
+            {'name': 'R2', 'opt': ('2025-08-01', '2025-11-30'),
+                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 8},
+            {'name': 'R3', 'opt': ('2025-12-01', '2026-01-31'),
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 10},
+        ],
+        'test_start': '2026-04-01',
+        'test_end':   '2026-05-21',
+        'stitch': True,
+        'fallback_tickers': [
+            'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
+            'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
+            'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
+            'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+        ],
+    },
+}
+
+ACTIVE_FAMILY = 'walkforward'  # change per run: 'late_cutoff', 'early_cutoff', 'walkforward'
+
+_family = EXP_FAMILIES[ACTIVE_FAMILY]
+CLEAN_EXPERIMENTS = _family['experiments']
+WF_ROUNDS  = _family['wf_rounds']
+TEST_START = _family['test_start']
+TEST_END   = _family['test_end']
+
+NO_FILTER_DEFAULTS = {'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0}
 
 EXIT_TIME_MIN        = 780
 MIN_TRADES_PER_MONTH = 2.0
 VOL_LOOKBACK_DAYS    = 30
 VOL_PCT_GRID         = [0, 25]
+SLIPPAGE_PCT         = 0.0015  # 0.15% each way = 0.3% round-trip
 
+MODEL_VERSION_TAG = 'robust_wf_v5'
 SKIP_COMPLETED = True
 TICKER_SUBSET  = []  # empty = run all tickers from deploy_configs
 
 # ==============================================================================
-# GRIDS
+# GRIDS — Tiered for rolling walk-forward
 # ==============================================================================
-GRID_STRATEGY_STATIC = {
-    'entry_time':  ["06:15", "06:20", "06:25"],
-    'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
-    'tp_pct':      [0.08, 0.12, 0.16, 0.20, 0.25],
-    'sl_pct':      [0.03, 0.05, 0.08, 0.10, 0.14],
+# Round 1: Broad, sparse (81 combos for static)
+GRID_R1 = {
+    'static': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.50, 0.70],
+        'tp_pct':      [0.08, 0.16, 0.25],
+        'sl_pct':      [0.03, 0.08, 0.14],
+    },
+    'atr': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.50, 0.70],
+        'tp_mult':     [1.5, 3.0, 8.0],
+        'sl_mult':     [0.5, 1.5, 4.0],
+    },
+    'atr_adaptive': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.50, 0.70],
+        'tp_mult':     [1.5, 3.0, 8.0],
+        'sl_mult':     [0.5, 1.5, 4.0],
+    },
+    'regime_scaled': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.50, 0.70],
+        'tp_pct':      [0.08, 0.16, 0.25],
+        'sl_pct':      [0.03, 0.08, 0.14],
+    },
+    'trailing_decay': {
+        'entry_time':       ["06:15", "06:20", "06:25"],
+        'prob_thresh':      [0.30, 0.50, 0.70],
+        'trail_start_mult': [2.0, 4.0, 7.0],
+        'trail_end_mult':   [0.5, 1.0, 1.5],
+        'sl_mult':          [1.0, 2.0, 4.0],
+    },
 }
 
-GRID_STRATEGY_ATR = {
-    'entry_time':  ["06:15", "06:20", "06:25"],
-    'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
-    'tp_mult':     [1.5, 2.0, 3.0, 5.0, 8.0],
-    'sl_mult':     [0.5, 1.0, 1.5, 2.5, 4.0],
-}
-
-GRID_STRATEGY_REGIME = GRID_STRATEGY_STATIC.copy()
-
-GRID_STRATEGY_TRAILING = {
-    'entry_time':       ["06:15", "06:20", "06:25"],
-    'prob_thresh':      [0.30, 0.40, 0.50, 0.60, 0.70],
-    'trail_start_mult': [2.0, 4.0, 7.0],
-    'trail_end_mult':   [0.5, 1.0, 1.5],
-    'sl_mult':          [1.0, 2.0, 4.0],
+# Round 2 reference: Full resolution (expand around R1 survivors)
+GRID_R2_REF = {
+    'static': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
+        'tp_pct':      [0.08, 0.12, 0.16, 0.20, 0.25],
+        'sl_pct':      [0.03, 0.05, 0.08, 0.10, 0.14],
+    },
+    'atr': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
+        'tp_mult':     [1.5, 2.0, 3.0, 5.0, 8.0],
+        'sl_mult':     [0.5, 1.0, 1.5, 2.5, 4.0],
+    },
+    'atr_adaptive': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
+        'tp_mult':     [1.5, 2.0, 3.0, 5.0, 8.0],
+        'sl_mult':     [0.5, 1.0, 1.5, 2.5, 4.0],
+    },
+    'regime_scaled': {
+        'entry_time':  ["06:15", "06:20", "06:25"],
+        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
+        'tp_pct':      [0.08, 0.12, 0.16, 0.20, 0.25],
+        'sl_pct':      [0.03, 0.05, 0.08, 0.10, 0.14],
+    },
+    'trailing_decay': {
+        'entry_time':       ["06:15", "06:20", "06:25"],
+        'prob_thresh':      [0.30, 0.40, 0.50, 0.60, 0.70],
+        'trail_start_mult': [2.0, 4.0, 7.0],
+        'trail_end_mult':   [0.5, 1.0, 1.5],
+        'sl_mult':          [1.0, 2.0, 4.0],
+    },
 }
 
 GRID_FILTER = {
@@ -213,22 +328,15 @@ GRID_FILTER = {
     'spy_ignore':    [0.0, 0.20, 0.50],
 }
 
-MIN_OPT_TRADES = 15
-
 REGIME_TP_SCALE = np.array([0.70, 0.85, 1.00, 1.30, 1.60], dtype=np.float64)
 REGIME_SL_SCALE = np.array([0.60, 0.80, 1.00, 1.30, 1.80], dtype=np.float64)
 
 VIX_REGIME_BOUNDS = np.array([15.0, 20.0, 25.0, 35.0], dtype=np.float64)
 
 
-def get_grid_strategy():
-    if TPSL_MODE in ('atr', 'atr_adaptive'):
-        return GRID_STRATEGY_ATR
-    elif TPSL_MODE == 'regime_scaled':
-        return GRID_STRATEGY_REGIME
-    elif TPSL_MODE == 'trailing_decay':
-        return GRID_STRATEGY_TRAILING
-    return GRID_STRATEGY_STATIC
+def get_grid_strategy(round_num=1):
+    grid_set = GRID_R1 if round_num == 1 else GRID_R2_REF
+    return grid_set.get(TPSL_MODE, grid_set.get('static'))
 
 
 # ==============================================================================
@@ -267,9 +375,14 @@ def run_trade_sim(entry_indices, prices, highs, lows, date_ints, time_mins,
             if date_ints[k] != entry_date:
                 outcome = (prices[k-1] - entry_price) / entry_price
                 exit_idx = k; trade_done = True; break
-            if lows[k] <= stop_price:
+            sl_hit = lows[k] <= stop_price
+            tp_hit = highs[k] >= target_price
+            if sl_hit and tp_hit:
+                outcome = -sl if np.random.random() < 0.5 else tp
+                exit_idx = k; trade_done = True; break
+            if sl_hit:
                 outcome = -sl; exit_idx = k; trade_done = True; break
-            if highs[k] >= target_price:
+            if tp_hit:
                 outcome = tp; exit_idx = k; trade_done = True; break
             if time_mins[k] >= exit_time:
                 outcome = (prices[k] - entry_price) / entry_price
@@ -331,9 +444,14 @@ def run_trade_sim_atr(entry_indices, prices, highs, lows, date_ints, time_mins,
             if date_ints[k] != entry_date:
                 outcome = (prices[k-1] - entry_price) / entry_price
                 exit_idx = k; trade_done = True; break
-            if lows[k] <= stop_price:
+            sl_hit = lows[k] <= stop_price
+            tp_hit = highs[k] >= target_price
+            if sl_hit and tp_hit:
+                outcome = -sl if np.random.random() < 0.5 else tp
+                exit_idx = k; trade_done = True; break
+            if sl_hit:
                 outcome = -sl; exit_idx = k; trade_done = True; break
-            if highs[k] >= target_price:
+            if tp_hit:
                 outcome = tp; exit_idx = k; trade_done = True; break
             if time_mins[k] >= exit_time:
                 outcome = (prices[k] - entry_price) / entry_price
@@ -396,9 +514,14 @@ def run_trade_sim_regime(entry_indices, prices, highs, lows, date_ints, time_min
             if date_ints[k] != entry_date:
                 outcome = (prices[k-1] - entry_price) / entry_price
                 exit_idx = k; trade_done = True; break
-            if lows[k] <= stop_price:
+            sl_hit = lows[k] <= stop_price
+            tp_hit = highs[k] >= target_price
+            if sl_hit and tp_hit:
+                outcome = -sl if np.random.random() < 0.5 else tp
+                exit_idx = k; trade_done = True; break
+            if sl_hit:
                 outcome = -sl; exit_idx = k; trade_done = True; break
-            if highs[k] >= target_price:
+            if tp_hit:
                 outcome = tp; exit_idx = k; trade_done = True; break
             if time_mins[k] >= exit_time:
                 outcome = (prices[k] - entry_price) / entry_price
@@ -520,23 +643,26 @@ def _run_sim(indices, ohlcv_arrays, s_cfg):
     times  = ohlcv_arrays['times'].astype(np.int64)
 
     if TPSL_MODE in ('atr', 'atr_adaptive'):
-        return run_trade_sim_atr(
+        pnl, d = run_trade_sim_atr(
             indices, prices, highs, lows, dates, times,
             ohlcv_arrays['atr_pct'], s_cfg['tp_mult'], s_cfg['sl_mult'], EXIT_TIME_MIN)
     elif TPSL_MODE == 'trailing_decay':
-        return run_trade_sim_trailing_decay(
+        pnl, d = run_trade_sim_trailing_decay(
             indices, prices, highs, lows, dates, times,
             ohlcv_arrays['atr_pct'], s_cfg['trail_start_mult'], s_cfg['trail_end_mult'],
             s_cfg['sl_mult'], EXIT_TIME_MIN)
     elif TPSL_MODE == 'regime_scaled':
-        return run_trade_sim_regime(
+        pnl, d = run_trade_sim_regime(
             indices, prices, highs, lows, dates, times,
             ohlcv_arrays['vix_regime'], s_cfg['tp_pct'], s_cfg['sl_pct'],
             REGIME_TP_SCALE, REGIME_SL_SCALE, EXIT_TIME_MIN)
     else:
-        return run_trade_sim(
+        pnl, d = run_trade_sim(
             indices, prices, highs, lows, dates, times,
             s_cfg['tp_pct'], s_cfg['sl_pct'], EXIT_TIME_MIN)
+    if len(pnl) > 0 and SLIPPAGE_PCT > 0:
+        pnl = pnl - 2 * SLIPPAGE_PCT
+    return pnl, d
 
 
 # ==============================================================================
@@ -644,7 +770,7 @@ def preload_regime_data(eval_start, eval_end):
     def _load_regime_asset(ticker):
         clean = TICKER_FILE_MAP.get(ticker, ticker)
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -719,7 +845,7 @@ def load_ticker_ohlcv(ticker):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:
@@ -730,7 +856,7 @@ def load_ticker_ohlcv(ticker):
 def load_seed_scores(ticker, experiment):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
-    results_dir = f"Algos/Results_all/Universal_Exp{experiment}"
+    results_dir = f"Algos/Results_all_v2/Universal_Exp{experiment}"
     client = storage.Client()
     prefix = f"{results_dir}/{clean}/Seed_"
     blobs = list(client.bucket(BUCKET_NAME).list_blobs(prefix=prefix))
@@ -747,6 +873,26 @@ def load_seed_scores(ticker, experiment):
         df.index = df.index.tz_convert('America/Los_Angeles')
         seed_series[seed_id] = df['Prob_Spike'].sort_index()
     return seed_series
+
+
+def load_stitched_seed_scores(ticker, fold_experiments):
+    all_fold_seeds = {}
+    for fold_exp in fold_experiments:
+        all_fold_seeds[fold_exp] = load_seed_scores(ticker, fold_exp)
+
+    stitched = {}
+    for pos in range(15):
+        series_list = []
+        for fold_exp in fold_experiments:
+            fold_seeds = all_fold_seeds[fold_exp]
+            sorted_ids = sorted(fold_seeds.keys())
+            if pos < len(sorted_ids):
+                series_list.append(fold_seeds[sorted_ids[pos]])
+        if series_list:
+            combined = pd.concat(series_list).sort_index()
+            combined = combined[~combined.index.duplicated(keep='last')]
+            stitched[pos] = combined
+    return stitched
 
 
 # ==============================================================================
@@ -815,52 +961,22 @@ def precompute_ohlcv_arrays(df_ohlcv, start_date, end_date, vol_baselines=None,
 # DEPLOYED CONFIGS LOADER (from BQ)
 # ==============================================================================
 def load_deploy_configs():
-    print("   Loading deployed configs from BQ...")
-    query = f"SELECT * FROM `{BQ_TABLE_ID}` ORDER BY experiment, ticker, seed"
-    df = _bq_client.query(query).to_dataframe()
+    family = EXP_FAMILIES[ACTIVE_FAMILY]
+    fallback = [t for t in family['fallback_tickers'] if t not in EXCLUDE_TICKERS]
 
-    df['ticker'] = df['ticker'].replace(TICKER_RENAME)
-    df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
-    df['survived_a'] = df['survived_a'].fillna(False).astype(bool)
-    if 'vol_filter_pct' not in df.columns:
-        df['vol_filter_pct'] = 0
-    df['vol_filter_pct'] = df['vol_filter_pct'].fillna(0).astype(int)
-    if 'tpsl_mode' in df.columns:
-        df = df[(df['tpsl_mode'].isna()) | (df['tpsl_mode'] == '') | (df['tpsl_mode'] == 'static')]
-    df['val_a_total_pnl'] = df['val_a_avg_pnl'] * df['val_a_count']
-    df['composite'] = df['val_a_avg_pnl'] * df['val_a_win_rate'] * np.log2(1 + df['val_a_count'])
-
-    df['run_timestamp'] = pd.to_datetime(df['run_timestamp'])
-    _latest = (df.groupby(['experiment', 'ticker', 'run_id'])['run_timestamp']
-               .max().reset_index()
-               .sort_values('run_timestamp')
-               .groupby(['experiment', 'ticker']).last()
-               .reset_index()[['experiment', 'ticker', 'run_id']])
-    df = df.merge(_latest, on=['experiment', 'ticker', 'run_id'], how='inner')
+    print(f"   Loading configs for family '{ACTIVE_FAMILY}' ({family['label']})...")
 
     configs = []
-    for ticker in sorted(df['ticker'].unique()):
-        td = df[df['ticker'] == ticker]
-        surv = td[td['survived_a']]
-        eligible = surv[surv['val_a_count'] >= MIN_BQ_TRADES]
+    seen = set()
+    for exp in sorted(family['experiments']):
+        for t in sorted(fallback):
+            key = (t, exp)
+            if key not in seen:
+                configs.append({'ticker': t, 'experiment': exp})
+                seen.add(key)
 
-        if not eligible.empty:
-            best_row = eligible.loc[eligible['composite'].idxmax()]
-        elif not surv.empty:
-            best_row = surv.loc[surv['composite'].idxmax()]
-        else:
-            continue
-
-        if best_row['val_a_avg_pnl'] < DEPLOY_PNL_THRESHOLD:
-            continue
-
-        configs.append({
-            'ticker': ticker,
-            'experiment': best_row['experiment'],
-        })
-
-    configs.sort(key=lambda c: c['ticker'])
-    print(f"      {len(configs)} tickers loaded (PnL >= {DEPLOY_PNL_THRESHOLD:.1%})")
+    configs.sort(key=lambda c: (c['ticker'], c['experiment']))
+    print(f"      {len(configs)} ticker-experiment combos across {len(family['experiments'])} experiments")
     return configs
 
 
@@ -868,13 +984,6 @@ def load_deploy_configs():
 # STABILITY-WEIGHTED PARAMETER SELECTION
 # ==============================================================================
 def _select_robust_params(all_results):
-    """Select params from a stable region of parameter space, not an isolated peak.
-
-    Groups results by strategy params (entry_time, prob_thresh, tp/sl).
-    For each strategy, measures how consistently it works across different
-    filter settings. Selects based on avg_pnl * stability, where stability
-    is the fraction of filter combos with positive PnL.
-    """
     if not all_results:
         return None
 
@@ -894,7 +1003,6 @@ def _select_robust_params(all_results):
 
     best = None
     best_robust_score = -999.0
-
     for key, results in strategy_groups.items():
         pnls = np.array([r['Avg_PnL'] for r in results])
         mean_pnl = float(np.mean(pnls))
@@ -905,109 +1013,253 @@ def _select_robust_params(all_results):
         if robust_score > best_robust_score:
             best_robust_score = robust_score
             best = max(results, key=lambda r: r['Avg_PnL'])
-
     return best
 
 
-# ==============================================================================
-# OPTIMIZATION (robust, per seed) — mode-aware
-# ==============================================================================
-def optimize_single_seed(ticker, ohlcv_arrays, regime_dict, seed_prob, seed_id):
-    if ohlcv_arrays is None:
-        return None
+def _expand_around_survivors(survivors, param_name, reference_values):
+    ref_sorted = sorted(reference_values)
+    survivor_vals = set(s[param_name] for s in survivors if param_name in s)
+    if not survivor_vals:
+        return ref_sorted
+    expanded = set()
+    for sv in survivor_vals:
+        if sv in ref_sorted:
+            idx = ref_sorted.index(sv)
+            for offset in [-1, 0, 1]:
+                ni = idx + offset
+                if 0 <= ni < len(ref_sorted):
+                    expanded.add(ref_sorted[ni])
+        else:
+            expanded.add(sv)
+    return sorted(expanded)
 
+
+def _grid_search(ohlcv_arrays, seed_prob, regime_dict, ticker, seed_id,
+                 strat_grid, use_filters, min_trades):
     idx = ohlcv_arrays['index']
     common = idx.intersection(seed_prob.index)
     if len(common) == 0:
-        return None
+        return []
 
     probs = np.zeros(len(idx), dtype=np.float64)
     common_locs = idx.get_indexer(common)
     probs[common_locs] = seed_prob.loc[common].values
 
-    prices = ohlcv_arrays['prices']
-    highs  = ohlcv_arrays['highs']
-    lows   = ohlcv_arrays['lows']
-    dates  = ohlcv_arrays['dates']
     times  = ohlcv_arrays['times']
     months = ohlcv_arrays['months']
 
-    grid_strategy = get_grid_strategy()
-    strat_keys   = list(grid_strategy.keys())
-    strat_combos = list(itertools.product(*grid_strategy.values()))
-    filt_keys    = list(GRID_FILTER.keys())
-    filt_combos  = list(itertools.product(*GRID_FILTER.values()))
+    strat_keys   = list(strat_grid.keys())
+    strat_combos = list(itertools.product(*strat_grid.values()))
 
-    all_s1 = []
+    if use_filters:
+        filt_combos = list(itertools.product(*GRID_FILTER.values()))
+    else:
+        filt_combos = [(NO_FILTER_DEFAULTS['vix_threshold'],
+                        NO_FILTER_DEFAULTS['tlt_crash'],
+                        NO_FILTER_DEFAULTS['spy_ignore'])]
 
+    results = []
     for s_vals in strat_combos:
-        s_cfg  = dict(zip(strat_keys, s_vals))
-        h, m_  = map(int, s_cfg['entry_time'].split(':'))
-        t_min  = h * 60 + m_
+        s_cfg = dict(zip(strat_keys, s_vals))
+        if TPSL_MODE in ('atr', 'atr_adaptive') and s_cfg.get('sl_mult', 0) > s_cfg.get('tp_mult', 999):
+            continue
+        if TPSL_MODE in ('static', 'regime_scaled') and s_cfg.get('sl_pct', 0) > s_cfg.get('tp_pct', 999):
+            continue
+        h, m_ = map(int, s_cfg['entry_time'].split(':'))
+        t_min = h * 60 + m_
 
         mask    = (probs >= s_cfg['prob_thresh']) & (times == t_min)
         indices = np.where(mask)[0]
-        if len(indices) == 0: continue
+        if len(indices) == 0:
+            continue
 
         raw_pnl, raw_dates = _run_sim(indices, ohlcv_arrays, s_cfg)
-        if len(raw_pnl) == 0: continue
+        if len(raw_pnl) == 0:
+            continue
 
         n = len(raw_pnl)
         trade_vix, trade_tlt, trade_spy = _attach_regime(raw_dates, regime_dict, n, t_min)
 
-        for f_vals in filt_combos:
-            vix_t, tlt_c, spy_i = f_vals
+        for vix_t, tlt_c, spy_i in filt_combos:
             pnl = _apply_filter(raw_pnl, trade_vix, trade_tlt, trade_spy, vix_t, tlt_c, spy_i)
-            if len(pnl) < MIN_OPT_TRADES: continue
+            if len(pnl) < min_trades:
+                continue
             freq = len(pnl) / months
-            if freq < MIN_TRADES_PER_MONTH: continue
+            if freq < MIN_TRADES_PER_MONTH:
+                continue
             avg = float(np.mean(pnl))
-            all_s1.append({
+            results.append({
                 'Ticker': ticker, 'Seed': seed_id,
                 **s_cfg,
                 'vix_threshold': vix_t, 'tlt_crash': tlt_c, 'spy_ignore': spy_i,
                 'Avg_PnL': avg, 'Total_PnL': float(np.sum(pnl)),
                 'Win_Rate': float(np.mean(pnl > 0)),
-                'Freq': freq, 'Count': len(pnl), 'Stage': 1,
+                'Freq': freq, 'Count': len(pnl),
             })
+    return results
 
-    best = _select_robust_params(all_s1)
-    if best is None:
+
+def _eval_combo(combo, ohlcv_arrays, seed_prob, regime_dict):
+    idx = ohlcv_arrays['index']
+    common = idx.intersection(seed_prob.index)
+    if len(common) == 0:
+        return {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0}
+
+    probs = np.zeros(len(idx), dtype=np.float64)
+    common_locs = idx.get_indexer(common)
+    probs[common_locs] = seed_prob.loc[common].values
+
+    h, m_ = map(int, combo['entry_time'].split(':'))
+    t_min = h * 60 + m_
+    mask = (probs >= combo['prob_thresh']) & (ohlcv_arrays['times'] == t_min)
+    indices = np.where(mask)[0]
+    if len(indices) == 0:
+        return {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0}
+
+    raw_pnl, raw_dates = _run_sim(indices, ohlcv_arrays, combo)
+    if len(raw_pnl) == 0:
+        return {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0}
+
+    n = len(raw_pnl)
+    trade_vix, trade_tlt, trade_spy = _attach_regime(raw_dates, regime_dict, n, t_min)
+    pnl = _apply_filter(raw_pnl, trade_vix, trade_tlt, trade_spy,
+                         combo['vix_threshold'], combo['tlt_crash'], combo['spy_ignore'])
+    if len(pnl) == 0:
+        return {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0}
+    return {
+        'Avg_PnL': float(np.mean(pnl)),
+        'Win_Rate': float(np.mean(pnl > 0)),
+        'Count': len(pnl),
+        'Total_PnL': float(np.sum(pnl)),
+    }
+
+
+# ==============================================================================
+# ROLLING WALK-FORWARD OPTIMIZATION (per seed)
+# ==============================================================================
+def optimize_rolling_wf(ticker, df_ohlcv, vol_baselines, atr_pct_series,
+                        vix_lk, regime_dict, seed_prob, seed_id):
+
+    def _precompute(start, end):
+        return precompute_ohlcv_arrays(df_ohlcv, start, end,
+                                        vol_baselines, atr_pct_series, vix_lk)
+
+    # ── Round 1: Broad grid, no filters ──────────────────────────────────────
+    r1 = WF_ROUNDS[0]
+    ohlcv_r1_opt = _precompute(*r1['opt'])
+    ohlcv_r1_val = _precompute(*r1['val'])
+    if ohlcv_r1_opt is None:
         return None
 
-    # Stage 2-3 REMOVED — fine-tuning on same data is the #1 overfitting source
+    r1_grid = get_grid_strategy(round_num=1)
+    r1_opt = _grid_search(ohlcv_r1_opt, seed_prob, regime_dict, ticker, seed_id,
+                           r1_grid, use_filters=False, min_trades=r1['min_trades'])
 
-    # Stage 4: Volume percentile filter
-    best_entry_h4, best_entry_m4 = map(int, best['entry_time'].split(':'))
-    best_t_min4 = best_entry_h4 * 60 + best_entry_m4
-    vol_baselines = ohlcv_arrays.get('vol_baselines', {})
+    r1_survivors = []
+    for combo in r1_opt:
+        if combo['Avg_PnL'] <= 0:
+            continue
+        val = _eval_combo(combo, ohlcv_r1_val, seed_prob, regime_dict)
+        if val['Avg_PnL'] > 0.005 and val['Count'] >= r1['min_trades']:
+            r1_survivors.append(combo)
+
+    del ohlcv_r1_opt, ohlcv_r1_val
+    print(f"        R1: {len(r1_opt)} tested → {len(r1_survivors)} survived")
+
+    if not r1_survivors:
+        return None
+
+    # ── Round 2: Expand around survivors + add filters ────────────────────────
+    r2 = WF_ROUNDS[1]
+    ohlcv_r2_opt = _precompute(*r2['opt'])
+    ohlcv_r2_val = _precompute(*r2['val'])
+
+    r2_ref = get_grid_strategy(round_num=2)
+    r2_grid = {}
+    for key, ref_vals in r2_ref.items():
+        r2_grid[key] = _expand_around_survivors(r1_survivors, key, ref_vals)
+
+    r2_opt = _grid_search(ohlcv_r2_opt, seed_prob, regime_dict, ticker, seed_id,
+                           r2_grid, use_filters=True, min_trades=r2['min_trades'])
+
+    r2_survivors = []
+    for combo in r2_opt:
+        if combo['Avg_PnL'] <= 0:
+            continue
+        val = _eval_combo(combo, ohlcv_r2_val, seed_prob, regime_dict)
+        if val['Avg_PnL'] > 0:
+            r2_survivors.append(combo)
+
+    print(f"        R2: {len(r2_opt)} tested → {len(r2_survivors)} survived")
+
+    if not r2_survivors:
+        best = max(r1_survivors, key=lambda r: r['Avg_PnL'])
+        best.update(NO_FILTER_DEFAULTS)
+        best['vol_filter_pct'] = 0
+        _fill_defaults(best)
+        val_result = validate_params(ticker, ohlcv_r2_val, regime_dict, seed_prob, best)
+        del ohlcv_r2_val
+        if val_result is None:
+            val_result = {'Avg_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
+        return best, val_result
+
+    # ── Select best from R2 survivors + volume filter ──────────────────────────
+    best = _select_robust_params(r2_survivors)
+    if best is None:
+        best = max(r2_survivors, key=lambda r: r['Avg_PnL'])
+
+    best_score = best['Avg_PnL']
+    h_b, m_b = map(int, best['entry_time'].split(':'))
+    t_min_b = h_b * 60 + m_b
+
+    idx = ohlcv_r2_opt['index']
+    common = idx.intersection(seed_prob.index)
+    probs = np.zeros(len(idx), dtype=np.float64)
+    if len(common) > 0:
+        common_locs = idx.get_indexer(common)
+        probs[common_locs] = seed_prob.loc[common].values
 
     for vpct in VOL_PCT_GRID:
-        vol_ok = _compute_vol_pct_ok(ohlcv_arrays['volumes'], times, dates,
-                                      vol_baselines, best_t_min4, vpct)
-        mask4 = (probs >= best['prob_thresh']) & (times == best_t_min4) & vol_ok
-        indices4 = np.where(mask4)[0]
-        if len(indices4) == 0: continue
-        raw_pnl4, raw_dates4 = _run_sim(indices4, ohlcv_arrays, best)
-        if len(raw_pnl4) == 0: continue
-        n4 = len(raw_pnl4)
-        tv4, tt4, ts4 = _attach_regime(raw_dates4, regime_dict, n4, best_t_min4)
-        pnl4 = _apply_filter(raw_pnl4, tv4, tt4, ts4,
-                              best['vix_threshold'], best['tlt_crash'], best['spy_ignore'])
-        if len(pnl4) == 0: continue
-        freq4 = len(pnl4) / months
-        if freq4 < MIN_TRADES_PER_MONTH: continue
-        avg4 = float(np.mean(pnl4))
-        if avg4 > best_score:
-            best_score = avg4
+        if vpct == 0:
+            continue
+        vol_ok = _compute_vol_pct_ok(ohlcv_r2_opt['volumes'], ohlcv_r2_opt['times'],
+                                      ohlcv_r2_opt['dates'],
+                                      ohlcv_r2_opt.get('vol_baselines', {}), t_min_b, vpct)
+        mask = (probs >= best['prob_thresh']) & (ohlcv_r2_opt['times'] == t_min_b) & vol_ok
+        indices = np.where(mask)[0]
+        if len(indices) == 0:
+            continue
+        raw_pnl, raw_dates = _run_sim(indices, ohlcv_r2_opt, best)
+        if len(raw_pnl) == 0:
+            continue
+        n = len(raw_pnl)
+        tv, tt, ts = _attach_regime(raw_dates, regime_dict, n, t_min_b)
+        pnl = _apply_filter(raw_pnl, tv, tt, ts,
+                             best['vix_threshold'], best['tlt_crash'], best['spy_ignore'])
+        if len(pnl) < r2['min_trades']:
+            continue
+        avg = float(np.mean(pnl))
+        if avg > best_score:
+            best_score = avg
             best = {**best, 'vol_filter_pct': vpct,
-                    'Avg_PnL': avg4, 'Total_PnL': float(np.sum(pnl4)),
-                    'Win_Rate': float(np.mean(pnl4 > 0)),
-                    'Freq': freq4, 'Count': len(pnl4), 'Stage': 4}
+                    'Avg_PnL': avg, 'Total_PnL': float(np.sum(pnl)),
+                    'Win_Rate': float(np.mean(pnl > 0)),
+                    'Freq': len(pnl) / ohlcv_r2_opt['months'], 'Count': len(pnl)}
 
-    if 'vol_filter_pct' not in best:
-        best['vol_filter_pct'] = 0
+    del ohlcv_r2_opt
 
+    best.setdefault('vol_filter_pct', 0)
+    _fill_defaults(best)
+
+    val_result = validate_params(ticker, ohlcv_r2_val, regime_dict, seed_prob, best)
+    del ohlcv_r2_val
+    if val_result is None:
+        val_result = {'Avg_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
+
+    return best, val_result
+
+
+def _fill_defaults(best):
     if TPSL_MODE in ('atr', 'atr_adaptive'):
         best.setdefault('tp_pct', 0.0)
         best.setdefault('sl_pct', 0.0)
@@ -1027,8 +1279,6 @@ def optimize_single_seed(ticker, ohlcv_arrays, regime_dict, seed_prob, seed_id):
         best.setdefault('sl_mult', 0.0)
         best.setdefault('trail_start_mult', 0.0)
         best.setdefault('trail_end_mult', 0.0)
-
-    return best
 
 
 # ==============================================================================
@@ -1091,16 +1341,17 @@ MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
                'regime_scaled': '_REGIME', 'trailing_decay': '_TRAIL'}
 
 print(f"\n{'='*110}")
-print(f"  WALK-FORWARD OPTIMIZATION — ALL Dynamic TP/SL Modes")
-print(f"  MODES: {', '.join(m.upper() for m in ALL_MODES)}")
-print(f"  OPT: {OPT_START} -> {OPT_END}")
-print(f"  VAL-A: {VAL_A_START} -> {VAL_A_END}")
+print(f"  ROLLING WALK-FORWARD OPTIMIZATION — {_family['label']}")
+print(f"  FAMILY: {ACTIVE_FAMILY}  |  MODES: {', '.join(m.upper() for m in ALL_MODES)}")
+for rnd in WF_ROUNDS:
+    print(f"  {rnd['name']}: OPT {rnd['opt'][0]}->{rnd['opt'][1]}  VAL {rnd['val'][0]}->{rnd['val'][1]}  min_trades={rnd['min_trades']}")
+print(f"  TEST: {TEST_START} -> {TEST_END} (pure holdout)")
 for _m in ALL_MODES:
     TPSL_MODE = _m
-    _gs = get_grid_strategy()
+    _gs = get_grid_strategy(round_num=1)
     _ns = len(list(itertools.product(*_gs.values())))
     _nf = len(list(itertools.product(*GRID_FILTER.values())))
-    print(f"    {_m.upper():>15}: {_ns:,} strategy x {_nf:,} filter = {_ns*_nf:,} combos")
+    print(f"    {_m.upper():>15}: R1={_ns} broad → R2=survivors×{_nf} filters → TEST")
 TPSL_MODE = ALL_MODES[0]
 print(f"{'='*110}\n")
 
@@ -1112,16 +1363,20 @@ if TICKER_SUBSET:
 
 completed_triples = set()
 if SKIP_COMPLETED:
-    skip_q = f"SELECT DISTINCT experiment, ticker, tpsl_mode FROM `{BQ_TABLE_ID}` WHERE tpsl_mode IS NOT NULL"
+    exp_filter = ','.join(repr(e) for e in sorted(CLEAN_EXPERIMENTS))
+    skip_q = (f"SELECT DISTINCT experiment, ticker, tpsl_mode FROM `{BQ_TABLE_ID}` "
+              f"WHERE model_version = '{MODEL_VERSION_TAG}' "
+              f"AND experiment IN ({exp_filter})")
     for row in _bq_client.query(skip_q):
         completed_triples.add((row.experiment, row.ticker, row.tpsl_mode or 'static'))
 
-regime_dict, vix_lk = preload_regime_data(OPT_START, VAL_A_END)
+regime_dict, vix_lk = preload_regime_data(WF_ROUNDS[0]['opt'][0], TEST_END)
 
 RUN_ID = str(uuid.uuid4())
 print(f"  BQ run_id: {RUN_ID[:8]}...")
 
 all_results_by_mode = {m: [] for m in ALL_MODES}
+ensemble_results_by_mode = {m: [] for m in ALL_MODES}
 n_total = len(deploy_configs)
 
 for cfg_idx, cfg in enumerate(deploy_configs):
@@ -1145,12 +1400,21 @@ for cfg_idx, cfg in enumerate(deploy_configs):
 
     vol_baselines = precompute_vol_baselines(df_ohlcv)
 
-    seed_scores = load_seed_scores(ticker, base_experiment)
-    if not seed_scores:
-        print(f"  No seed scores found for {base_experiment}")
-        del df_ohlcv, atr_standard, atr_adaptive_s, vol_baselines; gc.collect()
-        continue
-    print(f"  {len(seed_scores)} seeds loaded")
+    if _family.get('stitch'):
+        seed_scores = load_stitched_seed_scores(ticker, sorted(_family['experiments']))
+        if not seed_scores:
+            print(f"  No stitched seed scores found across folds")
+            del df_ohlcv, atr_standard, atr_adaptive_s, vol_baselines; gc.collect()
+            continue
+        print(f"  {len(seed_scores)} stitched seed positions loaded")
+        base_experiment = sorted(_family['experiments'])[0]
+    else:
+        seed_scores = load_seed_scores(ticker, base_experiment)
+        if not seed_scores:
+            print(f"  No seed scores found for {base_experiment}")
+            del df_ohlcv, atr_standard, atr_adaptive_s, vol_baselines; gc.collect()
+            continue
+        print(f"  {len(seed_scores)} seeds loaded")
 
     for mode in ALL_MODES:
         TPSL_MODE = mode
@@ -1172,22 +1436,24 @@ for cfg_idx, cfg in enumerate(deploy_configs):
         else:
             atr_pct_series = None
 
-        ohlcv_opt   = precompute_ohlcv_arrays(df_ohlcv, OPT_START, OPT_END,
-                                               vol_baselines, atr_pct_series, vix_lk)
-        ohlcv_val_a = precompute_ohlcv_arrays(df_ohlcv, VAL_A_START, VAL_A_END,
-                                               vol_baselines, atr_pct_series, vix_lk)
+        ohlcv_test = precompute_ohlcv_arrays(df_ohlcv, TEST_START, TEST_END,
+                                              vol_baselines, atr_pct_series, vix_lk)
 
-        if ohlcv_opt is None:
-            print(f"    No data in optimization window")
-            continue
+        seed_opt_results = {}
 
         for seed_id, seed_prob in sorted(seed_scores.items()):
             print(f"\n    Seed {seed_id}:")
 
-            opt_result = optimize_single_seed(ticker, ohlcv_opt, regime_dict, seed_prob, seed_id)
-            if opt_result is None:
+            wf_result = optimize_rolling_wf(
+                ticker, df_ohlcv, vol_baselines, atr_pct_series,
+                vix_lk, regime_dict, seed_prob, seed_id)
+
+            if wf_result is None:
                 print(f"      No valid optimization result")
                 continue
+
+            opt_result, val_a_result = wf_result
+            seed_opt_results[seed_id] = opt_result
 
             if mode in ('atr', 'atr_adaptive'):
                 tp_sl_str = f"tp_m={opt_result.get('tp_mult',0):.1f}  sl_m={opt_result.get('sl_mult',0):.1f}"
@@ -1198,17 +1464,34 @@ for cfg_idx, cfg in enumerate(deploy_configs):
             else:
                 tp_sl_str = f"TP={opt_result['tp_pct']:.0%}  SL={opt_result['sl_pct']:.0%}"
 
-            print(f"      OPT: AvgPnL={opt_result['Avg_PnL']:.2%}  WR={opt_result['Win_Rate']:.1%}  "
+            print(f"      OPT:  AvgPnL={opt_result['Avg_PnL']:.2%}  WR={opt_result['Win_Rate']:.1%}  "
                   f"N={opt_result['Count']}  Entry={opt_result['entry_time']}  "
                   f"Prob>{opt_result['prob_thresh']:.3f}  {tp_sl_str}")
+            tag_va = "PASS" if val_a_result['Avg_PnL'] > 0 else "FAIL"
+            print(f"      VAL:  AvgPnL={val_a_result['Avg_PnL']:.2%}  WR={val_a_result['Win_Rate']:.1%}  "
+                  f"N={val_a_result['Count']}  [{tag_va}]")
 
-            val_a = validate_params(ticker, ohlcv_val_a, regime_dict, seed_prob, opt_result)
-            if val_a is None:
-                val_a = {'Avg_PnL': 0, 'Total_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
-            survived_a = val_a['Avg_PnL'] > 0
-            tag_a = "PASS" if survived_a else "FAIL"
-            print(f"      VAL-A: AvgPnL={val_a['Avg_PnL']:.2%}  WR={val_a['Win_Rate']:.1%}  "
-                  f"N={val_a['Count']}  [{tag_a}]")
+            test = validate_params(ticker, ohlcv_test, regime_dict, seed_prob, opt_result)
+            if test is None:
+                test = {'Avg_PnL': 0, 'Total_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
+            tag_t = "PASS" if test['Avg_PnL'] > 0 else "FAIL"
+            print(f"      TEST: AvgPnL={test['Avg_PnL']:.2%}  WR={test['Win_Rate']:.1%}  "
+                  f"N={test['Count']}  [{tag_t}]  (pure holdout)")
+
+            baseline_params = {**opt_result, 'prob_thresh': 0.30, **NO_FILTER_DEFAULTS, 'vol_filter_pct': 0}
+            baseline = validate_params(ticker, ohlcv_test, regime_dict, seed_prob, baseline_params)
+            if baseline is None:
+                baseline = {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0}
+            missed_n = max(0, baseline['Count'] - test['Count'])
+            if missed_n > 0 and baseline['Count'] > test['Count']:
+                missed_pnl = ((baseline['Avg_PnL'] * baseline['Count']
+                               - test['Avg_PnL'] * test['Count']) / missed_n)
+                print(f"      MISSED: {missed_n} trades not taken "
+                      f"(avg {missed_pnl:+.2%}) — baseline prob≥0.30, no filters")
+            elif baseline['Count'] == test['Count']:
+                print(f"      MISSED: 0 — all baseline trades taken")
+            else:
+                print(f"      MISSED: baseline={baseline['Count']} trades at prob≥0.30")
 
             result_row = {
                 'Ticker': ticker, 'Seed': seed_id,
@@ -1224,22 +1507,142 @@ for cfg_idx, cfg in enumerate(deploy_configs):
                 'vol_filter_pct': opt_result.get('vol_filter_pct', 0),
                 'Avg_PnL': opt_result['Avg_PnL'],
                 'Win_Rate': opt_result['Win_Rate'],
-                'Freq': opt_result['Freq'],
+                'Freq': opt_result.get('Freq', 0),
                 'Count': opt_result['Count'],
-                'val_a_avg_pnl': val_a['Avg_PnL'],
-                'val_a_win_rate': val_a['Win_Rate'],
-                'val_a_freq': val_a['Freq'],
-                'val_a_count': val_a['Count'],
-                'survived_a': survived_a,
-                'val_b_avg_pnl': 0, 'val_b_win_rate': 0,
-                'val_b_freq': 0, 'val_b_count': 0,
-                'survived_b': False,
+                'val_a_avg_pnl': val_a_result['Avg_PnL'],
+                'val_a_win_rate': val_a_result['Win_Rate'],
+                'val_a_freq': val_a_result.get('Freq', 0),
+                'val_a_count': val_a_result['Count'],
+                'survived_a': val_a_result['Avg_PnL'] > 0,
+                'val_b_avg_pnl': test['Avg_PnL'],
+                'val_b_win_rate': test['Win_Rate'],
+                'val_b_freq': test['Freq'],
+                'val_b_count': test['Count'],
+                'survived_b': test['Avg_PnL'] > 0,
+                'baseline_count': baseline['Count'],
+                'baseline_avg_pnl': baseline['Avg_PnL'],
+                'missed_count': missed_n,
             }
             all_results_by_mode[mode].append(result_row)
             save_row_to_bq(result_row, RUN_ID, experiment,
-                            OPT_START, OPT_END, VAL_A_START, VAL_A_END)
+                            WF_ROUNDS[0]['opt'][0], WF_ROUNDS[-1]['val'][1],
+                            WF_ROUNDS[-1]['val'][0], WF_ROUNDS[-1]['val'][1],
+                            TEST_START, TEST_END)
 
-        del ohlcv_opt, ohlcv_val_a; gc.collect()
+        # ── ENSEMBLE TEST ────────────────────────────────────────────────
+        if seed_opt_results:
+            all_prob_series = [seed_scores[s] for s in sorted(seed_scores.keys())]
+            ensemble_prob = pd.concat(all_prob_series, axis=1).mean(axis=1)
+
+            best_seed_id = max(seed_opt_results, key=lambda s: seed_opt_results[s]['Avg_PnL'])
+            ens_params = dict(seed_opt_results[best_seed_id])
+
+            r2 = WF_ROUNDS[-1]
+            ohlcv_r2_ens = precompute_ohlcv_arrays(df_ohlcv, r2['opt'][0], r2['opt'][1],
+                                                    vol_baselines, atr_pct_series, vix_lk)
+            ens_prob_grid = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+            best_pt, best_pt_pnl = ens_params['prob_thresh'], -999.0
+            for pt in ens_prob_grid:
+                trial = {**ens_params, 'prob_thresh': pt}
+                r2_result = validate_params(ticker, ohlcv_r2_ens, regime_dict, ensemble_prob, trial)
+                if r2_result is None or r2_result['Count'] < r2['min_trades']:
+                    continue
+                if r2_result['Avg_PnL'] > best_pt_pnl:
+                    best_pt_pnl = r2_result['Avg_PnL']
+                    best_pt = pt
+            del ohlcv_r2_ens
+            if best_pt != ens_params['prob_thresh']:
+                print(f"\n      Ensemble prob_thresh re-optimized: "
+                      f"{ens_params['prob_thresh']:.2f} → {best_pt:.2f}")
+            ens_params['prob_thresh'] = best_pt
+
+            ens_test = validate_params(ticker, ohlcv_test, regime_dict, ensemble_prob, ens_params)
+            if ens_test is None:
+                ens_test = {'Avg_PnL': 0, 'Total_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
+
+            ens_tag = "PASS" if ens_test['Avg_PnL'] > 0 else "FAIL"
+
+            if mode in ('atr', 'atr_adaptive'):
+                ens_tp_sl = f"tp_m={ens_params.get('tp_mult',0):.1f}  sl_m={ens_params.get('sl_mult',0):.1f}"
+            elif mode == 'trailing_decay':
+                ens_tp_sl = (f"ts={ens_params.get('trail_start_mult',0):.1f}  "
+                             f"te={ens_params.get('trail_end_mult',0):.1f}  "
+                             f"sl_m={ens_params.get('sl_mult',0):.1f}")
+            else:
+                ens_tp_sl = f"TP={ens_params['tp_pct']:.0%}  SL={ens_params['sl_pct']:.0%}"
+
+            print(f"\n    ENSEMBLE ({len(seed_scores)} seeds averaged, "
+                  f"params from S{best_seed_id}):")
+            print(f"      Params: Entry={ens_params['entry_time']}  "
+                  f"Prob>{ens_params['prob_thresh']:.3f}  {ens_tp_sl}")
+            print(f"      TEST: AvgPnL={ens_test['Avg_PnL']:.2%}  "
+                  f"WR={ens_test['Win_Rate']:.1%}  N={ens_test['Count']}  [{ens_tag}]")
+
+            best_indiv_test = max(
+                [r for r in all_results_by_mode[mode] if r['Ticker'] == ticker],
+                key=lambda r: r['val_b_avg_pnl'], default=None)
+            if best_indiv_test:
+                print(f"      vs Best Seed: AvgPnL={best_indiv_test['val_b_avg_pnl']:.2%}  "
+                      f"N={best_indiv_test['val_b_count']}")
+
+            ens_row = {
+                'Ticker': ticker,
+                'param_seed': best_seed_id,
+                'n_seeds_avg': len(seed_scores),
+                'n_seeds_survived': len(seed_opt_results),
+                'entry_time': ens_params['entry_time'],
+                'prob_thresh': ens_params['prob_thresh'],
+                'tp_pct': ens_params.get('tp_pct', 0),
+                'sl_pct': ens_params.get('sl_pct', 0),
+                'tp_mult': ens_params.get('tp_mult', 0),
+                'sl_mult': ens_params.get('sl_mult', 0),
+                'trail_start_mult': ens_params.get('trail_start_mult', 0),
+                'trail_end_mult': ens_params.get('trail_end_mult', 0),
+                'opt_avg_pnl': ens_params['Avg_PnL'],
+                'test_avg_pnl': ens_test['Avg_PnL'],
+                'test_win_rate': ens_test['Win_Rate'],
+                'test_count': ens_test['Count'],
+                'test_pass': ens_test['Avg_PnL'] > 0,
+            }
+            ensemble_results_by_mode[mode].append(ens_row)
+
+            ens_bq_row = {
+                'Ticker': ticker, 'Seed': -1,
+                'entry_time': ens_params['entry_time'],
+                'prob_thresh': ens_params['prob_thresh'],
+                'tp_pct': ens_params.get('tp_pct', 0),
+                'sl_pct': ens_params.get('sl_pct', 0),
+                'tp_mult': ens_params.get('tp_mult', 0),
+                'sl_mult': ens_params.get('sl_mult', 0),
+                'trail_start_mult': ens_params.get('trail_start_mult', 0),
+                'trail_end_mult': ens_params.get('trail_end_mult', 0),
+                'vix_threshold': ens_params.get('vix_threshold', 999.0),
+                'tlt_crash': ens_params.get('tlt_crash', -999.0),
+                'spy_ignore': ens_params.get('spy_ignore', 999.0),
+                'vol_filter_pct': ens_params.get('vol_filter_pct', 0),
+                'Avg_PnL': ens_params['Avg_PnL'],
+                'Win_Rate': ens_params['Win_Rate'],
+                'Freq': ens_params.get('Freq', 0),
+                'Count': ens_params['Count'],
+                'val_a_avg_pnl': ens_params['Avg_PnL'],
+                'val_a_win_rate': ens_params['Win_Rate'],
+                'val_a_freq': ens_params.get('Freq', 0),
+                'val_a_count': ens_params['Count'],
+                'survived_a': True,
+                'val_b_avg_pnl': ens_test['Avg_PnL'],
+                'val_b_win_rate': ens_test['Win_Rate'],
+                'val_b_freq': ens_test.get('Freq', 0),
+                'val_b_count': ens_test['Count'],
+                'survived_b': ens_test['Avg_PnL'] > 0,
+                'is_ensemble': True,
+                'n_seeds_avg': len(seed_scores),
+            }
+            save_row_to_bq(ens_bq_row, RUN_ID, experiment,
+                            WF_ROUNDS[0]['opt'][0], WF_ROUNDS[-1]['val'][1],
+                            WF_ROUNDS[-1]['val'][0], WF_ROUNDS[-1]['val'][1],
+                            TEST_START, TEST_END)
+
+        del ohlcv_test; gc.collect()
 
     del df_ohlcv, atr_standard, atr_adaptive_s, seed_scores, vol_baselines; gc.collect()
 
@@ -1263,73 +1666,175 @@ else:
         best_per_ticker = df.loc[df.groupby('Ticker')['Avg_PnL'].idxmax()]
 
         print(f"\n\n{'='*W}")
-        print(f"  WF OPTIMIZATION — {mode.upper()} MODE — VAL-A Results")
-        print(f"  OPT: {OPT_START} -> {OPT_END}  |  VAL: {VAL_A_START} -> {VAL_A_END}")
+        print(f"  ROLLING WF — {mode.upper()} MODE — Results")
+        print(f"  {WF_ROUNDS[0]['name']}-{WF_ROUNDS[-1]['name']}: {WF_ROUNDS[0]['opt'][0]} -> {WF_ROUNDS[-1]['val'][1]}  |  TEST: {TEST_START} -> {TEST_END}")
         print(f"{'='*W}")
 
         if mode in ('atr', 'atr_adaptive'):
             print(f"  {'Ticker':<7} {'Seed':>5} {'Prob':>6} {'Entry':>6} {'tp_m':>5} {'sl_m':>5} "
                   f"{'VIX<':>5} {'TLT>':>6} {'SPY<':>5} "
                   f"{'|':>2} {'OPT PnL':>8} {'OPT WR':>7} {'OPT N':>6} "
-                  f"{'|':>2} {'VAL PnL':>8} {'VAL WR':>7} {'VAL N':>6} {'Result':>8}")
+                  f"{'|':>2} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} {'Result':>8}")
         elif mode == 'trailing_decay':
             print(f"  {'Ticker':<7} {'Seed':>5} {'Prob':>6} {'Entry':>6} {'t_s':>5} {'t_e':>5} {'sl_m':>5} "
                   f"{'VIX<':>5} {'TLT>':>6} {'SPY<':>5} "
                   f"{'|':>2} {'OPT PnL':>8} {'OPT WR':>7} {'OPT N':>6} "
-                  f"{'|':>2} {'VAL PnL':>8} {'VAL WR':>7} {'VAL N':>6} {'Result':>8}")
+                  f"{'|':>2} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} {'Result':>8}")
         else:
             print(f"  {'Ticker':<7} {'Seed':>5} {'Prob':>6} {'Entry':>6} {'TP':>4} {'SL':>4} "
                   f"{'VIX<':>5} {'TLT>':>6} {'SPY<':>5} "
                   f"{'|':>2} {'OPT PnL':>8} {'OPT WR':>7} {'OPT N':>6} "
-                  f"{'|':>2} {'VAL PnL':>8} {'VAL WR':>7} {'VAL N':>6} {'Result':>8}")
+                  f"{'|':>2} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} {'Result':>8}")
         print(f"  {'─'*W}")
 
-        for _, r in best_per_ticker.sort_values('val_a_avg_pnl', ascending=False).iterrows():
-            tag = "PASS" if r['survived_a'] else "FAIL"
+        for _, r in best_per_ticker.sort_values('val_b_avg_pnl', ascending=False).iterrows():
+            tag = "PASS" if r['survived_b'] else "FAIL"
             if mode in ('atr', 'atr_adaptive'):
                 print(f"  {r['Ticker']:<7} {r['Seed']:>5} {r['prob_thresh']:>6.3f} {r['entry_time']:>6} "
                       f"{r['tp_mult']:>5.1f} {r['sl_mult']:>5.1f} "
                       f"{r['vix_threshold']:>5.0f} {r['tlt_crash']:>6.2f} {r['spy_ignore']:>5.2f} "
                       f"{'|':>2} {r['Avg_PnL']:>7.2%} {r['Win_Rate']:>6.1%} {int(r['Count']):>6} "
-                      f"{'|':>2} {r['val_a_avg_pnl']:>7.2%} {r['val_a_win_rate']:>6.1%} {int(r['val_a_count']):>6} "
+                      f"{'|':>2} {r['val_b_avg_pnl']:>7.2%} {r['val_b_win_rate']:>6.1%} {int(r['val_b_count']):>6} "
                       f"{'  ' + tag:>8}")
             elif mode == 'trailing_decay':
                 print(f"  {r['Ticker']:<7} {r['Seed']:>5} {r['prob_thresh']:>6.3f} {r['entry_time']:>6} "
                       f"{r['trail_start_mult']:>5.1f} {r['trail_end_mult']:>5.1f} {r['sl_mult']:>5.1f} "
                       f"{r['vix_threshold']:>5.0f} {r['tlt_crash']:>6.2f} {r['spy_ignore']:>5.2f} "
                       f"{'|':>2} {r['Avg_PnL']:>7.2%} {r['Win_Rate']:>6.1%} {int(r['Count']):>6} "
-                      f"{'|':>2} {r['val_a_avg_pnl']:>7.2%} {r['val_a_win_rate']:>6.1%} {int(r['val_a_count']):>6} "
+                      f"{'|':>2} {r['val_b_avg_pnl']:>7.2%} {r['val_b_win_rate']:>6.1%} {int(r['val_b_count']):>6} "
                       f"{'  ' + tag:>8}")
             else:
                 print(f"  {r['Ticker']:<7} {r['Seed']:>5} {r['prob_thresh']:>6.3f} {r['entry_time']:>6} "
                       f"{r['tp_pct']:>3.0%} {r['sl_pct']:>3.0%} "
                       f"{r['vix_threshold']:>5.0f} {r['tlt_crash']:>6.2f} {r['spy_ignore']:>5.2f} "
                       f"{'|':>2} {r['Avg_PnL']:>7.2%} {r['Win_Rate']:>6.1%} {int(r['Count']):>6} "
-                      f"{'|':>2} {r['val_a_avg_pnl']:>7.2%} {r['val_a_win_rate']:>6.1%} {int(r['val_a_count']):>6} "
+                      f"{'|':>2} {r['val_b_avg_pnl']:>7.2%} {r['val_b_win_rate']:>6.1%} {int(r['val_b_count']):>6} "
                       f"{'  ' + tag:>8}")
 
-        passed_a = best_per_ticker[best_per_ticker['survived_a']]
+        passed_test = best_per_ticker[best_per_ticker['survived_b']]
         print(f"  {'─'*W}")
-        print(f"  {len(passed_a)}/{len(best_per_ticker)} tickers PASSED VAL-A")
-        if len(passed_a) > 0:
-            print(f"  PASS avg OPT PnL: {passed_a['Avg_PnL'].mean():.2%}  ->  "
-                  f"VAL-A PnL: {passed_a['val_a_avg_pnl'].mean():.2%}")
+        print(f"  {len(passed_test)}/{len(best_per_ticker)} tickers PASSED TEST")
+        if len(passed_test) > 0:
+            print(f"  PASS avg: OPT={passed_test['Avg_PnL'].mean():.2%} -> "
+                  f"TEST={passed_test['val_b_avg_pnl'].mean():.2%}  "
+                  f"(degradation={1 - passed_test['val_b_avg_pnl'].mean() / passed_test['Avg_PnL'].mean():.0%})")
 
         ticker_pass = df.groupby('Ticker').agg(
             seeds=('Seed', 'count'),
-            pass_a=('survived_a', 'sum'),
-        ).sort_values('pass_a', ascending=False)
-        print(f"\n  {'Ticker':<7} {'Seeds':>6} {'PASS-A':>7}")
-        print(f"  {'─'*25}")
+            pass_test=('survived_b', 'sum'),
+            opt_pnl=('Avg_PnL', 'mean'),
+            test_pnl=('val_b_avg_pnl', 'mean'),
+        ).sort_values('test_pnl', ascending=False)
+        print(f"\n  {'Ticker':<7} {'Seeds':>6} {'PASS-TEST':>10} {'OPT PnL':>9} {'Test PnL':>9} {'Degrad':>8}")
+        print(f"  {'─'*55}")
         for ticker, r in ticker_pass.iterrows():
+            degrad = 1 - r['test_pnl'] / r['opt_pnl'] if r['opt_pnl'] != 0 else 0
             print(f"  {ticker:<7} {int(r['seeds']):>6} "
-                  f"{int(r['pass_a']):>4}/{int(r['seeds'])}")
+                  f"{int(r['pass_test']):>6}/{int(r['seeds'])} "
+                  f"{r['opt_pnl']:>+8.2%} "
+                  f"{r['test_pnl']:>+8.2%} "
+                  f"{degrad:>+7.0%}")
+
+    # ── False Negative Analysis (missed opportunities) ─────────────────────
+    print(f"\n\n{'='*W}")
+    print(f"  FALSE NEGATIVE ANALYSIS — Missed Opportunities on TEST ({TEST_START} → {TEST_END})")
+    print(f"  Baseline: prob≥0.30, no filters, same TP/SL as selected params")
+    print(f"{'='*W}")
+    for mode in ALL_MODES:
+        mode_results = all_results_by_mode[mode]
+        if not mode_results:
+            continue
+        df_fn = pd.DataFrame(mode_results)
+        fn_by_ticker = df_fn.groupby('Ticker').agg(
+            seeds=('Seed', 'count'),
+            test_trades=('val_b_count', 'sum'),
+            baseline_trades=('baseline_count', 'sum'),
+            missed_trades=('missed_count', 'sum'),
+            test_pnl=('val_b_avg_pnl', 'mean'),
+            baseline_pnl=('baseline_avg_pnl', 'mean'),
+        ).sort_values('missed_trades', ascending=False)
+        print(f"\n  {mode.upper()}:")
+        print(f"  {'Ticker':<7} {'Seeds':>6} {'Taken':>7} {'Baseline':>9} {'Missed':>7} "
+              f"{'Taken PnL':>10} {'Base PnL':>9}")
+        print(f"  {'─'*60}")
+        for ticker, r in fn_by_ticker.iterrows():
+            print(f"  {ticker:<7} {int(r['seeds']):>6} {int(r['test_trades']):>7} "
+                  f"{int(r['baseline_trades']):>9} {int(r['missed_trades']):>7} "
+                  f"{r['test_pnl']:>+9.2%} {r['baseline_pnl']:>+8.2%}")
+        total_taken = int(fn_by_ticker['test_trades'].sum())
+        total_missed = int(fn_by_ticker['missed_trades'].sum())
+        print(f"  {'─'*60}")
+        print(f"  Total: {total_taken} trades taken, {total_missed} missed "
+              f"({total_missed / max(1, total_taken + total_missed):.0%} of baseline filtered out)")
+
+    # ── Ensemble Summary ─────────────────────────────────────────────
+    ens_total = sum(len(v) for v in ensemble_results_by_mode.values())
+    if ens_total > 0:
+        print(f"\n\n{'='*W}")
+        print(f"  ENSEMBLE RESULTS — Averaged Probabilities Across All Seeds")
+        print(f"  TEST: {TEST_START} -> {TEST_END}")
+        print(f"{'='*W}")
+
+        for mode in ALL_MODES:
+            ens_results = ensemble_results_by_mode[mode]
+            if not ens_results:
+                continue
+
+            print(f"\n  {mode.upper()}:")
+            if mode in ('atr', 'atr_adaptive'):
+                print(f"  {'Ticker':<7} {'PSeed':>6} {'#Avg':>5} {'#Surv':>6} "
+                      f"{'Entry':>6} {'Prob':>6} {'tp_m':>5} {'sl_m':>5} "
+                      f"{'|':>2} {'OPT PnL':>8} "
+                      f"{'|':>2} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} {'Result':>8}")
+            elif mode == 'trailing_decay':
+                print(f"  {'Ticker':<7} {'PSeed':>6} {'#Avg':>5} {'#Surv':>6} "
+                      f"{'Entry':>6} {'Prob':>6} {'t_s':>5} {'t_e':>5} {'sl_m':>5} "
+                      f"{'|':>2} {'OPT PnL':>8} "
+                      f"{'|':>2} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} {'Result':>8}")
+            else:
+                print(f"  {'Ticker':<7} {'PSeed':>6} {'#Avg':>5} {'#Surv':>6} "
+                      f"{'Entry':>6} {'Prob':>6} {'TP':>4} {'SL':>4} "
+                      f"{'|':>2} {'OPT PnL':>8} "
+                      f"{'|':>2} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} {'Result':>8}")
+            print(f"  {'─'*100}")
+
+            for r in sorted(ens_results, key=lambda x: x['test_avg_pnl'], reverse=True):
+                tag = "PASS" if r['test_pass'] else "FAIL"
+                if mode in ('atr', 'atr_adaptive'):
+                    print(f"  {r['Ticker']:<7} {r['param_seed']:>6} {r['n_seeds_avg']:>5} "
+                          f"{r['n_seeds_survived']:>6} "
+                          f"{r['entry_time']:>6} {r['prob_thresh']:>6.3f} "
+                          f"{r['tp_mult']:>5.1f} {r['sl_mult']:>5.1f} "
+                          f"{'|':>2} {r['opt_avg_pnl']:>7.2%} "
+                          f"{'|':>2} {r['test_avg_pnl']:>7.2%} {r['test_win_rate']:>6.1%} "
+                          f"{r['test_count']:>6} {'  ' + tag:>8}")
+                elif mode == 'trailing_decay':
+                    print(f"  {r['Ticker']:<7} {r['param_seed']:>6} {r['n_seeds_avg']:>5} "
+                          f"{r['n_seeds_survived']:>6} "
+                          f"{r['entry_time']:>6} {r['prob_thresh']:>6.3f} "
+                          f"{r['trail_start_mult']:>5.1f} {r['trail_end_mult']:>5.1f} "
+                          f"{r['sl_mult']:>5.1f} "
+                          f"{'|':>2} {r['opt_avg_pnl']:>7.2%} "
+                          f"{'|':>2} {r['test_avg_pnl']:>7.2%} {r['test_win_rate']:>6.1%} "
+                          f"{r['test_count']:>6} {'  ' + tag:>8}")
+                else:
+                    print(f"  {r['Ticker']:<7} {r['param_seed']:>6} {r['n_seeds_avg']:>5} "
+                          f"{r['n_seeds_survived']:>6} "
+                          f"{r['entry_time']:>6} {r['prob_thresh']:>6.3f} "
+                          f"{r['tp_pct']:>3.0%} {r['sl_pct']:>3.0%} "
+                          f"{'|':>2} {r['opt_avg_pnl']:>7.2%} "
+                          f"{'|':>2} {r['test_avg_pnl']:>7.2%} {r['test_win_rate']:>6.1%} "
+                          f"{r['test_count']:>6} {'  ' + tag:>8}")
+
+            passed = sum(1 for r in ens_results if r['test_pass'])
+            print(f"  {'─'*100}")
+            print(f"  {passed}/{len(ens_results)} tickers PASSED ensemble TEST")
 
     print(f"\n\n{'='*W}")
-    print(f"  ALL MODES COMPLETE — {grand_total} total seed results")
+    print(f"  ALL MODES COMPLETE — {grand_total} per-seed results, {ens_total} ensemble results")
     for mode in ALL_MODES:
         n_mode = len(all_results_by_mode[mode])
-        if n_mode > 0:
-            print(f"    {mode.upper():>15}: {n_mode} results")
-    print(f"  Run analyze_dynamic_tpsl.py to compare all modes head-to-head")
+        n_ens = len(ensemble_results_by_mode[mode])
+        if n_mode > 0 or n_ens > 0:
+            print(f"    {mode.upper():>15}: {n_mode} per-seed, {n_ens} ensemble")
     print(f"{'='*W}")

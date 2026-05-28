@@ -1,25 +1,19 @@
 """
-optimize_wf_dynamic.py — Walk-Forward Optimization with Dynamic TP/SL
+optimize_wf_dynamic.py — DEPRECATED (2026-05-24)
 ======================================================================
-Same 4-stage WF optimizer as optimize_walkforward_153.py, but supports
-5 TP/SL modes:
+SUPERSEDED BY: optimize_wf_robust.py
 
-  static         — fixed TP/SL (identical to existing WF optimizer)
-  atr            — TP/SL = ATR_14 × multiplier (per-trade, volatility-adaptive)
-  atr_adaptive   — like ATR but multiplier auto-adjusts for vol acceleration
-                   (ATR_5 / ATR_22 ratio scales the effective ATR)
-  regime_scaled  — TP/SL = base × VIX-regime scaling factor
-  trailing_decay — variance-decay trailing stop: trail starts wide (N×ATR),
-                   contracts toward M×ATR as unrealized profit grows;
-                   no fixed TP — the trail IS the exit
+Do NOT use this optimizer for new work. Known issues:
+  - No slippage applied (0.30% round-trip missing vs robust optimizer)
+  - Massive combinatorial grid (~2.7B combos) without multiple testing correction
+  - val_a metrics were OPT, not actual validation (fixed in robust)
 
-Loads deployed ticker configs from BQ and re-optimizes ALL parameters
-jointly (entry_time, prob_thresh, regime filters, TP/SL) for each mode.
+Use optimize_wf_robust.py instead, which handles all 5 TPSL modes with
+proper slippage, R1→R2 expanding-window validation, and correct BQ metrics.
 
-Results saved to BQ under experiment name + suffix (_ATR, _ATRADP, _REGIME,
-_TRAIL) so analyze_wf_results.py compares modes head-to-head.
-
-Run in Colab with GPU (for numba JIT).
+Original description:
+  Walk-Forward Optimization with Dynamic TP/SL — 5 modes (static, atr,
+  atr_adaptive, regime_scaled, trailing_decay). Results saved to BQ.
 """
 
 import gc
@@ -94,6 +88,8 @@ def _ensure_wf_table(bq_client, table_id):
         SchemaField('sl_mult', 'FLOAT64'),
         SchemaField('trail_start_mult', 'FLOAT64'),
         SchemaField('trail_end_mult', 'FLOAT64'),
+        SchemaField('model_version', 'STRING'),
+        SchemaField('v0_fixed', 'BOOL'),
     ]
     bq_client.create_table(Table(table_id, schema=schema), exists_ok=True)
     table = bq_client.get_table(table_id)
@@ -146,6 +142,8 @@ def save_row_to_bq(row_dict, run_id, experiment,
             'sl_mult': float(row_dict.get('sl_mult', 0)) if TPSL_MODE in ('atr', 'atr_adaptive', 'trailing_decay') else None,
             'trail_start_mult': float(row_dict.get('trail_start_mult', 0)) if TPSL_MODE == 'trailing_decay' else None,
             'trail_end_mult': float(row_dict.get('trail_end_mult', 0)) if TPSL_MODE == 'trailing_decay' else None,
+            'model_version': 'dynamic_wf_v2',
+            'v0_fixed': True,
         }
         errors = _bq_client.insert_rows_json(BQ_TABLE_ID, [row])
         if errors:
@@ -165,6 +163,13 @@ TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
 DEPLOY_PNL_THRESHOLD = 0.018
 MIN_BQ_TRADES   = 3
+
+CLEAN_EXPERIMENTS = {
+    '105_DEFENSE', '106_DEFENSE', '152_XSECTOR',
+    '160_XSECTOR',
+    '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
+    '173_XSECTOR', '174_XSECTOR', '175_XSECTOR',
+}
 
 OPT_START   = '2025-10-02'
 OPT_END     = '2025-12-31'
@@ -643,7 +648,7 @@ def preload_regime_data(eval_start, eval_end):
     def _load_regime_asset(ticker):
         clean = TICKER_FILE_MAP.get(ticker, ticker)
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -718,7 +723,7 @@ def load_ticker_ohlcv(ticker):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:
@@ -729,7 +734,7 @@ def load_ticker_ohlcv(ticker):
 def load_seed_scores(ticker, experiment):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
-    results_dir = f"Algos/Results_all/Universal_Exp{experiment}"
+    results_dir = f"Algos/Results_all_v2/Universal_Exp{experiment}"
     client = storage.Client()
     prefix = f"{results_dir}/{clean}/Seed_"
     blobs = list(client.bucket(BUCKET_NAME).list_blobs(prefix=prefix))
@@ -820,6 +825,7 @@ def load_deploy_configs():
 
     df['ticker'] = df['ticker'].replace(TICKER_RENAME)
     df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
+    df = df[df['experiment'].isin(CLEAN_EXPERIMENTS)]
     df['survived_a'] = df['survived_a'].fillna(False).astype(bool)
     if 'vol_filter_pct' not in df.columns:
         df['vol_filter_pct'] = 0
@@ -897,6 +903,10 @@ def optimize_single_seed(ticker, ohlcv_arrays, regime_dict, seed_prob, seed_id):
 
     for s_vals in strat_combos:
         s_cfg  = dict(zip(strat_keys, s_vals))
+        if TPSL_MODE in ('atr', 'atr_adaptive') and s_cfg.get('sl_mult', 0) > s_cfg.get('tp_mult', 999):
+            continue
+        if TPSL_MODE in ('static', 'regime_scaled') and s_cfg.get('sl_pct', 0) > s_cfg.get('tp_pct', 999):
+            continue
         h, m_  = map(int, s_cfg['entry_time'].split(':'))
         t_min  = h * 60 + m_
 

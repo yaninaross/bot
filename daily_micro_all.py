@@ -2,12 +2,13 @@
 daily_micro_all.py — Unified Microstructure Bootstrapper
 =========================================================
 Downloads T&Q raw data from Polygon and computes microstructure
-parquets for ALL actively scored assets (12 tickers, v2_bar_is_real only).
+parquets for ALL actively scored assets (21 tickers).
 
 Covers:
-  - Exp-105: RCAT, SPIR, ASTS, HUT
-  - Exp-106: CIFR, WULF, RKLB, APLD
-  - Exp-152: LUNR, ALAB, BBAI, BE, FCEL, RIOT
+  - Exp-152: RCAT
+  - Exp-160: KEEL, PLUG, RIOT, IREN
+  - Exp-170: ALAB, APLD, ASTS, BBAI, BE, BTBT, CIFR, CLSK, FCEL, HUT, JOBY, LUNR
+  + monitoring: SPIR, WULF, RKLB, MVIS, ACHR
 
 Fully incremental and idempotent: already up-to-date tickers are skipped,
 gaps are filled from GCS cache or Polygon API.
@@ -29,14 +30,12 @@ warnings.filterwarnings('ignore')
 # ⚙️  CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # --- Exp-105 Defense (cluster) — v2_bar_is_real ---
-    'RCAT', 'SPIR', 'ASTS', 'HUT',
-    # --- Exp-106 Defense (8% cluster) — v2_bar_is_real ---
+    # --- Exp-152 / 160 / 170 Cross-sector ---
+    'RCAT', 'ASTS', 'HUT', 'SPIR',
     'CIFR', 'WULF', 'RKLB', 'APLD',
-    # --- Exp-152 Cross-sector — v2_bar_is_real ---
     'LUNR', 'ALAB', 'BBAI', 'BE', 'FCEL', 'RIOT',
-    # --- Exp-200 additions ---
-    'MARA', 'PLUG', 'ACHR',
+    'KEEL', 'IREN', 'CLSK', 'MVIS', 'PLUG',
+    'BTBT', 'JOBY',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"

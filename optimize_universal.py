@@ -167,7 +167,7 @@ SEEDS           = cfg['seeds']
 SCORING_POOL    = cfg['scoring_pool']
 EVAL_START_DATE = cfg['eval_start']
 EVAL_END_DATE   = cfg['eval_end']
-RESULTS_DIR     = f"Algos/Results_all/Universal_Exp{MODEL_ID}"
+RESULTS_DIR     = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
 
 BUCKET_NAME = "time-series-bucket-ys"
 POLYGON_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
@@ -285,7 +285,7 @@ def preload_regime_data():
 
     def _load_regime_asset(ticker):
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{ticker}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{ticker}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:
@@ -379,7 +379,7 @@ def preload_regime_data():
 def load_ticker_ohlcv(ticker):
     clean = ticker.replace("I:", "").replace("X:", "")
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:

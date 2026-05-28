@@ -143,18 +143,18 @@ SAMPLE_WEIGHT_CAP = 5.0
 PREC_TOP_K        = 0.02
 
 BUCKET_NAME   = "time-series-bucket-ys"
-INFERENCE_DIR = "Data/Inference"
+INFERENCE_DIR = "Data/Inference_v2"
 
 LOCAL_RESULTS_DIR = "Results"
 LOCAL_MODEL_DIR   = "Models"
 os.makedirs(LOCAL_RESULTS_DIR, exist_ok=True)
 os.makedirs(LOCAL_MODEL_DIR, exist_ok=True)
 
-GCS_RESULTS_PATH = f"Algos/Results_all/Universal_Exp{MODEL_ID}"
-GCS_MODEL_PATH   = f"Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
-STATS_DIR        = f"Data/Inference"
+GCS_RESULTS_PATH = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
+GCS_MODEL_PATH   = f"Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
+STATS_DIR        = f"Data/Inference_v2"
 
-PER_REPLICA_BATCH = 1024
+PER_REPLICA_BATCH = 256
 GLOBAL_BATCH_SIZE = PER_REPLICA_BATCH * NUM_REPLICAS
 
 ASSET_INDEX = {ticker: i for i, ticker in enumerate(TRAIN_TEACHERS)}
@@ -216,9 +216,12 @@ def load_master(ticker, tail_days=None, add_micro_zeros=True):
 
 def heal_data(df):
     df = df.resample('1min').asfreq()
-    for c in ['Open', 'High', 'Low', 'Close', 'Spread', 'OBI', 'bsize', 'asize']:
+    for c in ['Open', 'High', 'Low', 'Close']:
         if c in df.columns:
             df[c] = df[c].ffill()
+    for c in ['Spread', 'OBI', 'bsize', 'asize']:
+        if c in df.columns:
+            df[c] = df[c].fillna(0)
     for c in ['Volume', 'Total_Vol', 'Volume_Delta', 'Trade_Count', 'Delta_Pct']:
         if c in df.columns:
             df[c] = df[c].fillna(0)
@@ -263,15 +266,18 @@ def build_market_context():
 # FEATURE ENGINEERING
 # ==============================================================================
 def engineer_features(df, market_df):
-    daily_c = df['Close'].resample('D').last().shift(1).reindex(
+    daily_c = df['Close'].resample('D').last().ffill().shift(1).reindex(
         df.index, method='ffill')
     df['Gap_Pct'] = (df['Open'] - daily_c) / daily_c
     df['PM_High'] = df.groupby(df.index.date)['High'].cummax()
     df['Dist_to_PM_High'] = (df['Close'] - df['PM_High']) / (df['PM_High'] + 1e-9)
     df['RSI_14'] = ta.rsi(df['Close'], length=14)
     df['RSI_60'] = ta.rsi(df['Close'], length=60)
-    df['RVOL'] = df['Volume'] / df['Volume'].rolling(50).mean().clip(lower=1e-9)
-    df['ATR_14'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    vol_real = df['Volume'].where(df['Volume'] > 0)
+    df['RVOL'] = df['Volume'] / vol_real.rolling(50, min_periods=5).mean().ffill().clip(lower=1e-9)
+    real_mask = df['Volume'] > 0
+    atr_raw = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['ATR_14'] = atr_raw.where(real_mask).ffill().fillna(0)
     df['Compression'] = (df['High'] - df['Low']) / (df['ATR_14'] + 1e-9)
     for h in ROC_HORIZONS:
         df[f'ROC_{h}m'] = df['Close'].pct_change(h)
@@ -318,6 +324,11 @@ def add_targets(df):
     drop_cols = [c for c in df.columns if c not in keep_cols]
     if drop_cols:
         df = df.drop(columns=drop_cols)
+
+    for c in df.columns:
+        if df[c].dtype == np.float64:
+            df[c] = df[c].astype(np.float32)
+
     return df
 
 
@@ -357,7 +368,7 @@ def build_universal_model():
     in_id = Input(shape=(1,), dtype=tf.int32,          name='asset_id')
     x = transformer_encoder(Dense(128)(in_a), 128, 4, 128)
     x = GlobalAveragePooling1D()(transformer_encoder(x, 128, 4, 128))
-    y = Dense(128, activation='relu')(BatchNormalization()(in_c))
+    y = Dense(128, activation='relu')(LayerNormalization()(in_c))
     e = Embedding(N_ASSETS, EMBED_DIM, name='asset_embed')(in_id)
     e = Flatten()(e)
     e = Dense(32, activation='relu')(e)
@@ -414,24 +425,31 @@ class PrecisionAtTopK(tf.keras.metrics.Metric):
 # ==============================================================================
 # DATASET BUILDER
 # ==============================================================================
-def make_per_ticker_ds(df_scaled, tickers, start_dt, end_dt, steps, batch_size,
+def make_per_ticker_ds(teacher_data, tickers, start_dt, end_dt, steps, batch_size,
                        balanced=True, use_weights=True):
     ticker_arrays = []
     for ticker in tickers:
-        mask = df_scaled['Ticker'] == ticker
-        if start_dt is not None:
-            mask &= df_scaled.index > start_dt
-        if end_dt is not None:
-            mask &= df_scaled.index <= end_dt
-        df_t = df_scaled[mask]
-        if len(df_t) < steps:
+        if ticker not in teacher_data:
             continue
-        XA = df_t[ASSET_COLS].values.astype('float32')
-        XC = df_t[CONTEXT_COLS].values.astype('float32')
-        Y  = df_t['Target'].values
-        SW = df_t['Sample_Weight'].values.astype('float32') if 'Sample_Weight' in df_t.columns \
-             else np.ones(len(df_t), dtype=np.float32)
-        vi = np.where(df_t['Valid_Row'].values)[0]
+        td = teacher_data[ticker]
+        dates = td['dates']
+        date_mask = np.ones(len(dates), dtype=bool)
+        if start_dt is not None:
+            date_mask &= dates > start_dt
+        if end_dt is not None:
+            date_mask &= dates <= end_dt
+        if not date_mask.any():
+            continue
+        first = int(np.argmax(date_mask))
+        last = len(date_mask) - int(np.argmax(date_mask[::-1]))
+        XA = td['XA'][first:last]
+        XC = td['XC'][first:last]
+        Y  = td['Y'][first:last]
+        SW = td['SW'][first:last]
+        VR = td['VR'][first:last]
+        if len(XA) < steps:
+            continue
+        vi = np.where(VR)[0]
         vi = vi[vi >= steps]
         if len(vi) == 0:
             continue
@@ -491,77 +509,88 @@ def make_per_ticker_ds(df_scaled, tickers, start_dt, end_dt, steps, batch_size,
 
 
 # ==============================================================================
-# EXECUTION PIPELINE
+# EXECUTION PIPELINE — Memory-efficient two-pass approach
 # ==============================================================================
 market_df = build_market_context()
-
-print("\nBuilding Stats Pool...")
-stats_dfs = []
-for ticker in STATS_POOL:
-    print(f"   Loading {ticker}...")
-    df_temp = engineer_asset(ticker, market_df)
-    if df_temp is not None:
-        print(f"      rows={len(df_temp)}  range: {df_temp.index.min()} to {df_temp.index.max()}")
-        df_temp = df_temp.loc[TRAIN_START_DATE:]
-        print(f"      after filter: rows={len(df_temp)}")
-        df_temp['Ticker'] = ticker
-        stats_dfs.append(df_temp)
-    gc.collect()
-
-df_all_stats = pd.concat(stats_dfs).sort_index()
 aware_cutoff = pd.to_datetime(TRAIN_CUTOFF_DATE).tz_localize('UTC')
 
-print("\nCalculating Stats...")
-stats_data_raw = df_all_stats[
-    df_all_stats['Ticker'].isin(TRAIN_TEACHERS) & (df_all_stats.index <= aware_cutoff)]
-stats = {col: {'med': float(stats_data_raw[col].median()),
-               'iqr': float(max(1e-6, stats_data_raw[col].quantile(0.75) -
-                                       stats_data_raw[col].quantile(0.25)))}
+# --- Pass 1: Compute scaling stats (only Valid_Row==1 rows kept in memory) ---
+print("\nPass 1: Computing scaling stats...")
+valid_rows_for_stats = []
+for ticker in STATS_POOL:
+    print(f"   Loading {ticker} for stats...")
+    df_temp = engineer_asset(ticker, market_df)
+    if df_temp is None:
+        continue
+    df_temp = df_temp.loc[TRAIN_START_DATE:]
+    valid_mask = (df_temp['Valid_Row'] == 1) & (df_temp.index <= aware_cutoff)
+    stats_cols = [c for c in ALL_COLS if c != 'Time_Pos']
+    valid_rows_for_stats.append(df_temp.loc[valid_mask, stats_cols].copy())
+    n_valid = int(valid_mask.sum())
+    print(f"      rows={len(df_temp):,}  valid_for_stats={n_valid:,}")
+    del df_temp; gc.collect()
+
+stats_df = pd.concat(valid_rows_for_stats)
+del valid_rows_for_stats; gc.collect()
+print(f"   Stats pool: {len(stats_df):,} Valid_Row==1 rows (pre-cutoff)")
+
+stats = {col: {'med': float(stats_df[col].median()),
+               'iqr': float(max(1e-6, stats_df[col].quantile(0.75) -
+                                       stats_df[col].quantile(0.25)))}
          for col in ALL_COLS if col != 'Time_Pos'}
 
-blob = client.bucket(BUCKET_NAME).blob(f"{STATS_DIR}/scaling_stats_experiment_{MODEL_ID}.json")
+blob = client.bucket(BUCKET_NAME).blob(
+    f"{STATS_DIR}/scaling_stats_experiment_{MODEL_ID}.json")
 blob.upload_from_string(json.dumps(stats, indent=4), content_type='application/json')
 print(f"SAVED STATS TO: {STATS_DIR}/scaling_stats_experiment_{MODEL_ID}.json")
+del stats_df; gc.collect()
 
-del stats_data_raw
-gc.collect()
+# --- Pass 2: Load, scale, extract numpy arrays per ticker ---
+print("\nPass 2: Loading and scaling teacher data...")
+teacher_data = {}
+total_rows = 0
+total_valid = 0
+for ticker in TRAIN_TEACHERS:
+    print(f"   Loading {ticker}...")
+    df_temp = engineer_asset(ticker, market_df)
+    if df_temp is None:
+        continue
+    df_temp = df_temp.loc[TRAIN_START_DATE:]
+    df_temp = apply_scaling(df_temp, stats, inplace=True)
+    teacher_data[ticker] = {
+        'XA': df_temp[ASSET_COLS].values,
+        'XC': df_temp[CONTEXT_COLS].values,
+        'Y': df_temp['Target'].values,
+        'SW': df_temp['Sample_Weight'].values.astype('float32'),
+        'VR': df_temp['Valid_Row'].values,
+        'dates': df_temp.index,
+    }
+    n_rows = len(df_temp)
+    n_valid = int(df_temp['Valid_Row'].sum())
+    vr_mask = np.asarray(df_temp['Valid_Row'] == 1)
+    date_mask = np.asarray(df_temp.index > aware_cutoff)
+    n_val_rows = int((vr_mask & date_mask).sum()) if n_valid > 0 else 0
+    spike_rate = df_temp.loc[df_temp['Valid_Row'] == 1, 'Target'].mean()
+    total_rows += n_rows
+    total_valid += n_valid
+    print(f"      rows={n_rows:,}  valid={n_valid:,}  spike_rate={spike_rate:.1%}  val_rows={n_val_rows:,}")
+    del df_temp; gc.collect()
 
-print("\nScaling Data (in-place)...")
-df_scaled_all = apply_scaling(df_all_stats, stats, inplace=True)
-del stats_dfs
-gc.collect()
+print(f"\nTeacher data loaded: {total_rows:,} total rows, {total_valid:,} valid rows")
 
-# Diagnostics
-_vr  = df_scaled_all['Valid_Row']
-_tgt = df_scaled_all['Target']
-print(f"\nValid_Row check -- 0s: {(_vr==0).sum():,}  1s: {(_vr==1).sum():,}")
-print(f"Target check    -- 0s: {(_tgt==0).sum():,}  1s: {(_tgt==1).sum():,}")
-print(f"   Overall spike rate on Valid_Row bars: {(_tgt[_vr==1]==1).mean():.1%}  "
-      f"(threshold: {SPIKE_THRESHOLD:.0%})")
-print(f"   Date range: {df_scaled_all.index.min()} -> {df_scaled_all.index.max()}")
-for t in TRAIN_TEACHERS:
-    mask_vr = (df_scaled_all['Ticker'] == t) & (df_scaled_all['Valid_Row'] == 1)
-    sr = df_scaled_all.loc[mask_vr, 'Target'].mean()
-    n_val = (df_scaled_all.loc[mask_vr].index > aware_cutoff).sum()
-    print(f"   {t:<6}: valid_rows={mask_vr.sum():,}  spike_rate={sr:.1%}  val_rows={n_val:,}")
-
+# --- Diagnostics ---
 print(f"\nAsset Embedding Index:")
 for t, idx in ASSET_INDEX.items():
     print(f"   [{idx}] {t}")
 print(f"   [{OTHER_IDX}] OTHER (out-of-training tickers)")
 
-print(f"\nSample weight distribution (train positives only, cap={SAMPLE_WEIGHT_CAP}x):")
-for t in TRAIN_TEACHERS:
-    mask_pos = (df_scaled_all['Ticker'] == t) & (df_scaled_all['Valid_Row'] == 1) & \
-               (df_scaled_all['Target'] == 1) & (df_scaled_all.index <= aware_cutoff)
-    if mask_pos.sum() > 0:
-        sw = df_scaled_all.loc[mask_pos, 'Sample_Weight']
-        print(f"   {t:<6}: n_pos={mask_pos.sum():,}  avg_weight={sw.mean():.2f}  "
-              f"max_weight={sw.max():.2f}  pct_at_cap={(sw >= SAMPLE_WEIGHT_CAP).mean():.1%}")
-
 # ==============================================================================
 # TRAINING — model created inside strategy.scope() for multi-GPU
 # ==============================================================================
+# ==============================================================================
+# PHASE 1: TRAIN ALL SEEDS (teacher_data in memory)
+# ==============================================================================
+trained_seeds = []
 for seed in SEEDS_TO_RUN:
     print(f"\nSTARTING SEED {seed}")
     tf.keras.backend.clear_session()
@@ -569,13 +598,13 @@ for seed in SEEDS_TO_RUN:
 
     print(f"   Building training dataset (balanced=False, global_batch={GLOBAL_BATCH_SIZE})...")
     ds_tr, st_tr = make_per_ticker_ds(
-        df_scaled_all, TRAIN_TEACHERS,
+        teacher_data, TRAIN_TEACHERS,
         start_dt=None, end_dt=aware_cutoff,
         steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
         balanced=False, use_weights=True)
     print(f"   Building validation dataset...")
     ds_v, st_v = make_per_ticker_ds(
-        df_scaled_all, TRAIN_TEACHERS,
+        teacher_data, TRAIN_TEACHERS,
         start_dt=aware_cutoff, end_dt=None,
         steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
         balanced=False, use_weights=False)
@@ -608,11 +637,11 @@ for seed in SEEDS_TO_RUN:
 
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
-            local_model_path, monitor='val_pr_auc', save_best_only=True, mode='max', verbose=1),
+            local_model_path, monitor='val_loss', save_best_only=True, mode='min', verbose=1),
         tf.keras.callbacks.EarlyStopping(
-            monitor='val_pr_auc', patience=6, restore_best_weights=True, mode='max', verbose=1),
+            monitor='val_loss', patience=6, restore_best_weights=True, mode='min', verbose=1),
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_pr_auc', factor=0.5, patience=3, min_lr=1e-6, mode='max', verbose=1),
+            monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, mode='min', verbose=1),
     ]
 
     model.fit(
@@ -627,25 +656,41 @@ for seed in SEEDS_TO_RUN:
     else:
         print("   Model file not found locally, upload skipped.")
 
-    # ------------------------------------------------------------------
-    # SCORING — all assets
-    # ------------------------------------------------------------------
+    trained_seeds.append(seed)
+    del ds_tr, ds_v, model; gc.collect()
+
+# ==============================================================================
+# FREE TEACHER DATA (~13 GB) before scoring
+# ==============================================================================
+del teacher_data; gc.collect()
+print(f"\n{'='*60}")
+print(f"TRAINING COMPLETE: {len(trained_seeds)}/{len(SEEDS_TO_RUN)} seeds trained")
+print(f"Teacher data freed — starting scoring phase")
+print(f"{'='*60}")
+
+# ==============================================================================
+# PHASE 2: SCORE ALL SEEDS (loads model + tickers one at a time)
+# ==============================================================================
+for seed in trained_seeds:
     print(f"\nSCORING SEED {seed}...")
+    tf.keras.backend.clear_session()
+
+    local_model_path = os.path.join(LOCAL_MODEL_DIR, f"UNIVERSAL_S{seed}_M{MODEL_ID}.h5")
+    with strategy.scope():
+        model = build_universal_model()
     try:
         model.load_weights(local_model_path)
     except Exception as e:
-        print(f"   Could not load best weights ({e}), using current weights.")
+        print(f"   Could not load weights ({e}), skipping seed.")
+        continue
 
     for score_ticker in SCORING_POOL:
         print(f"   Scoring {score_ticker}...")
 
-        if score_ticker in STATS_POOL:
-            df_target_scaled = df_scaled_all[df_scaled_all['Ticker'] == score_ticker]
-        else:
-            df_target = engineer_asset(score_ticker, market_df)
-            if df_target is None:
-                continue
-            df_target_scaled = apply_scaling(df_target, stats)
+        df_target = engineer_asset(score_ticker, market_df)
+        if df_target is None:
+            continue
+        df_target_scaled = apply_scaling(df_target, stats)
 
         test_mask = df_target_scaled.index > aware_cutoff
         df_test   = df_target_scaled[test_mask]
@@ -653,6 +698,7 @@ for seed in SEEDS_TO_RUN:
         idx_v = np.where(df_test['Valid_Row'].values)[0]
         idx_v = idx_v[idx_v >= TIME_STEPS]
         if len(idx_v) == 0:
+            del df_target, df_target_scaled, df_test; gc.collect()
             continue
 
         XA_v = df_test[ASSET_COLS].values
@@ -683,5 +729,10 @@ for seed in SEEDS_TO_RUN:
         gcs_csv_path = f"{GCS_RESULTS_PATH}/{score_ticker}/Seed_{seed}_Results.csv"
         bucket.blob(gcs_csv_path).upload_from_filename(local_csv_path)
         print(f"      Uploaded results to {gcs_csv_path}")
+
+        del df_target, df_target_scaled, df_test, results_df; gc.collect()
+
+
+    del model; gc.collect()
 
 print(f"\nEXPERIMENT {MODEL_ID} FULLY COMPLETE.")

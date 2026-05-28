@@ -51,7 +51,7 @@ except Exception:
 # ==============================================================================
 BUCKET_NAME       = "time-series-bucket-ys"
 GCS_INFERENCE_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
-GCS_MODEL_PATH    = "Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
+GCS_MODEL_PATH    = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 BQ_TABLE          = "ys-time-series.scoring_logs.live_predictions"
 
 TAIL_DAYS  = 7
@@ -150,7 +150,7 @@ EXPERIMENTS = [
         'n_assets':       EXP97_N_ASSETS,
         'other_idx':      EXP97_OTHER_IDX,
         'asset_configs':  EXP97_ASSET_CONFIGS,
-        'stats_path':     'Data/Inference/scaling_stats_experiment_97_MICRO.json',
+        'stats_path':     'Data/Inference_v2/scaling_stats_experiment_97_MICRO.json',
     },
     {
         'model_id':       '103_DEFENSE',
@@ -162,7 +162,7 @@ EXPERIMENTS = [
         'n_assets':       EXP103_N_ASSETS,
         'other_idx':      EXP103_OTHER_IDX,
         'asset_configs':  EXP103_ASSET_CONFIGS,
-        'stats_path':     'Data/Inference/scaling_stats_experiment_103_DEFENSE.json',
+        'stats_path':     'Data/Inference_v2/scaling_stats_experiment_103_DEFENSE.json',
     },
 ]
 

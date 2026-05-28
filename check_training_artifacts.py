@@ -6,7 +6,7 @@ Checks GCS for models, stats JSON, and result CSVs for each seed × ticker.
 from google.cloud import storage
 
 BUCKET_NAME = "time-series-bucket-ys"
-MODEL_PATH  = "Algos/to_deploy/Saved_models/UNIVERSAL/Direction"
+MODEL_PATH  = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 STATS_DIR   = "Data/Inference"
 
 EXPERIMENTS = {
@@ -37,7 +37,7 @@ def blob_exists(bucket, path):
 def check_experiment(bucket, model_id, cfg):
     seeds = cfg["seeds"]
     tickers = cfg["scoring_pool"]
-    results_base = f"Algos/Results_all/Universal_Exp{model_id}"
+    results_base = f"Algos/Results_all_v2/Universal_Exp{model_id}"
 
     print(f"\n{'='*65}")
     print(f"  Experiment {model_id}")

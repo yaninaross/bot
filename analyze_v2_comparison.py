@@ -23,7 +23,7 @@ from google.cloud import bigquery
 # CONFIG
 # ==============================================================================
 BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
-EXPERIMENTS = ['105_DEFENSE', '106_DEFENSE', '152_XSECTOR', '103_DEFENSE']
+EXPERIMENTS = ['105_DEFENSE', '106_DEFENSE', '152_XSECTOR']
 MIN_TRADES = 3
 W = 140
 

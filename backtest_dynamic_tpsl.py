@@ -45,6 +45,10 @@ TICKER_FILE_MAP = {'BITF': 'KEEL'}
 TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
 
+CLEAN_EXP_BASES = ('105_DEFENSE', '106_DEFENSE', '152_XSECTOR', '160_XSECTOR',
+                   '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
+                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR')
+
 BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
 DEPLOY_PNL_THRESHOLD = 0.018
 MIN_TRADES = 3
@@ -84,6 +88,7 @@ def load_deploy_configs():
 
     df['ticker'] = df['ticker'].replace(TICKER_RENAME)
     df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
+    df = df[df['experiment'].apply(lambda e: any(e == b or e.startswith(b + '_') for b in CLEAN_EXP_BASES))]
     df['survived_a'] = df['survived_a'].fillna(False).astype(bool)
     if 'vol_filter_pct' not in df.columns:
         df['vol_filter_pct'] = 0
@@ -167,7 +172,7 @@ def load_ticker_ohlcv(ticker):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
     for suffix in ['_master_inference', '_1m_full_historical_data']:
-        uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+        uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
         try:
             return _load_parquet_with_dt_index(uri)
         except Exception:
@@ -178,7 +183,7 @@ def load_ticker_ohlcv(ticker):
 def load_scoring_results(ticker, experiment, seed):
     clean = TICKER_FILE_MAP.get(ticker.replace("I:", "").replace("X:", ""),
                                  ticker.replace("I:", "").replace("X:", ""))
-    path = f"Algos/Results_all/Universal_Exp{experiment}/{clean}/Seed_{seed}_Results.csv"
+    path = f"Algos/Results_all_v2/Universal_Exp{experiment}/{clean}/Seed_{seed}_Results.csv"
     blob = gcs_client.bucket(BUCKET_NAME).blob(path)
     if not blob.exists():
         raise FileNotFoundError(f"Scoring results not found: {path}")
@@ -198,7 +203,7 @@ def preload_regime_data(eval_start, eval_end):
     def _load_regime_asset(ticker):
         clean = TICKER_FILE_MAP.get(ticker, ticker)
         for suffix in ['_master_inference', '_1m_full_historical_data']:
-            uri = f"gs://{BUCKET_NAME}/Data/Inference/{clean}{suffix}.parquet"
+            uri = f"gs://{BUCKET_NAME}/Data/Inference_v2/{clean}{suffix}.parquet"
             try:
                 return _load_parquet_with_dt_index(uri)
             except Exception:

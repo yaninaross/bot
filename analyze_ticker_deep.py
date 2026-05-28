@@ -23,6 +23,10 @@ BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
 TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX'}
 
+CLEAN_EXP_BASES = ('105_DEFENSE', '106_DEFENSE', '152_XSECTOR', '160_XSECTOR',
+                   '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
+                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR')
+
 W = 140
 
 # ==============================================================================
@@ -32,6 +36,7 @@ client = bigquery.Client()
 df = client.query(f"SELECT * FROM `{BQ_TABLE}`").to_dataframe()
 df['ticker'] = df['ticker'].replace(TICKER_RENAME)
 df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
+df = df[df['experiment'].apply(lambda e: any(e == b or e.startswith(b + '_') for b in CLEAN_EXP_BASES))]
 df['survived_a'] = df['survived_a'].fillna(False).astype(bool)
 df['survived_b'] = df['survived_b'].fillna(False).astype(bool)
 df['val_b_avg_pnl'] = df['val_b_avg_pnl'].fillna(0.0)
