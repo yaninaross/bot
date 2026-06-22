@@ -95,7 +95,7 @@ def load_deploy_configs():
     df['vol_filter_pct'] = df['vol_filter_pct'].fillna(0).astype(int)
 
     df['val_a_total_pnl'] = df['val_a_avg_pnl'] * df['val_a_count']
-    df['composite'] = df['val_a_avg_pnl'] * df['val_a_win_rate'] * np.log2(1 + df['val_a_count'])
+    df['composite'] = df['val_a_avg_pnl'] * df['val_a_win_rate'] * np.sqrt(df['val_a_count']) * np.log2(1 + df['val_a_count'])
 
     df['run_timestamp'] = pd.to_datetime(df['run_timestamp'])
     _latest = (df.groupby(['experiment', 'ticker', 'run_id'])['run_timestamp']
@@ -531,7 +531,7 @@ def compute_stats(pnl, exits):
         'median_pnl': float(np.median(pnl)) * 100,
         'max_loss': float(np.min(pnl)) * 100,
         'max_win': float(np.max(pnl)) * 100,
-        'composite': avg * wr * np.log2(1 + n),
+        'composite': avg * wr * np.sqrt(n) * np.log2(1 + n),
     }
 
 

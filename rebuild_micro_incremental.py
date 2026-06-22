@@ -35,20 +35,19 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # ==============================================================================
 BUCKET_NAME = "time-series-bucket-ys"
-GCS_RAW_DIR = "Data/TradesQuotes"
-GCS_MICRO_DIR = "Data/Inference/Microstructure"
-GCS_OHLCV_DIR = "Data/Inference"
+GCS_RAW_DIR    = "Data/TradesQuotes"
+GCS_MICRO_DIR  = "Data/Inference/Microstructure"
+GCS_OHLCV_DIR  = "Data/Inference"
+GCS_MASTER_DIR = "Data/Inference_v2"
 
 ALL_TICKERS = [
-    # --- EXP-152 teachers (13 with T&Q data) ---
-    'BBAI', 'RCAT', 'LUNR', 'ASTS', 'ACHR', 'MVIS',       # defense
-    'WULF', 'CIFR', 'IREN', 'KEEL', 'HUT', 'CLSK', 'APLD', # crypto
-    # --- EXP-152 scoring pool (remaining 16 of 29) ---
-    'MARA', 'RIOT', 'MSTR', 'COIN', 'SMCI', 'RKLB', 'BE',
-    # --- EXP-151 energy teachers ---
-    'VST', 'CEG', 'GEV', 'CCJ', 'NEE', 'DUK',
-    # --- EXP-151/152 new additions (need T&Q download first) ---
-    'OKLO', 'SMR', 'FCEL', 'FLNC', 'PLUG', 'MP', 'POWL', 'MOD', 'ALAB',
+    # Strategy H traded tickers (12)
+    'ACHR', 'APLD', 'ASTS', 'BE', 'CIFR', 'CLSK', 'CORZ', 'KEEL',
+    'PL', 'RCAT', 'RIOT', 'WULF',
+    # Train teachers needed for model inference (not already above)
+    'BBAI', 'HUT', 'IREN', 'LUNR', 'MVIS',
+    # Hardcoded EXP_170 + EXP_185 tickers
+    'ALAB', 'OKLO', 'RKLB', 'RDW', 'SMCI',
 ]
 
 DATA_START = "2022-01-01"
@@ -346,7 +345,7 @@ def main(ticker_list=None, force=False):
 
         # ── Step 7: Rebuild master_inference ──
         ohlcv_uri = f"{GCS_OHLCV_DIR}/{ticker}_1m_full_historical_data.parquet"
-        master_uri = f"{GCS_OHLCV_DIR}/{ticker}_master_inference.parquet"
+        master_uri = f"{GCS_MASTER_DIR}/{ticker}_master_inference.parquet"
 
         ohlcv_blob = bucket.blob(ohlcv_uri)
         if ohlcv_blob.exists():
@@ -406,7 +405,7 @@ def main(ticker_list=None, force=False):
 # ==============================================================================
 # RUN CONFIG — edit these before running the cell
 # ==============================================================================
-RUN_TICKERS = ['KEEL']        # set to None for all tickers
+RUN_TICKERS = ['BGDE']        # set to None for all tickers
 FORCE_REBUILD = True           # True = ignore existing micro, rebuild from scratch
 
 main(ticker_list=RUN_TICKERS, force=FORCE_REBUILD)

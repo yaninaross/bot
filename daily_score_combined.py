@@ -1,26 +1,23 @@
 """
-Daily Scoring — v5 WF optimized (152 + 160 + 170)
-===================================================
-Self-contained. Scores 17 tickers across 3 experiments.
+Daily Scoring — v12 Strategy B / Tier 1+ (limit_entry, both 152+160 gate)
+==========================================================================
+Self-contained. Scores tickers that qualify in BOTH exp 152 and 160, using the
+best limit_entry config across all experiment families (152-185).
 Includes data loading, healing, dynamic TP/SL, regime filter, and BQ logging.
 
-Active experiments:
-  Exp-152 (Cross-sector, late cutoff):   1 ticker  (RCAT)
-  Exp-160 (Cross-sector, early cutoff):  4 tickers (KEEL, PLUG, RIOT, IREN)
-  Exp-170 (Cross-sector, walkforward):  12 tickers (ALAB, APLD, ASTS, BBAI, BE, BTBT,
-                                                     CIFR, CLSK, FCEL, HUT, JOBY, LUNR)
-
-Selection: best composite score per ticker from robust_wf_v5 optimization.
-Dynamic TP/SL modes: static, atr, atr_adaptive, regime_scaled, trailing_decay.
+Gate: ticker must have >= 1.8% avg PnL configs in both 152 AND 160.
+Mode: limit_entry only.
+Deploy: best limit_entry config per ticker across all 6 families.
+Allocation: Cap 2/day, 50/50 split.
 170 uses fold-175 models (latest walkforward cutoff).
+180 uses fold-185 models (latest walkforward cutoff).
 
 Confidence tiers:
-  HIGH  — N>=12 TEST trades, reliable signal
-  MED   — N=5-11 TEST trades, moderate sample
-  LOW   — N<=4 TEST trades, may be noise
+  HIGH  — N>=10 seeds, reliable signal
+  MED   — N=4-9 seeds, moderate sample
+  LOW   — N<=3 seeds, may be noise
 
 Run AFTER daily_ohlcv scripts have finished updating GCS.
-Usage:  python daily_score_combined.py
 """
 
 import os
@@ -29,10 +26,17 @@ import json
 import gc
 import subprocess
 
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
+
 import numpy as np
 import pandas as pd
 import pytz
 from datetime import datetime, timedelta
+
+try:
+    import tf_keras
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "tf_keras", "--quiet"])
 
 try:
     import pandas_ta as ta
@@ -41,6 +45,7 @@ except ImportError:
     import pandas_ta as ta
 
 import tensorflow as tf
+
 from tensorflow.keras import mixed_precision
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
@@ -71,6 +76,9 @@ VOL_LOOKBACK_DAYS = 30
 TIME_STEPS     = 240
 EMBED_DIM      = 16
 PST            = pytz.timezone('America/Los_Angeles')
+MIN_PRICE          = 2.00
+MIN_DOLLAR_VOLUME  = 50000
+MIN_VOL_FILTER_PCT = 25
 
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
@@ -108,18 +116,7 @@ EXP_152 = {
     ],
     'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
     'has_smh_rsi': False,
-    'asset_configs': {
-        'RCAT': {
-            'seed': 15211, 'prob_threshold': 0.500, 'entry_minute': 380,
-            'tpsl_mode': 'trailing_decay',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'sl_mult': 2.0, 'trail_start_mult': 2.0, 'trail_end_mult': 1.0,
-            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
-            'vol_filter_pct': 0,
-            'confidence': 'MED', 'confidence_note': 'N=5 trades, moderate sample',
-            'stats': {'win_rate': '80%', 'avg_pnl': '3.6%', 'freq': '3.0/mo'},
-        },
-    },
+    'asset_configs': {},
     'asset_cols': ASSET_COLS,
 }
 
@@ -132,48 +129,172 @@ EXP_160 = {
     ],
     'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
     'has_smh_rsi': False,
-    'asset_configs': {
-        'KEEL': {
-            'seed': 16006, 'prob_threshold': 0.500, 'entry_minute': 375,
-            'tpsl_mode': 'static',
-            'tp_pct': 0.25, 'sl_pct': 0.14,
-            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
-            'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=4 trades, perfect WR likely noise',
-            'stats': {'win_rate': '100%', 'avg_pnl': '6.2%', 'freq': '2.6/mo'},
-        },
-        'PLUG': {
-            'seed': 16011, 'prob_threshold': 0.500, 'entry_minute': 380,
-            'tpsl_mode': 'trailing_decay',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'sl_mult': 2.0, 'trail_start_mult': 2.0, 'trail_end_mult': 1.5,
-            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
-            'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=4 trades, perfect WR likely noise',
-            'stats': {'win_rate': '100%', 'avg_pnl': '5.6%', 'freq': '2.6/mo'},
-        },
-        'RIOT': {
-            'seed': 16008, 'prob_threshold': 0.400, 'entry_minute': 375,
-            'tpsl_mode': 'static',
-            'tp_pct': 0.08, 'sl_pct': 0.05,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.20,
-            'vol_filter_pct': 0,
-            'confidence': 'HIGH', 'confidence_note': 'N=12 trades, strong sample',
-            'stats': {'win_rate': '83%', 'avg_pnl': '3.5%', 'freq': '7.3/mo'},
-        },
-        'IREN': {
-            'seed': 16006, 'prob_threshold': 0.400, 'entry_minute': 385,
-            'tpsl_mode': 'atr_adaptive',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'tp_mult': 2.0, 'sl_mult': 1.5,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'confidence': 'MED', 'confidence_note': 'N=7 trades, moderate sample',
-            'stats': {'win_rate': '57%', 'avg_pnl': '3.3%', 'freq': '4.5/mo'},
-        },
-    },
+    'asset_configs': {},
     'asset_cols': ASSET_COLS,
 }
+
+# ==============================================================================
+# BQ CONFIG SELECTION — Strategy B / Tier 1+ (limit_entry, both 152+160 gate)
+# Gate: ticker qualifies in both 152 AND 160. Mode: limit_entry only.
+# Deploy: best limit_entry config per ticker across all families.
+# ==============================================================================
+WF_MODEL_VERSION = 'robust_wf_v12'
+WF_BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+WF_MIN_TRADES = 3
+WF_DEPLOY_THRESHOLD = 0.018
+WF_MIN_SEEDS = 3
+WF_MAX_VA_OPT_RATIO = 3.0
+WF_DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
+                         '175_XSECTOR', '180_XSECTOR', '185_XSECTOR'}
+WF_EXCLUDE_TICKERS = {'LUNR'}
+WF_TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
+WF_MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
+                   'regime_scaled': '_REGIME', 'trailing_decay': '_TRAIL',
+                   'regime_adaptive': '_REGADP', 'atr_sl': '_ATRSL',
+                   'grace': '_GRACE', 'limit_entry': '_LIMIT'}
+WF_GRP_KEYS = ['ticker', 'experiment', 'tpsl_mode', 'entry_minute',
+               'prob_thresh', 'tp_pct', 'sl_pct',
+               'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult',
+               'grace_minutes', 'dip_pct', 'max_wait_minutes',
+               'vol_filter_pct']
+
+def _wf_base_exp(exp_name):
+    for sfx in sorted(WF_MODE_SUFFIX.values(), key=len, reverse=True):
+        if sfx and exp_name.endswith(sfx):
+            return exp_name[:-len(sfx)]
+    return exp_name
+
+def load_deploy_configs_from_bq():
+    """Strategy B / Tier 1+: limit_entry only, both 152+160 gate, best per ticker."""
+    bq_client = bigquery.Client()
+    query = f"""
+    SELECT ticker, experiment, seed, tpsl_mode, entry_minute, prob_thresh,
+           tp_pct, sl_pct, tp_mult, sl_mult,
+           trail_start_mult, trail_end_mult,
+           vix_threshold, tlt_crash, spy_ignore, vol_filter_pct,
+           val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
+           opt_avg_pnl, is_ensemble,
+           grace_minutes, dip_pct, max_wait_minutes
+    FROM `{WF_BQ_TABLE}`
+    WHERE model_version = '{WF_MODEL_VERSION}'
+      AND survived_a = TRUE
+      AND val_a_count >= {WF_MIN_TRADES}
+      AND val_a_avg_pnl > 0
+    """
+    df = bq_client.query(query).to_dataframe()
+    print(f"  BQ: {len(df)} rows from {WF_MODEL_VERSION}")
+
+    df['ticker'] = df['ticker'].replace(WF_TICKER_RENAME)
+    df['base_experiment'] = df['experiment'].apply(_wf_base_exp)
+    df = df[df['base_experiment'].isin(WF_DEPLOY_EXPERIMENTS)]
+    df = df[~df['ticker'].isin(WF_EXCLUDE_TICKERS)]
+
+    for col in ['grace_minutes', 'max_wait_minutes', 'vol_filter_pct']:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = df[col].fillna(0).astype(int)
+    for col in ['dip_pct', 'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult']:
+        if col not in df.columns:
+            df[col] = 0.0
+        df[col] = df[col].fillna(0.0)
+
+    before_n = len(df)
+    df = df[df['opt_avg_pnl'] > 0].copy()
+    df = df[df['val_a_avg_pnl'] / df['opt_avg_pnl'] <= WF_MAX_VA_OPT_RATIO]
+    print(f"  Overfit filter: {before_n} -> {len(df)}")
+
+    # ── seed groups (individual seeds only) ──
+    indiv = df[df['is_ensemble'] == False].copy()
+
+    extra_agg = {}
+    for c in ['vix_threshold', 'tlt_crash', 'spy_ignore']:
+        if c in indiv.columns:
+            extra_agg[c] = (c, 'first')
+
+    sa = indiv.groupby(WF_GRP_KEYS).agg(
+        n_seeds=('seed', 'nunique'),
+        n_pos_seeds_18=('val_a_avg_pnl', lambda x: (x >= 0.018).sum()),
+        mean_va_pnl=('val_a_avg_pnl', 'mean'),
+        mean_va_wr=('val_a_win_rate', 'mean'),
+        mean_va_count=('val_a_count', 'mean'),
+        mean_va_freq=('val_a_freq', 'mean'),
+        **extra_agg,
+    ).reset_index()
+    sa['agree_18'] = (sa['n_pos_seeds_18'] / sa['n_seeds']).clip(upper=1.0)
+
+    # ── Strategy B / Tier 1+: both 152+160 gate, limit_entry only ──
+    sa = sa[sa['n_seeds'] >= WF_MIN_SEEDS]
+
+    # Gate: check INDIVIDUAL seed rows (not group means) for both 152+160
+    # Matches backtest find_both_exp_tickers: any single seed >= 1.8% qualifies
+    indiv['exp_fam'] = indiv['experiment'].apply(_wf_base_exp).str[:3]
+    indiv_survived = indiv[indiv['val_a_avg_pnl'] >= WF_DEPLOY_THRESHOLD]
+    fams_per_ticker = indiv_survived.groupby('ticker')['exp_fam'].apply(set)
+    both_152_160 = set(fams_per_ticker[fams_per_ticker.apply(
+        lambda s: '152' in s and '160' in s)].index)
+    print(f"  Tier 1+ gate: {len(both_152_160)} tickers qualify in both 152+160: {sorted(both_152_160)}")
+
+    # Filter: limit_entry only, qualifying tickers only
+    sa_tier1 = sa[
+        (sa['ticker'].isin(both_152_160)) &
+        (sa['tpsl_mode'] == 'limit_entry') &
+        (sa['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD)
+    ]
+    sa_tier1 = sa_tier1.copy()
+    sa_tier1['score'] = (sa_tier1['mean_va_pnl'] ** 2) * sa_tier1['agree_18']
+    best = sa_tier1.loc[sa_tier1.groupby('ticker')['score'].idxmax()] if not sa_tier1.empty else sa_tier1
+    best = best.copy()
+
+    # ── populate experiment asset_configs ──
+    n_selected = 0
+    for _, row in best.sort_values(['ticker', 'experiment']).iterrows():
+        base_exp = _wf_base_exp(row['experiment'])
+        exp_dict = _EXP_MAP.get(base_exp)
+        if not exp_dict:
+            continue
+        ticker = row['ticker']
+        tpsl_mode = row['tpsl_mode']
+        n_seeds = int(row['n_seeds'])
+        cfg = {
+            'seed': -1, 'is_ensemble': True,
+            'prob_threshold': float(row['prob_thresh']),
+            'entry_minute': int(row['entry_minute']),
+            'tpsl_mode': tpsl_mode,
+            'tp_pct': float(row['tp_pct']),
+            'sl_pct': float(row['sl_pct']),
+            'vix_threshold': float(row.get('vix_threshold', 999)),
+            'tlt_crash': float(row.get('tlt_crash', -999)),
+            'spy_ignore': float(row.get('spy_ignore', 999)),
+            'vol_filter_pct': int(row.get('vol_filter_pct', 0)),
+            'confidence': 'HIGH' if n_seeds >= 7 else ('MED' if n_seeds >= 4 else 'LOW'),
+            'confidence_note': f'{n_seeds} seeds, agree={row["agree_18"]:.0%}',
+            'stats': {
+                'win_rate': f'{row["mean_va_wr"]:.0%}',
+                'avg_pnl': f'{row["mean_va_pnl"]:.1%}',
+                'freq': f'{row["mean_va_freq"]:.1f}',
+            },
+        }
+        if tpsl_mode == 'limit_entry':
+            cfg['dip_pct'] = float(row.get('dip_pct', 0))
+            cfg['max_wait_minutes'] = int(row.get('max_wait_minutes', 0))
+        if tpsl_mode == 'grace':
+            cfg['grace_minutes'] = int(row.get('grace_minutes', 0))
+        if tpsl_mode in ('atr', 'atr_adaptive', 'trailing_decay', 'atr_sl'):
+            cfg['tp_mult'] = float(row.get('tp_mult', 0))
+            cfg['sl_mult'] = float(row.get('sl_mult', 0))
+        if tpsl_mode == 'trailing_decay':
+            cfg['trail_start_mult'] = float(row.get('trail_start_mult', 0))
+            cfg['trail_end_mult'] = float(row.get('trail_end_mult', 0))
+        exp_dict['asset_configs'][ticker] = cfg
+        n_selected += 1
+        mode_str = tpsl_mode
+        if tpsl_mode == 'limit_entry':
+            mode_str += f" dip={row.get('dip_pct',0):.1%} wait={int(row.get('max_wait_minutes',0))}m"
+        print(f"    {ticker:<7} -> {base_exp:<14} {mode_str:<30} "
+              f"pnl={row['mean_va_pnl']:.2%} agree={row['agree_18']:.0%} ({n_seeds}s)")
+
+    print(f"  Strategy B (Tier 1+): {n_selected} configs selected (limit_entry, both 152+160 gate)")
+    return n_selected
 
 EXP_170 = {
     'model_id': '175_XSECTOR',
@@ -185,125 +306,94 @@ EXP_170 = {
     'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
     'has_smh_rsi': False,
     'asset_configs': {
+        # ── Tickers moved to limit_entry in EXP_152/160: ACHR, ASTS, BTBT, CLSK, WULF ──
         'ALAB': {
-            'seed': 17501, 'prob_threshold': 0.500, 'entry_minute': 375,
-            'tpsl_mode': 'trailing_decay',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'sl_mult': 2.0, 'trail_start_mult': 2.0, 'trail_end_mult': 1.0,
-            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
-            'vol_filter_pct': 0,
-            'confidence': 'MED', 'confidence_note': 'N=8 trades, moderate sample',
-            'stats': {'win_rate': '75%', 'avg_pnl': '5.1%', 'freq': '4.9/mo'},
-        },
-        'APLD': {
-            'seed': 17515, 'prob_threshold': 0.400, 'entry_minute': 375,
+            'seed': 17507, 'prob_threshold': 0.450, 'entry_minute': 360,
             'tpsl_mode': 'static',
-            'tp_pct': 0.12, 'sl_pct': 0.05,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
-            'vol_filter_pct': 25,
-            'confidence': 'HIGH', 'confidence_note': 'N=23 trades, strong sample',
-            'stats': {'win_rate': '70%', 'avg_pnl': '2.0%', 'freq': '14.0/mo'},
-        },
-        'ASTS': {
-            'seed': 17512, 'prob_threshold': 0.600, 'entry_minute': 385,
-            'tpsl_mode': 'regime_scaled',
-            'tp_pct': 0.08, 'sl_pct': 0.05,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'tp_pct': 0.12, 'sl_pct': 0.03,
+            'vix_threshold': 20.0, 'tlt_crash': 0.0, 'spy_ignore': 0.0,
             'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST, perfect WR likely noise',
-            'stats': {'win_rate': '100%', 'avg_pnl': '7.7%', 'freq': '1.8/mo'},
-        },
-        'BBAI': {
-            'seed': 17512, 'prob_threshold': 0.600, 'entry_minute': 375,
-            'tpsl_mode': 'static',
-            'tp_pct': 0.08, 'sl_pct': 0.08,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST, perfect WR likely noise',
-            'stats': {'win_rate': '100%', 'avg_pnl': '7.7%', 'freq': '1.8/mo'},
+            'confidence': 'MED', 'confidence_note': 'N=8 trades',
+            'stats': {'win_rate': '62%', 'avg_pnl': '3.1%', 'composite': '0.0021'},
         },
         'BE': {
-            'seed': 17505, 'prob_threshold': 0.600, 'entry_minute': 385,
-            'tpsl_mode': 'atr_adaptive',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'tp_mult': 1.5, 'sl_mult': 1.0,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=4 trades in TEST',
-            'stats': {'win_rate': '75%', 'avg_pnl': '4.8%', 'freq': '2.4/mo'},
-        },
-        'BTBT': {
-            'seed': 17507, 'prob_threshold': 0.500, 'entry_minute': 380,
-            'tpsl_mode': 'atr_adaptive',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'tp_mult': 1.5, 'sl_mult': 1.5,
-            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
-            'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST, perfect WR likely noise',
-            'stats': {'win_rate': '100%', 'avg_pnl': '4.0%', 'freq': '1.9/mo'},
-        },
-        'CIFR': {
-            'seed': 17512, 'prob_threshold': 0.500, 'entry_minute': 375,
+            'seed': 17500, 'prob_threshold': 0.550, 'entry_minute': 360,
             'tpsl_mode': 'static',
-            'tp_pct': 0.16, 'sl_pct': 0.14,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'tp_pct': 0.25, 'sl_pct': 0.14,
+            'vix_threshold': 20.0, 'tlt_crash': 0.0, 'spy_ignore': 0.0,
             'vol_filter_pct': 0,
-            'confidence': 'MED', 'confidence_note': 'N=8 trades, moderate sample',
-            'stats': {'win_rate': '88%', 'avg_pnl': '5.4%', 'freq': '4.9/mo'},
+            'confidence': 'HIGH', 'confidence_note': 'N=11 trades',
+            'stats': {'win_rate': '64%', 'avg_pnl': '2.0%', 'composite': '0.0005'},
         },
-        'CLSK': {
-            'seed': 17502, 'prob_threshold': 0.400, 'entry_minute': 380,
+        'OKLO': {
+            'seed': 17501, 'prob_threshold': 0.500, 'entry_minute': 370,
             'tpsl_mode': 'static',
-            'tp_pct': 0.12, 'sl_pct': 0.08,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.20,
-            'vol_filter_pct': 25,
-            'confidence': 'HIGH', 'confidence_note': 'N=14 trades, strong sample',
-            'stats': {'win_rate': '86%', 'avg_pnl': '2.5%', 'freq': '8.5/mo'},
-        },
-        'FCEL': {
-            'seed': 17507, 'prob_threshold': 0.400, 'entry_minute': 375,
-            'tpsl_mode': 'atr_adaptive',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'tp_mult': 3.0, 'sl_mult': 0.5,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
+            'tp_pct': 0.12, 'sl_pct': 0.05,
+            'vix_threshold': 20.0, 'tlt_crash': 0.0, 'spy_ignore': 999.0,
             'vol_filter_pct': 0,
-            'confidence': 'HIGH', 'confidence_note': 'N=13 trades, strong sample',
-            'stats': {'win_rate': '54%', 'avg_pnl': '5.4%', 'freq': '7.9/mo'},
+            'confidence': 'LOW', 'confidence_note': 'N=3 trades',
+            'stats': {'win_rate': '100%', 'avg_pnl': '5.4%', 'composite': '0.0005'},
         },
-        'HUT': {
-            'seed': 17508, 'prob_threshold': 0.400, 'entry_minute': 385,
-            'tpsl_mode': 'atr',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'tp_mult': 2.0, 'sl_mult': 1.0,
-            'vix_threshold': 20.0, 'tlt_crash': -0.50, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'confidence': 'MED', 'confidence_note': 'N=10 trades, moderate sample',
-            'stats': {'win_rate': '70%', 'avg_pnl': '3.5%', 'freq': '6.1/mo'},
-        },
-        'JOBY': {
-            'seed': 17512, 'prob_threshold': 0.500, 'entry_minute': 385,
+        'RKLB': {
+            'seed': 17514, 'prob_threshold': 0.750, 'entry_minute': 375,
             'tpsl_mode': 'static',
-            'tp_pct': 0.16, 'sl_pct': 0.03,
-            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'tp_pct': 0.08, 'sl_pct': 0.08,
+            'vix_threshold': 20.0, 'tlt_crash': 0.0, 'spy_ignore': 0.0,
             'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=3 trades in TEST',
-            'stats': {'win_rate': '67%', 'avg_pnl': '5.3%', 'freq': '1.9/mo'},
-        },
-        'LUNR': {
-            'seed': 17513, 'prob_threshold': 0.500, 'entry_minute': 380,
-            'tpsl_mode': 'atr',
-            'tp_pct': 0.0, 'sl_pct': 0.0,
-            'tp_mult': 1.5, 'sl_mult': 1.5,
-            'vix_threshold': 20.0, 'tlt_crash': 0.00, 'spy_ignore': 0.00,
-            'vol_filter_pct': 0,
-            'confidence': 'LOW', 'confidence_note': 'N=4 trades in TEST',
-            'stats': {'win_rate': '75%', 'avg_pnl': '4.7%', 'freq': '2.4/mo'},
+            'confidence': 'MED', 'confidence_note': 'N=8 trades',
+            'stats': {'win_rate': '75%', 'avg_pnl': '2.5%', 'composite': '0.0006'},
         },
     },
     'asset_cols': ASSET_COLS,
 }
 
-for _exp in (EXP_152, EXP_160, EXP_170):
+TEACHERS_31 = [
+    'CIFR', 'IREN', 'KEEL', 'HUT', 'APLD', 'WULF', 'RIOT', 'CLSK', 'BTBT', 'ALAB', 'MARA',
+    'RCAT', 'ASTS', 'LUNR', 'BBAI', 'RKLB', 'SPIR', 'BKSY', 'MNTS', 'PLUG', 'BE', 'FCEL', 'FLNC',
+    'OKLO', 'SMR', 'MVIS', 'BGDE', 'RDW', 'PL', 'VOYG', 'SMLR',
+]
+
+EXP_185 = {
+    'model_id': '185_XSECTOR',
+    'label': 'EXP-185 XSECTOR (31 teachers)',
+    'train_teachers': TEACHERS_31,
+    'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
+    'has_smh_rsi': False,
+    'asset_configs': {
+        # ── RIOT moved to limit_entry in EXP_160 ──
+        'PL': {
+            'seed': 18507, 'prob_threshold': 0.500, 'entry_minute': 360,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.06, 'sl_pct': 0.03,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'LOW', 'confidence_note': 'N=3 trades',
+            'stats': {'win_rate': '67%', 'avg_pnl': '2.7%', 'composite': '0.0005'},
+        },
+        'RDW': {
+            'seed': 18503, 'prob_threshold': 0.600, 'entry_minute': 370,
+            'tpsl_mode': 'atr',
+            'tp_pct': 0.0, 'sl_pct': 0.0,
+            'tp_mult': 2.0, 'sl_mult': 1.0,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'MED', 'confidence_note': 'N=8 trades',
+            'stats': {'win_rate': '50%', 'avg_pnl': '2.5%', 'composite': '0.0004'},
+        },
+        'SMCI': {
+            'seed': -1, 'is_ensemble': True, 'prob_threshold': 0.500, 'entry_minute': 360,
+            'tpsl_mode': 'static',
+            'tp_pct': 0.06, 'sl_pct': 0.06,
+            'vix_threshold': 999.0, 'tlt_crash': -999.0, 'spy_ignore': 999.0,
+            'vol_filter_pct': 0,
+            'confidence': 'MED', 'confidence_note': 'N=5 trades',
+            'stats': {'win_rate': '80%', 'avg_pnl': '2.7%', 'composite': '0.0014'},
+        },
+    },
+    'asset_cols': ASSET_COLS,
+}
+
+for _exp in (EXP_152, EXP_160, EXP_170, EXP_185):
     _acols = _exp.get('asset_cols', ASSET_COLS)
     _exp['asset_cols'] = _acols
     _exp['context_cols'] = _build_context_cols(
@@ -319,7 +409,28 @@ for _exp in (EXP_152, EXP_160, EXP_170):
     _exp['other_idx'] = len(_exp['train_teachers'])
     _exp['stats_path'] = f"Data/Inference_v2/scaling_stats_experiment_{_exp['model_id']}.json"
 
-EXPERIMENTS = [EXP_152, EXP_160, EXP_170]
+_EXP_MAP = {
+    '152_XSECTOR': EXP_152,
+    '160_XSECTOR': EXP_160,
+    '170_XSECTOR': EXP_170,
+    '175_XSECTOR': EXP_170,
+    '180_XSECTOR': EXP_185,
+    '185_XSECTOR': EXP_185,
+}
+
+# Clear hardcoded configs — Tier 1+ is fully BQ-driven
+for _exp in (EXP_152, EXP_160, EXP_170, EXP_185):
+    _exp['asset_configs'] = {}
+
+try:
+    _n_bq = load_deploy_configs_from_bq()
+    if _n_bq == 0:
+        print("  WARNING: No Tier 1+ configs selected from BQ — check that tickers qualify in both 152+160")
+except Exception as _e:
+    print(f"  ERROR loading BQ configs: {_e}")
+    print(f"  Scoring will have 0 tickers — check BQ access and WF table")
+
+EXPERIMENTS = [e for e in (EXP_152, EXP_160, EXP_170, EXP_185) if e['asset_configs']]
 
 # ==============================================================================
 # GCS CLIENT
@@ -649,6 +760,13 @@ def compute_dynamic_tpsl(cfg, df_raw, row_idx, vix_value):
             'mode': mode,
         }
 
+    elif mode == 'limit_entry':
+        return cfg['tp_pct'], cfg['sl_pct'], {
+            'mode': 'limit_entry',
+            'dip_pct': cfg.get('dip_pct', 0.01),
+            'max_wait_minutes': cfg.get('max_wait_minutes', 30),
+        }
+
     return cfg['tp_pct'], cfg['sl_pct'], {'mode': 'static'}
 
 
@@ -670,10 +788,16 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
               f"(target_utc={target_utc}, index range {df_scaled.index[0]} to {df_scaled.index[-1]})")
         return None
     row_idx = df_scaled.index.get_loc(candidates[-1])
-    score_date = df_scaled.index[row_idx].tz_convert(PST).date()
+    bar_ts_pst = df_scaled.index[row_idx].tz_convert(PST)
+    score_date = bar_ts_pst.date()
     if score_date != today:
         print(f"      {ticker}: SKIP — nearest bar date {score_date} != today {today} "
               f"(bar_ts={df_scaled.index[row_idx]})")
+        return None
+    bar_minute = bar_ts_pst.hour * 60 + bar_ts_pst.minute
+    if bar_minute != entry_min:
+        print(f"      {ticker}: SKIP — bar at minute {bar_minute} != entry_minute {entry_min} "
+              f"(no real bar at entry time)")
         return None
     if row_idx < TIME_STEPS:
         print(f"      {ticker}: SKIP — not enough history: row_idx={row_idx} < {TIME_STEPS} "
@@ -682,6 +806,13 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
     if 'Volume' in df_scaled.columns and float(df_scaled['Volume'].iloc[row_idx]) == 0:
         print(f"      {ticker}: SKIP — Volume=0 at entry bar {df_scaled.index[row_idx]} (synthetic)")
         return None
+    if 'Close' in df_raw.columns and df_raw is not None:
+        raw_candidates = df_raw.index[df_raw.index <= df_scaled.index[row_idx]]
+        if len(raw_candidates) > 0:
+            raw_close = float(df_raw['Close'].iloc[df_raw.index.get_loc(raw_candidates[-1])])
+            if raw_close < MIN_PRICE:
+                print(f"      {ticker}: SKIP — price ${raw_close:.2f} < ${MIN_PRICE:.2f} (penny stock)")
+                return None
     context_cols = exp['context_cols']
     XA = df_scaled[exp['asset_cols']].values
     XC = df_scaled[context_cols].values
@@ -725,10 +856,8 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
     if regime:
         regime_ok, _, _, _ = _filter_pass(cfg, regime)
 
-    vol_pct = cfg.get('vol_filter_pct', 0)
+    vol_pct = max(cfg.get('vol_filter_pct', 0), MIN_VOL_FILTER_PCT)
     vol_ok, entry_vol, vol_median = _check_vol_filter(ticker, entry_min, vol_pct)
-
-    filter_ok = regime_ok and vol_ok
 
     vix_value = regime.get('vix') if regime else None
     raw_row_idx = None
@@ -736,6 +865,19 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
         raw_candidates = df_raw.index[df_raw.index <= bar_ts]
         if len(raw_candidates) > 0:
             raw_row_idx = df_raw.index.get_loc(raw_candidates[-1])
+
+    dollar_vol = None
+    dollar_vol_ok = True
+    if df_raw is not None and raw_row_idx is not None:
+        rv = float(df_raw['Volume'].iloc[raw_row_idx])
+        rp = float(df_raw['Close'].iloc[raw_row_idx])
+        dollar_vol = rv * rp
+        if entry_vol is None:
+            entry_vol = rv
+        if MIN_DOLLAR_VOLUME > 0 and dollar_vol < MIN_DOLLAR_VOLUME:
+            dollar_vol_ok = False
+
+    filter_ok = regime_ok and vol_ok and dollar_vol_ok
 
     tpsl_mode = cfg.get('tpsl_mode', 'static')
     if tpsl_mode != 'static' and df_raw is not None and raw_row_idx is not None:
@@ -756,13 +898,17 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
         'spy_gap_pct': regime.get('spy_gap') if regime else None,
         'vol_filter_pct': vol_pct,
         'vol_filter_ok': vol_ok,
+        'dollar_vol_ok': dollar_vol_ok,
         'entry_volume': entry_vol,
+        'dollar_volume': dollar_vol,
         'vol_median': vol_median,
         'tpsl_mode': tpsl_info.get('mode', 'static'),
         'atr_pct_entry': tpsl_info.get('atr_pct'),
         'vix_regime_idx': tpsl_info.get('vix_regime'),
         'trail_start': tpsl_info.get('trail_start'),
         'trail_end': tpsl_info.get('trail_end'),
+        'dip_pct': tpsl_info.get('dip_pct'),
+        'max_wait_minutes': tpsl_info.get('max_wait_minutes'),
     }
 
 
@@ -838,6 +984,7 @@ _MODE_LABELS = {
     'static': 'STATIC', 'atr': 'ATR', 'atr_adaptive': 'ATR-ADP',
     'trailing_decay': 'TRAIL', 'trail': 'TRAIL',
     'regime_scaled': 'REGIME', 'regime': 'REGIME',
+    'limit_entry': 'LIMIT',
 }
 
 
@@ -867,12 +1014,15 @@ def print_experiment_section(exp, results):
         close = r['close']
         mode_label = _MODE_LABELS.get(r.get('tpsl_mode', 'static'), '??')
 
+        dip = r.get('dip_pct', 0) or 0
+        entry_price = close * (1 - dip) if r.get('tpsl_mode') == 'limit_entry' else close
+
         if r.get('tpsl_mode') in ('trail', 'trailing_decay') or r.get('tp_pct') is None:
             ts = r.get('trail_start', 0)
             tp_str = f"TRAIL(ts={ts:.1%})"
         else:
-            tp_str = f"${close*(1+r['tp_pct']):.2f} (+{r['tp_pct']*100:.0f}%)"
-        sl_str = f"${close*(1-r['sl_pct']):.2f} (-{r['sl_pct']*100:.0f}%)"
+            tp_str = f"${entry_price*(1+r['tp_pct']):.2f} (+{r['tp_pct']*100:.0f}%)"
+        sl_str = f"${entry_price*(1-r['sl_pct']):.2f} (-{r['sl_pct']*100:.0f}%)"
 
         if trade_ok:
             filt_str = "OK"
@@ -886,6 +1036,9 @@ def print_experiment_section(exp, results):
                 parts.append(f"SPY:{r['spy_gap_pct']:+.2f}>{cfg['spy_ignore']:+.2f}")
             if not r.get('vol_filter_ok', True):
                 parts.append("VOL")
+            if not r.get('dollar_vol_ok', True):
+                dv = r.get('dollar_volume')
+                parts.append(f"DOLLAR_VOL:${dv:,.0f}<${MIN_DOLLAR_VOLUME:,.0f}" if dv else "DOLLAR_VOL")
             filt_str = f"BLOCKED {' & '.join(parts)}"
 
         em = r['entry_minute']
@@ -941,6 +1094,34 @@ def print_dashboard(all_results, run_ts):
         print()
         print(f"  \033[92mTRADE: {', '.join(r['ticker'] for r in go_trades)}"
               f"  ({len(go_trades)} position{'s' if len(go_trades) != 1 else ''})\033[0m")
+
+        limit_trades = [r for r in go_trades if r.get('tpsl_mode') == 'limit_entry']
+        if limit_trades:
+            print()
+            print(f"  {'─'*W}")
+            print(f"  LIMIT ORDERS TO PLACE")
+            print(f"  {'─'*W}")
+            print(f"  {'Ticker':<6}  {'BUY LIMIT':>12}  {'Dip':>8}  "
+                  f"{'TP target':>12}  {'SL stop':>12}  {'Cancel by':>10}  {'Exit by':>10}  {'Signal $':>10}")
+            print(f"  {'─'*W}")
+            for r in limit_trades:
+                c = r['close']
+                dip = r.get('dip_pct', 0) or 0
+                lp = c * (1 - dip)
+                tp_price = lp * (1 + r['tp_pct'])
+                sl_price = lp * (1 - r['sl_pct'])
+                wait = r.get('max_wait_minutes', 30) or 30
+                em = r['entry_minute']
+                expire_min = em + wait
+                expire_h = expire_min // 60
+                expire_ampm = "AM" if expire_h < 12 else "PM"
+                expire_h12 = expire_h if expire_h <= 12 else expire_h - 12
+                expire_str = f"{expire_h12}:{expire_min % 60:02d}{expire_ampm} PT"
+                print(f"  {r['ticker']:<6}  "
+                      f"\033[92m${lp:>9.2f}\033[0m  "
+                      f"-{dip:.1%}  "
+                      f"${tp_price:>9.2f}  ${sl_price:>9.2f}  "
+                      f"{expire_str:>10}  {'10:00AM PT':>10}  ${c:>8.2f}")
 
     # ── ASSET DETAILS ────────────────────────────────────────────────────────
     print()
@@ -1021,6 +1202,7 @@ _BQ_SCHEMA_DEFS = [
     ("vol_filter_pct", "INT64"),
     ("vol_filter_ok",  "STRING"),
     ("entry_volume",   "FLOAT64"),
+    ("dollar_volume",  "FLOAT64"),
     ("vol_median",     "FLOAT64"),
     ("tpsl_mode",      "STRING"),
     ("atr_pct_entry",  "FLOAT64"),
@@ -1065,6 +1247,7 @@ def log_to_bigquery(all_results, run_ts):
                 'vol_filter_pct': r.get('vol_filter_pct', 0),
                 'vol_filter_ok':  'OK' if r.get('vol_filter_ok', True) else 'BLOCKED',
                 'entry_volume':   r.get('entry_volume'),
+                'dollar_volume':  r.get('dollar_volume'),
                 'vol_median':     r.get('vol_median'),
                 'tpsl_mode':      r.get('tpsl_mode', 'static'),
                 'atr_pct_entry':  r.get('atr_pct_entry'),
@@ -1140,10 +1323,31 @@ def run_experiment(exp, run_ts):
 # ==============================================================================
 # MAIN
 # ==============================================================================
+def _check_stitch_freshness():
+    from google.cloud import storage as _gcs
+    blob = _gcs.Client().bucket(BUCKET_NAME).blob("Data/Inference/pipeline_status.json")
+    try:
+        status = json.loads(blob.download_as_text())
+    except Exception:
+        print("   ⚠️  pipeline_status.json not found — stitch freshness unknown")
+        return
+    stitch = status.get('stitch', {})
+    if stitch.get('status') != 'complete':
+        print("   ⚠️  daily_stitch_master has not run — master_inference may be stale")
+        return
+    ts = pd.Timestamp(stitch.get('timestamp', '2000-01-01'))
+    if ts.tz is None:
+        ts = ts.tz_localize('UTC')
+    today = pd.Timestamp.now(tz='UTC').normalize()
+    if ts.normalize() < today:
+        print(f"   ⚠️  Stitch last ran {ts.strftime('%Y-%m-%d %H:%M')} — not today")
+
+
 def main():
     run_ts = datetime.now(pytz.utc)
     total_tickers = sum(len(e['asset_configs']) for e in EXPERIMENTS)
     print(f"Scoring {total_tickers} tickers — {run_ts.strftime('%Y-%m-%d %H:%M UTC')}")
+    _check_stitch_freshness()
 
     all_results = []
     for exp in EXPERIMENTS:

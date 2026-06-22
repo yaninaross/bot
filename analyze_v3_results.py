@@ -103,7 +103,7 @@ if 'n_seeds_avg' not in df_all.columns:
     df_all['n_seeds_avg'] = 0
 df_all['n_seeds_avg'] = df_all['n_seeds_avg'].fillna(0).astype(int)
 
-df_all['composite'] = df_all['val_a_avg_pnl'] * df_all['val_a_win_rate'] * np.sqrt(df_all['val_a_count'])
+df_all['composite'] = df_all['val_a_avg_pnl'] * df_all['val_a_win_rate'] * np.sqrt(df_all['val_a_count']) * np.log2(1 + df_all['val_a_count'])
 df_all['run_timestamp'] = pd.to_datetime(df_all['run_timestamp'])
 
 # Split by version

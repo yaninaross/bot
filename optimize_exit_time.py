@@ -706,7 +706,7 @@ def load_winning_configs():
         if col in df.columns:
             df[col] = df[col].fillna(0.0)
 
-    df['test_composite'] = df['val_b_avg_pnl'] * df['val_b_win_rate'] * np.log2(1 + df['val_b_count'])
+    df['test_composite'] = df['val_b_avg_pnl'] * df['val_b_win_rate'] * np.sqrt(df['val_b_count']) * np.log2(1 + df['val_b_count'])
 
     configs = {}
     for ticker in sorted(df['ticker'].unique()):

@@ -18,6 +18,15 @@ import pandas as pd
 import pytz
 from datetime import datetime
 import gc
+import ctypes
+
+def _release_memory():
+    gc.collect()
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
 
 # ==============================================================================
 # ENVIRONMENT SYNC & AUTH
@@ -123,7 +132,16 @@ STATS_POOL   = TRAIN_TEACHERS
 SCORING_POOL = [t for t in TRAIN_TEACHERS if t != 'SMLR'] + [
     'JOBY', 'MP', 'ACHR', 'SMCI', 'COIN', 'MSTR', 'HOOD',
     'MOD', 'POWL', 'NNDM', 'KTOS', 'CORZ', 'NBIS', 'AVAV',
+    # Large-cap / tech
+    'AMD', 'NVDA', 'TSLA', 'PLTR', 'SOUN', 'VRT', 'VST', 'MU',
+    # Defense
+    'GD', 'GE', 'GEV', 'LHX', 'LMT', 'NOC', 'RTX',
+    # Energy / resources
+    'BHP', 'CAT', 'CCJ', 'CEG', 'COP', 'CVX', 'XOM', 'FCX',
+    # Infra / utilities
+    'DUK', 'EQIX', 'ETN', 'LIN', 'NEE',
 ]
+SCORING_POOL = sorted(set(SCORING_POOL))
 
 CONTEXT_ASSETS = ['SPY', 'VIX', 'TLT', 'IWM']
 
@@ -265,7 +283,7 @@ def build_market_context():
             cols[f'{ticker}_ROC_{h}m'] = df['Close'].pct_change(h).fillna(0)
         frames.append(pd.DataFrame(cols, index=df.index))
         del df, daily_c
-        gc.collect()
+        _release_memory()
     if not frames:
         raise RuntimeError("No context assets loaded.")
     return pd.concat(frames, axis=1).ffill().fillna(0)
@@ -526,11 +544,13 @@ for ticker in STATS_POOL:
         print(f"      after filter: rows={len(df_temp)}")
         df_temp['Ticker'] = ticker
         stats_dfs.append(df_temp)
-    gc.collect()
+    _release_memory()
 
-df_all_raw = pd.concat(stats_dfs).sort_index()
+df_all_raw = pd.concat(stats_dfs)
 del stats_dfs
-gc.collect()
+_release_memory()
+df_all_raw.sort_index(inplace=True)
+_release_memory()
 print(f"\nRaw data loaded: {len(df_all_raw):,} rows, "
       f"{df_all_raw.index.min()} -> {df_all_raw.index.max()}")
 
@@ -544,17 +564,29 @@ print(f"\n{'='*70}")
 print(f"FOLD 6: Exp {FOLD_EXP_ID}  cutoff={FOLD_CUTOFF}")
 print(f"{'='*70}")
 
-# --- Skip check ---
-completed_seeds = []
+# --- Skip check: separate trained vs fully scored ---
+trained_seeds = []
+fully_scored_seeds = []
 for seed in FOLD_SEEDS:
     model_blob_path = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5"
     if bucket.blob(model_blob_path).exists():
-        completed_seeds.append(seed)
-remaining_seeds = [s for s in FOLD_SEEDS if s not in completed_seeds]
+        trained_seeds.append(seed)
+        missing = [t for t in SCORING_POOL
+                   if not bucket.blob(f"{gcs_results_path}/{t}/Seed_{seed}_Results.csv").exists()]
+        if not missing:
+            fully_scored_seeds.append(seed)
+        else:
+            print(f"   Seed {seed}: model exists, {len(missing)} tickers unscored")
+
+needs_training = [s for s in FOLD_SEEDS if s not in trained_seeds]
+needs_scoring  = [s for s in trained_seeds if s not in fully_scored_seeds]
+remaining_seeds = needs_training + needs_scoring
+
 if not remaining_seeds:
-    print(f"   All {len(FOLD_SEEDS)} seeds already complete. Nothing to do.")
+    print(f"   All {len(FOLD_SEEDS)} seeds fully trained and scored. Nothing to do.")
 else:
-    print(f"   {len(completed_seeds)} seeds done, {len(remaining_seeds)} remaining: {remaining_seeds}")
+    print(f"   {len(fully_scored_seeds)} seeds fully done, {len(needs_training)} need training, "
+          f"{len(needs_scoring)} need scoring only: {remaining_seeds}")
 
     # --- Compute scaling stats ---
     print(f"\nCalculating Stats (cutoff={FOLD_CUTOFF})...")
@@ -572,24 +604,20 @@ else:
     print(f"SAVED STATS TO: {STATS_DIR}/scaling_stats_experiment_{FOLD_EXP_ID}.json")
 
     del stats_data_raw
-    gc.collect()
+    _release_memory()
 
-    # --- Scale data ---
-    print(f"\nScaling Data for fold {FOLD_EXP_ID}...")
-    df_scaled_all = apply_scaling(df_all_raw, stats, inplace=False)
-
-    # Diagnostics
-    _vr  = df_scaled_all['Valid_Row']
-    _tgt = df_scaled_all['Target']
+    # --- Diagnostics (before scaling, using raw data) ---
+    _vr  = df_all_raw['Valid_Row']
+    _tgt = df_all_raw['Target']
     print(f"\nValid_Row check -- 0s: {(_vr==0).sum():,}  1s: {(_vr==1).sum():,}")
     print(f"Target check    -- 0s: {(_tgt==0).sum():,}  1s: {(_tgt==1).sum():,}")
     print(f"   Overall spike rate on Valid_Row bars: {(_tgt[_vr==1]==1).mean():.1%}  "
           f"(threshold: {SPIKE_THRESHOLD:.0%})")
-    print(f"   Date range: {df_scaled_all.index.min()} -> {df_scaled_all.index.max()}")
+    print(f"   Date range: {df_all_raw.index.min()} -> {df_all_raw.index.max()}")
     for t in TRAIN_TEACHERS:
-        mask_vr = (df_scaled_all['Ticker'] == t) & (df_scaled_all['Valid_Row'] == 1)
-        sr = df_scaled_all.loc[mask_vr, 'Target'].mean()
-        n_val = (df_scaled_all.loc[mask_vr].index > aware_cutoff).sum()
+        mask_vr = (df_all_raw['Ticker'] == t) & (df_all_raw['Valid_Row'] == 1)
+        sr = df_all_raw.loc[mask_vr, 'Target'].mean()
+        n_val = (df_all_raw.loc[mask_vr].index > aware_cutoff).sum()
         print(f"   {t:<6}: valid_rows={mask_vr.sum():,}  spike_rate={sr:.1%}  val_rows={n_val:,}")
 
     print(f"\nAsset Embedding Index:")
@@ -599,12 +627,19 @@ else:
 
     print(f"\nSample weight distribution (train positives only, cap={SAMPLE_WEIGHT_CAP}x):")
     for t in TRAIN_TEACHERS:
-        mask_pos = (df_scaled_all['Ticker'] == t) & (df_scaled_all['Valid_Row'] == 1) & \
-                   (df_scaled_all['Target'] == 1) & (df_scaled_all.index <= aware_cutoff)
+        mask_pos = (df_all_raw['Ticker'] == t) & (df_all_raw['Valid_Row'] == 1) & \
+                   (df_all_raw['Target'] == 1) & (df_all_raw.index <= aware_cutoff)
         if mask_pos.sum() > 0:
-            sw = df_scaled_all.loc[mask_pos, 'Sample_Weight']
+            sw = df_all_raw.loc[mask_pos, 'Sample_Weight']
             print(f"   {t:<6}: n_pos={mask_pos.sum():,}  avg_weight={sw.mean():.2f}  "
                   f"max_weight={sw.max():.2f}  pct_at_cap={(sw >= SAMPLE_WEIGHT_CAP).mean():.1%}")
+    del _vr, _tgt
+
+    # --- Scale data IN-PLACE to avoid doubling memory ---
+    print(f"\nScaling Data for fold {FOLD_EXP_ID} (in-place)...")
+    df_scaled_all = apply_scaling(df_all_raw, stats, inplace=True)
+    del df_all_raw
+    _release_memory()
 
     # ==================================================================
     # TRAINING — 15 seeds
@@ -614,76 +649,87 @@ else:
         tf.keras.backend.clear_session()
         random.seed(seed); np.random.seed(seed); tf.random.set_seed(seed)
 
-        print(f"   Building training dataset (balanced=False, global_batch={GLOBAL_BATCH_SIZE})...")
-        ds_tr, st_tr = make_per_ticker_ds(
-            df_scaled_all, TRAIN_TEACHERS,
-            start_dt=None, end_dt=aware_cutoff,
-            steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
-            balanced=False, use_weights=True)
-        print(f"   Building validation dataset (post-cutoff, no end cap)...")
-        ds_v, st_v = make_per_ticker_ds(
-            df_scaled_all, TRAIN_TEACHERS,
-            start_dt=aware_cutoff, end_dt=None,
-            steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
-            balanced=False, use_weights=False)
-
-        if ds_tr is None or st_tr == 0:
-            print(f"   Seed {seed}: no valid training samples found. Skipping.")
-            continue
-
-        print(f"   Steps/epoch: {st_tr}  Val steps: {st_v if st_v else 'N/A'}")
-
         local_model_path = os.path.join(LOCAL_MODEL_DIR, f"UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5")
+        gcs_model_blob = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5"
+        skip_training = seed in trained_seeds
+
+        ds_tr, ds_v = None, None
+
+        if skip_training:
+            print(f"   Model already trained — downloading from GCS for scoring only...")
+            bucket.blob(gcs_model_blob).download_to_filename(local_model_path)
+        else:
+            print(f"   Building training dataset (balanced=False, global_batch={GLOBAL_BATCH_SIZE})...")
+            ds_tr, st_tr = make_per_ticker_ds(
+                df_scaled_all, TRAIN_TEACHERS,
+                start_dt=None, end_dt=aware_cutoff,
+                steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
+                balanced=False, use_weights=True)
+            print(f"   Building validation dataset (post-cutoff, no end cap)...")
+            ds_v, st_v = make_per_ticker_ds(
+                df_scaled_all, TRAIN_TEACHERS,
+                start_dt=aware_cutoff, end_dt=None,
+                steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
+                balanced=False, use_weights=False)
+
+            if ds_tr is None or st_tr == 0:
+                print(f"   Seed {seed}: no valid training samples found. Skipping.")
+                continue
+
+            print(f"   Steps/epoch: {st_tr}  Val steps: {st_v if st_v else 'N/A'}")
+
+            with strategy.scope():
+                model = build_universal_model()
+
+                try:
+                    optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4)
+                except AttributeError:
+                    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+
+                model.compile(
+                    optimizer=optimizer,
+                    loss=asymmetric_loss(),
+                    metrics=[
+                        'accuracy',
+                        tf.keras.metrics.AUC(name='auc'),
+                        tf.keras.metrics.AUC(curve='PR', name='pr_auc'),
+                        PrecisionAtTopK(k=PREC_TOP_K, name='prec_top2pct'),
+                    ])
+
+            callbacks = [
+                tf.keras.callbacks.ModelCheckpoint(
+                    local_model_path, monitor='val_loss', save_best_only=True, mode='min', verbose=1),
+                tf.keras.callbacks.EarlyStopping(
+                    monitor='val_loss', patience=6, restore_best_weights=True, mode='min', verbose=1),
+                tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, mode='min', verbose=1),
+            ]
+
+            model.fit(
+                ds_tr, validation_data=ds_v,
+                epochs=50, steps_per_epoch=st_tr, validation_steps=st_v,
+                callbacks=callbacks, verbose=1)
+
+            if os.path.exists(local_model_path):
+                bucket.blob(gcs_model_blob).upload_from_filename(local_model_path)
+                print(f"   UPLOADED MODEL TO: {gcs_model_blob}")
+            else:
+                print("   Model file not found locally, upload skipped.")
+
+        # ------------------------------------------------------------------
+        # SCORING — all assets (skip already-scored tickers)
+        # ------------------------------------------------------------------
+        print(f"\nSCORING SEED {seed}...")
 
         with strategy.scope():
             model = build_universal_model()
-
-            try:
-                optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4)
-            except AttributeError:
-                optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
-
-            model.compile(
-                optimizer=optimizer,
-                loss=asymmetric_loss(),
-                metrics=[
-                    'accuracy',
-                    tf.keras.metrics.AUC(name='auc'),
-                    tf.keras.metrics.AUC(curve='PR', name='pr_auc'),
-                    PrecisionAtTopK(k=PREC_TOP_K, name='prec_top2pct'),
-                ])
-
-        callbacks = [
-            tf.keras.callbacks.ModelCheckpoint(
-                local_model_path, monitor='val_loss', save_best_only=True, mode='min', verbose=1),
-            tf.keras.callbacks.EarlyStopping(
-                monitor='val_loss', patience=6, restore_best_weights=True, mode='min', verbose=1),
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, mode='min', verbose=1),
-        ]
-
-        model.fit(
-            ds_tr, validation_data=ds_v,
-            epochs=50, steps_per_epoch=st_tr, validation_steps=st_v,
-            callbacks=callbacks, verbose=1)
-
-        gcs_model_blob = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5"
-        if os.path.exists(local_model_path):
-            bucket.blob(gcs_model_blob).upload_from_filename(local_model_path)
-            print(f"   UPLOADED MODEL TO: {gcs_model_blob}")
-        else:
-            print("   Model file not found locally, upload skipped.")
-
-        # ------------------------------------------------------------------
-        # SCORING — all assets
-        # ------------------------------------------------------------------
-        print(f"\nSCORING SEED {seed}...")
-        try:
-            model.load_weights(local_model_path)
-        except Exception as e:
-            print(f"   Could not load best weights ({e}), using current weights.")
+            model.compile(optimizer='adam', loss='binary_crossentropy')
+        model.load_weights(local_model_path)
 
         for score_ticker in SCORING_POOL:
+            gcs_csv_check = f"{gcs_results_path}/{score_ticker}/Seed_{seed}_Results.csv"
+            if bucket.blob(gcs_csv_check).exists():
+                continue
             print(f"   Scoring {score_ticker}...")
 
             df_target = engineer_asset(score_ticker, market_df)
@@ -728,11 +774,15 @@ else:
             bucket.blob(gcs_csv_path).upload_from_filename(local_csv_path)
             print(f"      Uploaded results to {gcs_csv_path}")
 
-    del df_scaled_all
-    gc.collect()
+            del df_target, df_target_scaled, df_test
+            _release_memory()
 
-del df_all_raw
-gc.collect()
+        del model, ds_tr, ds_v
+        _release_memory()
+        print(f"   Seed {seed} complete — memory released.")
+
+    del df_scaled_all
+    _release_memory()
 
 print(f"\n{'='*70}")
 print(f"FOLD 6 TRAINING COMPLETE — {FOLD_EXP_ID}, {len(FOLD_SEEDS)} seeds")

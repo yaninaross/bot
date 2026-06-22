@@ -25,30 +25,29 @@ FORCE_REBUILD = '--force' in sys.argv
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # --- Exp-97/110-113/197 (Crypto Cluster) ---
+    # --- Crypto ---
     'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'MSTR', 'COIN',
     'KEEL', 'HUT', 'CIFR', 'BTBT', 'BGDE', 'HOOD', 'CORZ',
-    'BITF', 'MIGI',  # legacy names kept for old experiment compatibility
-    'SMLR',          # delisted ~Jan 2026 but needed for training history
+    'BITF', 'MIGI',
+    'SMLR',
 
-    # --- Exp-110/111 Tech Inference Targets ---
-    'SMCI', 'TSLA', 'VRT', 'AMD', 'NVDA',
-
-    # --- Exp-100/103/104 (Defense Sector) ---
+    # --- Defense / space ---
     'AVAV', 'KTOS', 'PLTR', 'BBAI', 'RKLB', 'ASTS', 'LUNR', 'SPIR',
-    'JOBY', 'NNDM', 'MVIS', 'RCAT', 'ACHR',
-
-    # --- Exp-150 (Energy / AI Power) ---
-    'VST', 'CEG', 'GEV', 'BE', 'CCJ', 'NEE', 'DUK',
-
-    # --- Exp-152/160/170/200 (Cross-Sector) ---
-    'ALAB', 'FCEL', 'FLNC', 'PLUG', 'MP', 'POWL', 'OKLO', 'SMR',
-
-    # --- Exp-153 (Space / Dual-Use) ---
+    'JOBY', 'NNDM', 'MVIS', 'RCAT', 'ACHR', 'NBIS', 'SOUN',
     'PL', 'RDW', 'BKSY', 'MNTS', 'VOYG',
+
+    # --- Energy / AI Power ---
+    'VST', 'CEG', 'GEV', 'BE', 'CCJ', 'NEE', 'DUK',
+    'ALAB', 'FCEL', 'FLNC', 'PLUG', 'OKLO', 'SMR', 'MP', 'POWL', 'MOD',
+
+    # --- Tech / large-cap ---
+    'SMCI', 'TSLA', 'VRT', 'AMD', 'NVDA',
 
     # --- Defense Primes ---
     'GD', 'LHX', 'LMT', 'NOC', 'RTX', 'GE',
+
+    # --- Commodities / industrial ---
+    'BHP', 'CAT', 'COP', 'CVX', 'EQIX', 'ETN', 'FCX', 'LIN', 'MU', 'XOM',
 ]
 
 CONTEXT_ASSETS = ['ITA', 'SMH', 'MOD', 'I:VIX', 'TLT', 'IWM', 'X:BTCUSD', 'SPY', 'XLE']

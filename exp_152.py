@@ -141,6 +141,8 @@ DATA_START_DATE   = "2022-01-01"
 TRAIN_START_DATE  = "2022-02-01"
 TRAIN_CUTOFF_DATE = "2025-10-01"
 
+skip_training     = True
+
 SPIKE_THRESHOLD   = 0.10
 ASL_GAMMA_NEG     = 4.0
 ASL_GAMMA_POS     = 0.5
@@ -541,128 +543,139 @@ blob.upload_from_string(json.dumps(stats, indent=4), content_type='application/j
 print(f"SAVED STATS TO: {STATS_DIR}/scaling_stats_experiment_{MODEL_ID}.json")
 del stats_df; gc.collect()
 
-# --- Pass 2: Load, scale, extract numpy arrays per ticker ---
-print("\nPass 2: Loading and scaling teacher data...")
-teacher_data = {}
-total_rows = 0
-total_valid = 0
-for ticker in TRAIN_TEACHERS:
-    print(f"   Loading {ticker}...")
-    df_temp = engineer_asset(ticker, market_df)
-    if df_temp is None:
-        continue
-    df_temp = df_temp.loc[TRAIN_START_DATE:]
-    df_temp = apply_scaling(df_temp, stats, inplace=True)
-    teacher_data[ticker] = {
-        'XA': df_temp[ASSET_COLS].values,
-        'XC': df_temp[CONTEXT_COLS].values,
-        'Y': df_temp['Target'].values,
-        'SW': df_temp['Sample_Weight'].values.astype('float32'),
-        'VR': df_temp['Valid_Row'].values,
-        'dates': df_temp.index,
-    }
-    n_rows = len(df_temp)
-    n_valid = int(df_temp['Valid_Row'].sum())
-    vr_mask = np.asarray(df_temp['Valid_Row'] == 1)
-    date_mask = np.asarray(df_temp.index > aware_cutoff)
-    n_val_rows = int((vr_mask & date_mask).sum()) if n_valid > 0 else 0
-    spike_rate = df_temp.loc[df_temp['Valid_Row'] == 1, 'Target'].mean()
-    total_rows += n_rows
-    total_valid += n_valid
-    print(f"      rows={n_rows:,}  valid={n_valid:,}  spike_rate={spike_rate:.1%}  val_rows={n_val_rows:,}")
-    del df_temp; gc.collect()
+if not skip_training:
+    # --- Pass 2: Load, scale, extract numpy arrays per ticker ---
+    print("\nPass 2: Loading and scaling teacher data...")
+    teacher_data = {}
+    total_rows = 0
+    total_valid = 0
+    for ticker in TRAIN_TEACHERS:
+        print(f"   Loading {ticker}...")
+        df_temp = engineer_asset(ticker, market_df)
+        if df_temp is None:
+            continue
+        df_temp = df_temp.loc[TRAIN_START_DATE:]
+        df_temp = apply_scaling(df_temp, stats, inplace=True)
+        teacher_data[ticker] = {
+            'XA': df_temp[ASSET_COLS].values,
+            'XC': df_temp[CONTEXT_COLS].values,
+            'Y': df_temp['Target'].values,
+            'SW': df_temp['Sample_Weight'].values.astype('float32'),
+            'VR': df_temp['Valid_Row'].values,
+            'dates': df_temp.index,
+        }
+        n_rows = len(df_temp)
+        n_valid = int(df_temp['Valid_Row'].sum())
+        vr_mask = np.asarray(df_temp['Valid_Row'] == 1)
+        date_mask = np.asarray(df_temp.index > aware_cutoff)
+        n_val_rows = int((vr_mask & date_mask).sum()) if n_valid > 0 else 0
+        spike_rate = df_temp.loc[df_temp['Valid_Row'] == 1, 'Target'].mean()
+        total_rows += n_rows
+        total_valid += n_valid
+        print(f"      rows={n_rows:,}  valid={n_valid:,}  spike_rate={spike_rate:.1%}  val_rows={n_val_rows:,}")
+        del df_temp; gc.collect()
 
-print(f"\nTeacher data loaded: {total_rows:,} total rows, {total_valid:,} valid rows")
+    print(f"\nTeacher data loaded: {total_rows:,} total rows, {total_valid:,} valid rows")
 
-# --- Diagnostics ---
-print(f"\nAsset Embedding Index:")
-for t, idx in ASSET_INDEX.items():
-    print(f"   [{idx}] {t}")
-print(f"   [{OTHER_IDX}] OTHER (out-of-training tickers)")
+    # --- Diagnostics ---
+    print(f"\nAsset Embedding Index:")
+    for t, idx in ASSET_INDEX.items():
+        print(f"   [{idx}] {t}")
+    print(f"   [{OTHER_IDX}] OTHER (out-of-training tickers)")
 
-# ==============================================================================
-# TRAINING — model created inside strategy.scope() for multi-GPU
-# ==============================================================================
-# ==============================================================================
-# PHASE 1: TRAIN ALL SEEDS (teacher_data in memory)
-# ==============================================================================
-trained_seeds = []
-for seed in SEEDS_TO_RUN:
-    print(f"\nSTARTING SEED {seed}")
-    tf.keras.backend.clear_session()
-    random.seed(seed); np.random.seed(seed); tf.random.set_seed(seed)
+    # ==============================================================================
+    # PHASE 1: TRAIN ALL SEEDS (teacher_data in memory)
+    # ==============================================================================
+    trained_seeds = []
+    for seed in SEEDS_TO_RUN:
+        print(f"\nSTARTING SEED {seed}")
+        tf.keras.backend.clear_session()
+        random.seed(seed); np.random.seed(seed); tf.random.set_seed(seed)
 
-    print(f"   Building training dataset (balanced=False, global_batch={GLOBAL_BATCH_SIZE})...")
-    ds_tr, st_tr = make_per_ticker_ds(
-        teacher_data, TRAIN_TEACHERS,
-        start_dt=None, end_dt=aware_cutoff,
-        steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
-        balanced=False, use_weights=True)
-    print(f"   Building validation dataset...")
-    ds_v, st_v = make_per_ticker_ds(
-        teacher_data, TRAIN_TEACHERS,
-        start_dt=aware_cutoff, end_dt=None,
-        steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
-        balanced=False, use_weights=False)
+        print(f"   Building training dataset (balanced=False, global_batch={GLOBAL_BATCH_SIZE})...")
+        ds_tr, st_tr = make_per_ticker_ds(
+            teacher_data, TRAIN_TEACHERS,
+            start_dt=None, end_dt=aware_cutoff,
+            steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
+            balanced=False, use_weights=True)
+        print(f"   Building validation dataset...")
+        ds_v, st_v = make_per_ticker_ds(
+            teacher_data, TRAIN_TEACHERS,
+            start_dt=aware_cutoff, end_dt=None,
+            steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
+            balanced=False, use_weights=False)
 
-    if ds_tr is None or st_tr == 0:
-        print(f"   Seed {seed}: no valid training samples found. Skipping.")
-        continue
+        if ds_tr is None or st_tr == 0:
+            print(f"   Seed {seed}: no valid training samples found. Skipping.")
+            continue
 
-    print(f"   Steps/epoch: {st_tr}  Val steps: {st_v if st_v else 'N/A'}")
+        print(f"   Steps/epoch: {st_tr}  Val steps: {st_v if st_v else 'N/A'}")
 
-    local_model_path = os.path.join(LOCAL_MODEL_DIR, f"UNIVERSAL_S{seed}_M{MODEL_ID}.h5")
+        local_model_path = os.path.join(LOCAL_MODEL_DIR, f"UNIVERSAL_S{seed}_M{MODEL_ID}.h5")
 
-    with strategy.scope():
-        model = build_universal_model()
+        with strategy.scope():
+            model = build_universal_model()
 
-        try:
-            optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4)
-        except AttributeError:
-            optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+            try:
+                optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4)
+            except AttributeError:
+                optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
 
-        model.compile(
-            optimizer=optimizer,
-            loss=asymmetric_loss(),
-            metrics=[
-                'accuracy',
-                tf.keras.metrics.AUC(name='auc'),
-                tf.keras.metrics.AUC(curve='PR', name='pr_auc'),
-                PrecisionAtTopK(k=PREC_TOP_K, name='prec_top2pct'),
-            ])
+            model.compile(
+                optimizer=optimizer,
+                loss=asymmetric_loss(),
+                metrics=[
+                    'accuracy',
+                    tf.keras.metrics.AUC(name='auc'),
+                    tf.keras.metrics.AUC(curve='PR', name='pr_auc'),
+                    PrecisionAtTopK(k=PREC_TOP_K, name='prec_top2pct'),
+                ])
 
-    callbacks = [
-        tf.keras.callbacks.ModelCheckpoint(
-            local_model_path, monitor='val_loss', save_best_only=True, mode='min', verbose=1),
-        tf.keras.callbacks.EarlyStopping(
-            monitor='val_loss', patience=6, restore_best_weights=True, mode='min', verbose=1),
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, mode='min', verbose=1),
-    ]
+        callbacks = [
+            tf.keras.callbacks.ModelCheckpoint(
+                local_model_path, monitor='val_loss', save_best_only=True, mode='min', verbose=1),
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss', patience=6, restore_best_weights=True, mode='min', verbose=1),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, mode='min', verbose=1),
+        ]
 
-    model.fit(
-        ds_tr, validation_data=ds_v,
-        epochs=50, steps_per_epoch=st_tr, validation_steps=st_v,
-        callbacks=callbacks, verbose=1)
+        model.fit(
+            ds_tr, validation_data=ds_v,
+            epochs=50, steps_per_epoch=st_tr, validation_steps=st_v,
+            callbacks=callbacks, verbose=1)
 
-    gcs_model_blob = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{MODEL_ID}.h5"
-    if os.path.exists(local_model_path):
-        bucket.blob(gcs_model_blob).upload_from_filename(local_model_path)
-        print(f"   UPLOADED MODEL TO: {gcs_model_blob}")
-    else:
-        print("   Model file not found locally, upload skipped.")
+        gcs_model_blob = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{MODEL_ID}.h5"
+        if os.path.exists(local_model_path):
+            bucket.blob(gcs_model_blob).upload_from_filename(local_model_path)
+            print(f"   UPLOADED MODEL TO: {gcs_model_blob}")
+        else:
+            print("   Model file not found locally, upload skipped.")
 
-    trained_seeds.append(seed)
-    del ds_tr, ds_v, model; gc.collect()
+        trained_seeds.append(seed)
+        del ds_tr, ds_v, model; gc.collect()
 
-# ==============================================================================
-# FREE TEACHER DATA (~13 GB) before scoring
-# ==============================================================================
-del teacher_data; gc.collect()
-print(f"\n{'='*60}")
-print(f"TRAINING COMPLETE: {len(trained_seeds)}/{len(SEEDS_TO_RUN)} seeds trained")
-print(f"Teacher data freed — starting scoring phase")
-print(f"{'='*60}")
+    del teacher_data; gc.collect()
+    print(f"\n{'='*60}")
+    print(f"TRAINING COMPLETE: {len(trained_seeds)}/{len(SEEDS_TO_RUN)} seeds trained")
+    print(f"Teacher data freed — starting scoring phase")
+    print(f"{'='*60}")
+
+else:
+    # skip_training = True — download models from GCS, go straight to scoring
+    print("\n⏭️  skip_training=True — downloading models from GCS, scoring only")
+    trained_seeds = SEEDS_TO_RUN.copy()
+    for seed in trained_seeds:
+        local_model_path = os.path.join(LOCAL_MODEL_DIR, f"UNIVERSAL_S{seed}_M{MODEL_ID}.h5")
+        gcs_model_blob = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{MODEL_ID}.h5"
+        blob = bucket.blob(gcs_model_blob)
+        if blob.exists():
+            blob.download_to_filename(local_model_path)
+            print(f"   Downloaded {gcs_model_blob}")
+        else:
+            print(f"   ⚠️  Model not found on GCS: {gcs_model_blob}")
+            trained_seeds.remove(seed)
+    print(f"   {len(trained_seeds)}/{len(SEEDS_TO_RUN)} models ready for scoring")
 
 # ==============================================================================
 # PHASE 2: SCORE ALL SEEDS (loads model + tickers one at a time)

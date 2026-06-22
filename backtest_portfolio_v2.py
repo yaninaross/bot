@@ -80,7 +80,8 @@ TEST_END   = '2026-05-21'
 STARTING_CAPITAL = 200_000
 MIN_SIGNALS_PER_DAY = 2
 
-DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR'}
+DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
+                      '175_XSECTOR', '180_XSECTOR', '185_XSECTOR'}
 EXCLUDE_TICKERS = {'MSTR'}
 
 BUCKET_NAME    = "time-series-bucket-ys"
@@ -128,7 +129,9 @@ REGIME_TP_SCALE = np.array([0.70, 0.85, 1.00, 1.30, 1.60])
 REGIME_SL_SCALE = np.array([0.60, 0.80, 1.00, 1.30, 1.80])
 
 MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
-               'regime_scaled': '_REGIME', 'trailing_decay': '_TRAIL'}
+               'regime_scaled': '_REGIME', 'trailing_decay': '_TRAIL',
+               'regime_adaptive': '_REGADP', 'atr_sl': '_ATRSL',
+               'grace': '_GRACE', 'limit_entry': '_LIMIT'}
 
 gcs_client = gcs_storage.Client()
 bq_client  = bigquery.Client()
@@ -162,9 +165,13 @@ def load_top_configs_from_bq(model_version, min_trades):
 
     df['ticker'] = df['ticker'].replace(TICKER_RENAME)
 
-    df['base_experiment'] = df['experiment'].apply(
-        lambda x: x.rsplit('_', 1)[0] if x.rsplit('_', 1)[-1] in
-        ('ATR', 'ATRADP', 'REGIME', 'TRAIL') else x)
+    _suffixes = sorted([s for s in MODE_SUFFIX.values() if s], key=len, reverse=True)
+    def _strip_mode(x):
+        for sfx in _suffixes:
+            if x.endswith(sfx):
+                return x[:-len(sfx)]
+        return x
+    df['base_experiment'] = df['experiment'].apply(_strip_mode)
     df = df[df['base_experiment'].isin(DEPLOY_EXPERIMENTS)]
     df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
     print(f"    {len(df)} rows after experiment/ticker filter")
@@ -173,7 +180,7 @@ def load_top_configs_from_bq(model_version, min_trades):
         raise RuntimeError("No rows after filtering. Check DEPLOY_EXPERIMENTS and BQ data.")
 
     df['composite'] = (df['val_b_avg_pnl'] * df['val_b_win_rate']
-                       * np.log2(1 + df['val_b_count']))
+                       * np.sqrt(df['val_b_count']) * np.log2(1 + df['val_b_count']))
 
     best = df.loc[df.groupby('ticker')['composite'].idxmax()]
     best = best.sort_values('composite', ascending=False)

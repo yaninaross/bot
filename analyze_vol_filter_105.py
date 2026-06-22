@@ -43,7 +43,7 @@ def _safe_int(val, default=0):
 def composite_score(avg_pnl, win_rate, n, min_n=3):
     if n < min_n or avg_pnl <= 0:
         return 0.0
-    return avg_pnl * win_rate * math.log2(1 + n)
+    return avg_pnl * win_rate * math.sqrt(n) * math.log2(1 + n)
 
 
 # ──────────────────────────────────────────────────────────────────────

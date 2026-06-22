@@ -1,16 +1,22 @@
 """
-optimize_wf_robust.py — Rolling Walk-Forward Optimizer v3
+optimize_wf_robust.py — Rolling Walk-Forward Optimizer v9
 =========================================================
-Anchored expanding-window walk-forward optimization in 2 rounds:
+Anchored expanding-window walk-forward optimization in 2+ rounds:
 
-  R1 (broad):   OPT Oct-Nov   → VAL Dec-Jan    sparse grid, no filters
-  R2 (refine):  OPT Oct-Jan   → VAL Feb-Mar    expand around R1 survivors + filters
-  TEST:         Apr 1 → May 21                  2-month pure holdout
+  R1 (broad):   OPT window    → VAL window     broad grid, no filters
+  R2 (refine):  expanded OPT  → next VAL        ±1 around R1 survivors + filters
+  TEST:         Apr 1 → May 29                   2-month pure holdout
 
-Per-seed optimization + ensemble evaluation (average probs across all seeds,
-test with best seed's params). Results tagged 'robust_wf_v3' in BQ.
-Supports all 5 TPSL modes. Same Numba sim engines, data loading, BQ.
-Run in Colab with GPU (for numba JIT).
+v9 changes (from v8):
+  - Entry times: 5 values (6:00 to 6:20 AM, 5-min steps) — was 3 (6:15-6:25)
+  - Prob thresh R1: 9 values (0.10-0.90, step 0.10) — was 5
+  - TP/SL: finer grid (5 TP, 4 SL for static; 5 tp_mult for ATR)
+  - Regime filter: 8 combos (binary on/off per dimension) — was 27
+  - Trail: added R2 refinement points, trail_start 4 vals
+  - Test window extended to May 29
+
+Per-seed optimization + ensemble evaluation. Results tagged 'robust_wf_v9' in BQ.
+Supports all 5 TPSL modes. Run in Colab with GPU (for numba JIT).
 """
 
 import gc
@@ -172,17 +178,20 @@ EXP_FAMILIES = {
         'experiments': {'105_DEFENSE', '106_DEFENSE', '152_XSECTOR'},
         'wf_rounds': [
             {'name': 'R1', 'opt': ('2025-10-02', '2025-11-30'),
-                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 6},
+                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 2},
             {'name': 'R2', 'opt': ('2025-12-01', '2026-01-31'),
-                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 10},
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 2},
         ],
         'test_start': '2026-04-01',
-        'test_end':   '2026-05-21',
+        'test_end':   '2026-05-29',
         'fallback_tickers': [
             'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
             'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
             'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
             'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+            'OKLO', 'SMR', 'FLNC', 'COIN', 'HOOD', 'SMCI',
+            'KTOS', 'POWL', 'MOD', 'NNDM', 'CORZ', 'NBIS',
+            'AVAV', 'MP', 'PL', 'RDW',
         ],
     },
     'early_cutoff': {
@@ -190,19 +199,22 @@ EXP_FAMILIES = {
         'experiments': {'160_XSECTOR'},
         'wf_rounds': [
             {'name': 'R1', 'opt': ('2025-04-01', '2025-07-31'),
-                           'val': ('2025-08-01', '2025-09-30'), 'min_trades': 6},
+                           'val': ('2025-08-01', '2025-09-30'), 'min_trades': 2},
             {'name': 'R2', 'opt': ('2025-08-01', '2025-11-30'),
-                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 8},
+                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 2},
             {'name': 'R3', 'opt': ('2025-12-01', '2026-01-31'),
-                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 10},
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 2},
         ],
         'test_start': '2026-04-01',
-        'test_end':   '2026-05-21',
+        'test_end':   '2026-05-29',
         'fallback_tickers': [
             'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
             'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
             'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
             'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+            'OKLO', 'SMR', 'FLNC', 'COIN', 'HOOD', 'SMCI',
+            'KTOS', 'POWL', 'MOD', 'NNDM', 'CORZ', 'NBIS',
+            'AVAV', 'MP', 'PL', 'RDW',
         ],
     },
     'walkforward': {
@@ -211,25 +223,72 @@ EXP_FAMILIES = {
                         '173_XSECTOR', '174_XSECTOR', '175_XSECTOR'},
         'wf_rounds': [
             {'name': 'R1', 'opt': ('2025-04-01', '2025-07-31'),
-                           'val': ('2025-08-01', '2025-09-30'), 'min_trades': 6},
+                           'val': ('2025-08-01', '2025-09-30'), 'min_trades': 2},
             {'name': 'R2', 'opt': ('2025-08-01', '2025-11-30'),
-                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 8},
+                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 2},
             {'name': 'R3', 'opt': ('2025-12-01', '2026-01-31'),
-                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 10},
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 2},
         ],
         'test_start': '2026-04-01',
-        'test_end':   '2026-05-21',
+        'test_end':   '2026-05-29',
         'stitch': True,
         'fallback_tickers': [
             'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
             'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
             'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
             'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+            'OKLO', 'SMR', 'FLNC', 'COIN', 'HOOD', 'SMCI',
+            'KTOS', 'POWL', 'MOD', 'NNDM', 'CORZ', 'NBIS',
+            'AVAV', 'MP', 'PL', 'RDW',
+        ],
+    },
+    'single_185': {
+        'label': 'Exp 185 — Single Fold (Jan 2026 cutoff, 31 teachers)',
+        'experiments': {'185_XSECTOR'},
+        'wf_rounds': [
+            {'name': 'R1', 'opt': ('2026-01-02', '2026-02-28'),
+                           'val': ('2026-03-01', '2026-03-31'), 'min_trades': 2},
+        ],
+        'test_start': '2026-04-01',
+        'test_end':   '2026-05-29',
+        'fallback_tickers': [
+            'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
+            'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
+            'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
+            'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+            'OKLO', 'SMR', 'FLNC', 'COIN', 'HOOD', 'SMCI',
+            'KTOS', 'POWL', 'MOD', 'NNDM', 'CORZ', 'NBIS',
+            'AVAV', 'MP', 'PL', 'RDW',
+        ],
+    },
+    'walkforward_185': {
+        'label': 'Walk-Forward 185 (6 folds, 31 teachers)',
+        'experiments': {'180_XSECTOR', '181_XSECTOR', '182_XSECTOR',
+                        '183_XSECTOR', '184_XSECTOR', '185_XSECTOR'},
+        'wf_rounds': [
+            {'name': 'R1', 'opt': ('2025-04-01', '2025-07-31'),
+                           'val': ('2025-08-01', '2025-09-30'), 'min_trades': 2},
+            {'name': 'R2', 'opt': ('2025-08-01', '2025-11-30'),
+                           'val': ('2025-12-01', '2026-01-31'), 'min_trades': 2},
+            {'name': 'R3', 'opt': ('2025-12-01', '2026-01-31'),
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 2},
+        ],
+        'test_start': '2026-04-01',
+        'test_end':   '2026-05-29',
+        'stitch': True,
+        'fallback_tickers': [
+            'LUNR', 'RCAT', 'ASTS', 'BBAI', 'ACHR', 'MVIS',
+            'CIFR', 'IREN', 'HUT', 'KEEL', 'CLSK', 'APLD',
+            'WULF', 'MARA', 'RIOT', 'MSTR', 'RKLB', 'JOBY',
+            'ALAB', 'BGDE', 'PLUG', 'FCEL', 'BTBT', 'BE',
+            'OKLO', 'SMR', 'FLNC', 'COIN', 'HOOD', 'SMCI',
+            'KTOS', 'POWL', 'MOD', 'NNDM', 'CORZ', 'NBIS',
+            'AVAV', 'MP', 'PL', 'RDW',
         ],
     },
 }
 
-ACTIVE_FAMILY = 'walkforward'  # change per run: 'late_cutoff', 'early_cutoff', 'walkforward'
+ACTIVE_FAMILY = 'walkforward'  # change per run: 'late_cutoff', 'early_cutoff', 'walkforward', 'single_185'
 
 _family = EXP_FAMILIES[ACTIVE_FAMILY]
 CLEAN_EXPERIMENTS = _family['experiments']
@@ -245,87 +304,88 @@ VOL_LOOKBACK_DAYS    = 30
 VOL_PCT_GRID         = [0, 25]
 SLIPPAGE_PCT         = 0.0015  # 0.15% each way = 0.3% round-trip
 
-MODEL_VERSION_TAG = 'robust_wf_v5'
+MODEL_VERSION_TAG = 'robust_wf_v9'
 SKIP_COMPLETED = True
-TICKER_SUBSET  = []  # empty = run all tickers from deploy_configs
+TICKER_SUBSET  = ['AVAV', 'BGDE', 'CORZ', 'HOOD', 'KTOS', 'MOD', 'NBIS', 'NNDM', 'PL', 'POWL', 'RDW']
 
 # ==============================================================================
 # GRIDS — Tiered for rolling walk-forward
 # ==============================================================================
-# Round 1: Broad, sparse (81 combos for static)
+# Round 1: Broad sweep — 5 entry times × 9 prob × mode-specific TP/SL
+# Entry capped at 6:20 AM (need time to place trades before 6:30)
 GRID_R1 = {
     'static': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.50, 0.70],
-        'tp_pct':      [0.08, 0.16, 0.25],
-        'sl_pct':      [0.03, 0.08, 0.14],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90],
+        'tp_pct':      [0.06, 0.10, 0.16, 0.22, 0.30],
+        'sl_pct':      [0.03, 0.06, 0.10, 0.14],
     },
     'atr': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.50, 0.70],
-        'tp_mult':     [1.5, 3.0, 8.0],
-        'sl_mult':     [0.5, 1.5, 4.0],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90],
+        'tp_mult':     [1.5, 2.0, 3.0, 5.0, 8.0],
+        'sl_mult':     [1.0, 1.5, 2.5, 4.0],
     },
     'atr_adaptive': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.50, 0.70],
-        'tp_mult':     [1.5, 3.0, 8.0],
-        'sl_mult':     [0.5, 1.5, 4.0],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90],
+        'tp_mult':     [1.5, 2.0, 3.0, 5.0, 8.0],
+        'sl_mult':     [1.0, 1.5, 2.5, 4.0],
     },
     'regime_scaled': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.50, 0.70],
-        'tp_pct':      [0.08, 0.16, 0.25],
-        'sl_pct':      [0.03, 0.08, 0.14],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90],
+        'tp_pct':      [0.06, 0.10, 0.16, 0.22, 0.30],
+        'sl_pct':      [0.03, 0.06, 0.10, 0.14],
     },
     'trailing_decay': {
-        'entry_time':       ["06:15", "06:20", "06:25"],
-        'prob_thresh':      [0.30, 0.50, 0.70],
-        'trail_start_mult': [2.0, 4.0, 7.0],
+        'entry_time':       ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh':      [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90],
+        'trail_start_mult': [2.0, 4.0, 6.0, 9.0],
         'trail_end_mult':   [0.5, 1.0, 1.5],
         'sl_mult':          [1.0, 2.0, 4.0],
     },
 }
 
-# Round 2 reference: Full resolution (expand around R1 survivors)
+# Round 2 reference: Finer resolution (expand ±1 around R1 survivors)
 GRID_R2_REF = {
     'static': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
-        'tp_pct':      [0.08, 0.12, 0.16, 0.20, 0.25],
-        'sl_pct':      [0.03, 0.05, 0.08, 0.10, 0.14],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
+        'tp_pct':      [0.06, 0.08, 0.10, 0.12, 0.16, 0.20, 0.22, 0.25, 0.30],
+        'sl_pct':      [0.03, 0.05, 0.06, 0.08, 0.10, 0.14],
     },
     'atr': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
-        'tp_mult':     [1.5, 2.0, 3.0, 5.0, 8.0],
-        'sl_mult':     [0.5, 1.0, 1.5, 2.5, 4.0],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
+        'tp_mult':     [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0],
+        'sl_mult':     [1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0],
     },
     'atr_adaptive': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
-        'tp_mult':     [1.5, 2.0, 3.0, 5.0, 8.0],
-        'sl_mult':     [0.5, 1.0, 1.5, 2.5, 4.0],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
+        'tp_mult':     [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0],
+        'sl_mult':     [1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0],
     },
     'regime_scaled': {
-        'entry_time':  ["06:15", "06:20", "06:25"],
-        'prob_thresh': [0.30, 0.40, 0.50, 0.60, 0.70],
-        'tp_pct':      [0.08, 0.12, 0.16, 0.20, 0.25],
-        'sl_pct':      [0.03, 0.05, 0.08, 0.10, 0.14],
+        'entry_time':  ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh': [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
+        'tp_pct':      [0.06, 0.08, 0.10, 0.12, 0.16, 0.20, 0.22, 0.25, 0.30],
+        'sl_pct':      [0.03, 0.05, 0.06, 0.08, 0.10, 0.14],
     },
     'trailing_decay': {
-        'entry_time':       ["06:15", "06:20", "06:25"],
-        'prob_thresh':      [0.30, 0.40, 0.50, 0.60, 0.70],
-        'trail_start_mult': [2.0, 4.0, 7.0],
-        'trail_end_mult':   [0.5, 1.0, 1.5],
-        'sl_mult':          [1.0, 2.0, 4.0],
+        'entry_time':       ["06:00", "06:05", "06:10", "06:15", "06:20"],
+        'prob_thresh':      [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90],
+        'trail_start_mult': [2.0, 3.0, 4.0, 6.0, 9.0],
+        'trail_end_mult':   [0.5, 0.75, 1.0, 1.5],
+        'sl_mult':          [1.0, 1.5, 2.0, 3.0, 4.0],
     },
 }
 
 GRID_FILTER = {
-    'vix_threshold': [20.0, 30.0, 50.0],
-    'tlt_crash':     [0.0, -0.20, -0.50],
-    'spy_ignore':    [0.0, 0.20, 0.50],
+    'vix_threshold': [20.0, 999.0],
+    'tlt_crash':     [0.0, -999.0],
+    'spy_ignore':    [0.0, 999.0],
 }
 
 REGIME_TP_SCALE = np.array([0.70, 0.85, 1.00, 1.30, 1.60], dtype=np.float64)
@@ -1163,56 +1223,68 @@ def optimize_rolling_wf(ticker, df_ohlcv, vol_baselines, atr_pct_series,
         if val['Avg_PnL'] > 0.005 and val['Count'] >= r1['min_trades']:
             r1_survivors.append(combo)
 
-    del ohlcv_r1_opt, ohlcv_r1_val
+    if len(WF_ROUNDS) >= 2:
+        del ohlcv_r1_opt, ohlcv_r1_val
     print(f"        R1: {len(r1_opt)} tested → {len(r1_survivors)} survived")
 
     if not r1_survivors:
         return None
 
-    # ── Round 2: Expand around survivors + add filters ────────────────────────
-    r2 = WF_ROUNDS[1]
-    ohlcv_r2_opt = _precompute(*r2['opt'])
-    ohlcv_r2_val = _precompute(*r2['val'])
+    # ── Round 2 (if defined): Expand around survivors + add filters ───────────
+    if len(WF_ROUNDS) >= 2:
+        r2 = WF_ROUNDS[1]
+        ohlcv_r2_opt = _precompute(*r2['opt'])
+        ohlcv_r2_val = _precompute(*r2['val'])
 
-    r2_ref = get_grid_strategy(round_num=2)
-    r2_grid = {}
-    for key, ref_vals in r2_ref.items():
-        r2_grid[key] = _expand_around_survivors(r1_survivors, key, ref_vals)
+        r2_ref = get_grid_strategy(round_num=2)
+        r2_grid = {}
+        for key, ref_vals in r2_ref.items():
+            r2_grid[key] = _expand_around_survivors(r1_survivors, key, ref_vals)
 
-    r2_opt = _grid_search(ohlcv_r2_opt, seed_prob, regime_dict, ticker, seed_id,
-                           r2_grid, use_filters=True, min_trades=r2['min_trades'])
+        r2_opt = _grid_search(ohlcv_r2_opt, seed_prob, regime_dict, ticker, seed_id,
+                               r2_grid, use_filters=True, min_trades=r2['min_trades'])
 
-    r2_survivors = []
-    for combo in r2_opt:
-        if combo['Avg_PnL'] <= 0:
-            continue
-        val = _eval_combo(combo, ohlcv_r2_val, seed_prob, regime_dict)
-        if val['Avg_PnL'] > 0:
-            r2_survivors.append(combo)
+        r2_survivors = []
+        for combo in r2_opt:
+            if combo['Avg_PnL'] <= 0:
+                continue
+            val = _eval_combo(combo, ohlcv_r2_val, seed_prob, regime_dict)
+            if val['Avg_PnL'] > 0:
+                r2_survivors.append(combo)
 
-    print(f"        R2: {len(r2_opt)} tested → {len(r2_survivors)} survived")
+        print(f"        R2: {len(r2_opt)} tested → {len(r2_survivors)} survived")
 
-    if not r2_survivors:
-        best = max(r1_survivors, key=lambda r: r['Avg_PnL'])
-        best.update(NO_FILTER_DEFAULTS)
-        best['vol_filter_pct'] = 0
-        _fill_defaults(best)
-        val_result = validate_params(ticker, ohlcv_r2_val, regime_dict, seed_prob, best)
-        del ohlcv_r2_val
-        if val_result is None:
-            val_result = {'Avg_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
-        return best, val_result
+        if not r2_survivors:
+            best = max(r1_survivors, key=lambda r: r['Avg_PnL'])
+            best.update(NO_FILTER_DEFAULTS)
+            best['vol_filter_pct'] = 0
+            _fill_defaults(best)
+            val_result = validate_params(ticker, ohlcv_r2_val, regime_dict, seed_prob, best)
+            del ohlcv_r2_val
+            if val_result is None:
+                val_result = {'Avg_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
+            return best, val_result
 
-    # ── Select best from R2 survivors + volume filter ──────────────────────────
-    best = _select_robust_params(r2_survivors)
+        final_survivors = r2_survivors
+        final_ohlcv_opt = ohlcv_r2_opt
+        final_ohlcv_val = ohlcv_r2_val
+        final_min_trades = r2['min_trades']
+    else:
+        final_survivors = r1_survivors
+        final_ohlcv_opt = ohlcv_r1_opt
+        final_ohlcv_val = ohlcv_r1_val
+        final_min_trades = r1['min_trades']
+
+    # ── Select best from survivors + volume filter ─────────────────────────────
+    best = _select_robust_params(final_survivors)
     if best is None:
-        best = max(r2_survivors, key=lambda r: r['Avg_PnL'])
+        best = max(final_survivors, key=lambda r: r['Avg_PnL'])
 
     best_score = best['Avg_PnL']
     h_b, m_b = map(int, best['entry_time'].split(':'))
     t_min_b = h_b * 60 + m_b
 
-    idx = ohlcv_r2_opt['index']
+    idx = final_ohlcv_opt['index']
     common = idx.intersection(seed_prob.index)
     probs = np.zeros(len(idx), dtype=np.float64)
     if len(common) > 0:
@@ -1222,21 +1294,21 @@ def optimize_rolling_wf(ticker, df_ohlcv, vol_baselines, atr_pct_series,
     for vpct in VOL_PCT_GRID:
         if vpct == 0:
             continue
-        vol_ok = _compute_vol_pct_ok(ohlcv_r2_opt['volumes'], ohlcv_r2_opt['times'],
-                                      ohlcv_r2_opt['dates'],
-                                      ohlcv_r2_opt.get('vol_baselines', {}), t_min_b, vpct)
-        mask = (probs >= best['prob_thresh']) & (ohlcv_r2_opt['times'] == t_min_b) & vol_ok
+        vol_ok = _compute_vol_pct_ok(final_ohlcv_opt['volumes'], final_ohlcv_opt['times'],
+                                      final_ohlcv_opt['dates'],
+                                      final_ohlcv_opt.get('vol_baselines', {}), t_min_b, vpct)
+        mask = (probs >= best['prob_thresh']) & (final_ohlcv_opt['times'] == t_min_b) & vol_ok
         indices = np.where(mask)[0]
         if len(indices) == 0:
             continue
-        raw_pnl, raw_dates = _run_sim(indices, ohlcv_r2_opt, best)
+        raw_pnl, raw_dates = _run_sim(indices, final_ohlcv_opt, best)
         if len(raw_pnl) == 0:
             continue
         n = len(raw_pnl)
         tv, tt, ts = _attach_regime(raw_dates, regime_dict, n, t_min_b)
         pnl = _apply_filter(raw_pnl, tv, tt, ts,
                              best['vix_threshold'], best['tlt_crash'], best['spy_ignore'])
-        if len(pnl) < r2['min_trades']:
+        if len(pnl) < final_min_trades:
             continue
         avg = float(np.mean(pnl))
         if avg > best_score:
@@ -1244,15 +1316,19 @@ def optimize_rolling_wf(ticker, df_ohlcv, vol_baselines, atr_pct_series,
             best = {**best, 'vol_filter_pct': vpct,
                     'Avg_PnL': avg, 'Total_PnL': float(np.sum(pnl)),
                     'Win_Rate': float(np.mean(pnl > 0)),
-                    'Freq': len(pnl) / ohlcv_r2_opt['months'], 'Count': len(pnl)}
+                    'Freq': len(pnl) / final_ohlcv_opt['months'], 'Count': len(pnl)}
 
-    del ohlcv_r2_opt
+    if len(WF_ROUNDS) >= 2:
+        del ohlcv_r2_opt
 
     best.setdefault('vol_filter_pct', 0)
     _fill_defaults(best)
 
-    val_result = validate_params(ticker, ohlcv_r2_val, regime_dict, seed_prob, best)
-    del ohlcv_r2_val
+    val_result = validate_params(ticker, final_ohlcv_val, regime_dict, seed_prob, best)
+    if len(WF_ROUNDS) >= 2:
+        del ohlcv_r2_val
+    else:
+        del ohlcv_r1_opt, ohlcv_r1_val
     if val_result is None:
         val_result = {'Avg_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
 
@@ -1363,12 +1439,16 @@ if TICKER_SUBSET:
 
 completed_triples = set()
 if SKIP_COMPLETED:
-    exp_filter = ','.join(repr(e) for e in sorted(CLEAN_EXPERIMENTS))
+    exp_like = ' OR '.join(f"experiment LIKE '{e}%'" for e in sorted(CLEAN_EXPERIMENTS))
     skip_q = (f"SELECT DISTINCT experiment, ticker, tpsl_mode FROM `{BQ_TABLE_ID}` "
               f"WHERE model_version = '{MODEL_VERSION_TAG}' "
-              f"AND experiment IN ({exp_filter})")
+              f"AND ({exp_like})")
     for row in _bq_client.query(skip_q):
         completed_triples.add((row.experiment, row.ticker, row.tpsl_mode or 'static'))
+    if completed_triples:
+        skip_tickers = set(t for _, t, _ in completed_triples)
+        print(f"  SKIP_COMPLETED: {len(completed_triples)} triples found, "
+              f"{len(skip_tickers)} tickers have some results")
 
 regime_dict, vix_lk = preload_regime_data(WF_ROUNDS[0]['opt'][0], TEST_END)
 

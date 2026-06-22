@@ -833,7 +833,7 @@ def load_deploy_configs():
     if 'tpsl_mode' in df.columns:
         df = df[(df['tpsl_mode'].isna()) | (df['tpsl_mode'] == '') | (df['tpsl_mode'] == 'static')]
     df['val_a_total_pnl'] = df['val_a_avg_pnl'] * df['val_a_count']
-    df['composite'] = df['val_a_avg_pnl'] * df['val_a_win_rate'] * np.log2(1 + df['val_a_count'])
+    df['composite'] = df['val_a_avg_pnl'] * df['val_a_win_rate'] * np.sqrt(df['val_a_count']) * np.log2(1 + df['val_a_count'])
 
     df['run_timestamp'] = pd.to_datetime(df['run_timestamp'])
     _latest = (df.groupby(['experiment', 'ticker', 'run_id'])['run_timestamp']

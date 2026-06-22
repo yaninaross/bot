@@ -76,7 +76,7 @@ if 'vol_filter_pct' not in df.columns:
 df['vol_filter_pct'] = df['vol_filter_pct'].fillna(0).astype(int)
 
 df['val_a_total_pnl'] = df['val_a_avg_pnl'] * df['val_a_count']
-df['composite'] = df['val_a_avg_pnl'] * df['val_a_win_rate'] * np.log2(1 + df['val_a_count'])
+df['composite'] = df['val_a_avg_pnl'] * df['val_a_win_rate'] * np.sqrt(df['val_a_count']) * np.log2(1 + df['val_a_count'])
 
 # Keep only the most recent run per (experiment, ticker) — avoids discarding
 # data from complete earlier runs when a newer partial re-run exists.

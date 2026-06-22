@@ -33,7 +33,8 @@ EXCLUDE_TICKERS = {'TLT', 'VIX', 'SPY', 'IWM', 'MSTR'}
 W = 130
 # ── END CONFIG ──────────────────────────────────────────────────────────────
 
-DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR'}
+DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
+                      '175_XSECTOR', '180_XSECTOR', '185_XSECTOR'}
 
 client = bigquery.Client()
 query = f"SELECT * FROM `{BQ_TABLE}` WHERE model_version = '{MODEL_VERSION}'"
@@ -76,7 +77,7 @@ pre_dedup = len(df)
 df = df.sort_values('run_timestamp', ascending=False).drop_duplicates(subset=dedup_cols, keep='first')
 print(f"Deduped: {pre_dedup} → {len(df)} rows (removed {pre_dedup - len(df)} duplicate re-runs)")
 
-df['test_composite'] = df['val_b_avg_pnl'] * df['val_b_win_rate'] * np.log2(1 + df['val_b_count'])
+df['test_composite'] = df['val_b_avg_pnl'] * df['val_b_win_rate'] * np.sqrt(df['val_b_count']) * np.log2(1 + df['val_b_count'])
 
 experiments = sorted(df['base_experiment'].unique())
 tickers = sorted(df['ticker'].unique())

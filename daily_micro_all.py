@@ -2,13 +2,7 @@
 daily_micro_all.py — Unified Microstructure Bootstrapper
 =========================================================
 Downloads T&Q raw data from Polygon and computes microstructure
-parquets for ALL actively scored assets (21 tickers).
-
-Covers:
-  - Exp-152: RCAT
-  - Exp-160: KEEL, PLUG, RIOT, IREN
-  - Exp-170: ALAB, APLD, ASTS, BBAI, BE, BTBT, CIFR, CLSK, FCEL, HUT, JOBY, LUNR
-  + monitoring: SPIR, WULF, RKLB, MVIS, ACHR
+parquets for ALL actively scored/training assets (74 tickers).
 
 Fully incremental and idempotent: already up-to-date tickers are skipped,
 gaps are filled from GCS cache or Polygon API.
@@ -30,12 +24,13 @@ warnings.filterwarnings('ignore')
 # ⚙️  CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # --- Exp-152 / 160 / 170 Cross-sector ---
-    'RCAT', 'ASTS', 'HUT', 'SPIR',
-    'CIFR', 'WULF', 'RKLB', 'APLD',
-    'LUNR', 'ALAB', 'BBAI', 'BE', 'FCEL', 'RIOT',
-    'KEEL', 'IREN', 'CLSK', 'MVIS', 'PLUG',
-    'BTBT', 'JOBY',
+    # Tier 1+ scored tickers + superset for model inference
+    'ACHR', 'APLD', 'ASTS', 'BE', 'CIFR', 'CLSK', 'CORZ', 'KEEL',
+    'PL', 'RCAT', 'RIOT', 'WULF',
+    # Train teachers needed for model inference (not already above)
+    'BBAI', 'HUT', 'IREN', 'LUNR', 'MVIS',
+    # Additional tickers for broader WF coverage
+    'ALAB', 'OKLO', 'RKLB', 'RDW', 'SMCI',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
@@ -46,6 +41,8 @@ GCS_RAW_DIR   = f"gs://{BUCKET_NAME}/Data/TradesQuotes"
 
 # T&Q data starts from 2025-09-01 (bulk download range)
 HISTORY_START = "2025-09-01"
+
+GCS_STATUS_URI = f"gs://{BUCKET_NAME}/Data/Inference/pipeline_status.json"
 
 poly_client = RESTClient(POLYGON_API_KEY)
 gcs_client  = gcs_storage.Client()
@@ -58,6 +55,64 @@ def _blob_path(gcs_uri):
 
 def _gcs_exists(gcs_uri):
     return gcs_client.bucket(BUCKET_NAME).blob(_blob_path(gcs_uri)).exists()
+
+def _is_complete_trading_day(gcs_uri, kind):
+    """Check if a cached T&Q file covers US market hours (13:30-20:00 UTC)."""
+    try:
+        df = pd.read_parquet(gcs_uri)
+        if df.empty:
+            return False
+        ts_col = 'timestamp' if 'timestamp' in df.columns else None
+        if ts_col is None:
+            for c in ('ns', 'sip_timestamp', 'participant_timestamp'):
+                if c in df.columns:
+                    ts_col = c
+                    break
+        if ts_col is None:
+            return False
+        col = df[ts_col]
+        if pd.api.types.is_integer_dtype(col):
+            col = pd.to_datetime(col, unit='ns', utc=True)
+        elif pd.api.types.is_datetime64_any_dtype(col):
+            if col.dt.tz is None:
+                col = col.dt.tz_localize('UTC')
+        else:
+            col = pd.to_datetime(col, utc=True)
+        last_ts = col.max()
+        # Market closes ~20:00 UTC; if last timestamp is before 17:00 UTC,
+        # the file is almost certainly incomplete (pre-market or early session)
+        return last_ts.hour >= 17
+    except Exception:
+        return False
+
+def _recent_business_days(n=7):
+    """Return set of the last N business day date strings (YYYY-MM-DD)."""
+    today = pd.Timestamp.now(tz='UTC').normalize()
+    dates = pd.bdate_range(end=today, periods=n + 1, freq='B')
+    return {d.strftime('%Y-%m-%d') for d in dates}
+
+import json
+
+def _write_pipeline_status(stage, status):
+    """Write pipeline status to GCS so downstream scripts can check."""
+    blob = gcs_client.bucket(BUCKET_NAME).blob(_blob_path(GCS_STATUS_URI))
+    try:
+        existing = json.loads(blob.download_as_text())
+    except Exception:
+        existing = {}
+    existing[stage] = {
+        'status': status,
+        'timestamp': datetime.now(pytz.utc).isoformat(),
+    }
+    blob.upload_from_string(json.dumps(existing), content_type='application/json')
+
+def read_pipeline_status():
+    """Read pipeline status from GCS. Returns dict or empty dict."""
+    blob = gcs_client.bucket(BUCKET_NAME).blob(_blob_path(GCS_STATUS_URI))
+    try:
+        return json.loads(blob.download_as_text())
+    except Exception:
+        return {}
 
 # ==============================================================================
 # 🛠️  SCHEMA NORMALIZATION
@@ -155,6 +210,7 @@ if __name__ == "__main__":
     run_ts    = datetime.now(pytz.utc)
     fetch_end = run_ts
     print(f"   Run time : {run_ts.strftime('%Y-%m-%d %H:%M UTC')}")
+    _write_pipeline_status('daily_micro', 'running')
 
     # Deduplicate to be safe
     ALL_TICKERS = list(set(TARGET_TICKERS))
@@ -190,6 +246,8 @@ if __name__ == "__main__":
         micro_chunks    = []
         days_disk, days_api, days_empty = 0, 0, 0
 
+        recent_dates = _recent_business_days(2)
+
         for gap_date in gap_dates:
             date_str = gap_date.strftime('%Y-%m-%d')
             t_fname  = f"{clean_ticker}_trades_{date_str}.parquet"
@@ -199,7 +257,21 @@ if __name__ == "__main__":
 
             dt, dq = pd.DataFrame(), pd.DataFrame()
 
-            if _gcs_exists(t_uri) and _gcs_exists(q_uri):
+            cache_exists = _gcs_exists(t_uri) and _gcs_exists(q_uri)
+            use_cache = False
+
+            if cache_exists:
+                if date_str in recent_dates:
+                    # Recent date — validate that cache covers market hours
+                    if _is_complete_trading_day(t_uri, 'trades'):
+                        use_cache = True
+                    else:
+                        print(f"      🔄 {date_str}: stale cache (pre-market only) — re-fetching")
+                else:
+                    # Older date — trust the cache
+                    use_cache = True
+
+            if use_cache:
                 try:
                     if _valid_raw_file(t_fname, clean_ticker, 'trades') and \
                        _valid_raw_file(q_fname, clean_ticker, 'quotes'):
@@ -212,7 +284,7 @@ if __name__ == "__main__":
                     print(f"      ⚠️  {date_str}: disk read failed — {e}")
                     continue
             else:
-                # Not in GCS — call Polygon and upload raw files for future runs
+                # Not in GCS or stale cache — call Polygon and upload raw files
                 day_start = pd.Timestamp(gap_date, tz='UTC')
                 day_end   = min(day_start + timedelta(days=1), fetch_end)
                 try:
@@ -223,6 +295,8 @@ if __name__ == "__main__":
                     if not dq.empty:
                         dq.to_parquet(q_uri, engine='pyarrow')
                     days_api += 1
+                    if dt.empty and dq.empty and date_str in recent_dates:
+                        print(f"      ⚠️  {date_str}: Polygon returned empty — data may not be available yet")
                 except Exception as e:
                     print(f"      ⚠️  {date_str}: API error — {e}")
                     continue
@@ -268,4 +342,5 @@ if __name__ == "__main__":
         df_micro.to_parquet(micro_uri, engine='pyarrow')
         print(f"      ✅ Appended {len(new_micro):,} rows  |  total: {len(df_micro):,} rows")
 
+    _write_pipeline_status('daily_micro', 'complete')
     print("\n🎉 daily_micro_all.py COMPLETE.")

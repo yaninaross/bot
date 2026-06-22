@@ -47,20 +47,38 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 BUCKET_NAME = "time-series-bucket-ys"
 GCS_RAW_DIR = "Data/TradesQuotes"
-GCS_MICRO_DIR = "Data/Inference/Microstructure"
-GCS_OHLCV_DIR = "Data/Inference"
+GCS_MICRO_DIR  = "Data/Inference/Microstructure"
+GCS_OHLCV_DIR  = "Data/Inference"
+GCS_MASTER_DIR = "Data/Inference_v2"
 
 ALL_TICKERS = [
-    # Exp-150/151 (Energy / AI Power)
-    'VST', 'CEG', 'GEV', 'BE', 'CCJ', 'NEE', 'DUK',
-    # Exp-190 (Space / Dual-Use)
+    # --- Crypto ---
+    'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'MSTR', 'COIN',
+    'KEEL', 'HUT', 'CIFR', 'BTBT', 'BGDE', 'HOOD', 'CORZ',
+    'BITF', 'MIGI', 'SMLR',
+    # --- Defense / space ---
+    'AVAV', 'KTOS', 'PLTR', 'BBAI', 'RKLB', 'ASTS', 'LUNR', 'SPIR',
+    'JOBY', 'NNDM', 'MVIS', 'RCAT', 'ACHR', 'NBIS', 'SOUN',
     'PL', 'RDW', 'BKSY', 'MNTS', 'VOYG',
-    # Defense Primes
+    # --- Energy / AI Power ---
+    'VST', 'CEG', 'GEV', 'BE', 'CCJ', 'NEE', 'DUK',
+    'ALAB', 'FCEL', 'FLNC', 'PLUG', 'OKLO', 'SMR', 'MP', 'POWL', 'MOD',
+    # --- Defense Primes ---
     'GD', 'LHX', 'LMT', 'NOC', 'RTX', 'GE',
-    # EXP-151/152 additions (energy expansion + cross-sector spikers)
-    'OKLO', 'SMR', 'FCEL', 'FLNC', 'PLUG', 'MP', 'POWL', 'MOD', 'ALAB',
+    # --- Tech / large-cap ---
+    'SMCI', 'TSLA', 'VRT', 'AMD', 'NVDA',
+    # --- Commodities / industrial ---
+    'BHP', 'CAT', 'COP', 'CVX', 'EQIX', 'ETN', 'FCX', 'LIN', 'MU', 'XOM',
 ]
-# Context assets (SMH, ITA, MOD, VIX, TLT, IWM, BTCUSD, SPY) are OHLCV-only — no micro needed
+# Context assets (SMH, BTCUSD, VIX, TLT, IWM, SPY) are OHLCV-only — no micro needed
+
+# Skip tickers already rebuilt recently — remove this block once all 75 are done
+ALREADY_REBUILT = {
+    'ACHR', 'ALAB', 'APLD', 'ASTS', 'BE', 'BTBT', 'CIFR', 'CLSK', 'FCEL', 'IREN',
+    'JOBY', 'KEEL', 'LUNR', 'OKLO', 'PL', 'PLUG', 'RCAT', 'RDW', 'RIOT', 'RKLB',
+    'SMCI', 'WULF',
+}
+ALL_TICKERS = [t for t in ALL_TICKERS if t not in ALREADY_REBUILT]
 
 DATA_START = "2022-01-01"
 
@@ -290,7 +308,7 @@ def main(ticker_list=None):
 
         # ── Step 4: Rebuild master_inference ──
         ohlcv_uri = f"{GCS_OHLCV_DIR}/{ticker}_1m_full_historical_data.parquet"
-        master_uri = f"{GCS_OHLCV_DIR}/{ticker}_master_inference.parquet"
+        master_uri = f"{GCS_MASTER_DIR}/{ticker}_master_inference.parquet"
 
         ohlcv_blob = bucket.blob(ohlcv_uri)
         if ohlcv_blob.exists():

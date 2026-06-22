@@ -1,11 +1,17 @@
 """
-exp_170_score_only.py — Score assets for walk-forward fold 175
-==============================================================
+exp_170_score_only.py — Score ALL assets for walk-forward folds 170-175
+=======================================================================
 Loads trained models from GCS (Saved_models_v2), scores SCORING_POOL
 tickers one at a time, uploads result CSVs to Results_all_v2.
 
+All 6 folds (170-175), 15 seeds each = 90 models.
+Full ticker universe (~70 tickers with master_inference data).
+
 Skips any (seed, ticker) that already has a CSV in GCS.
 Aggressive gc.collect() between tickers to stay under RAM limits.
+
+Set FOLD_RANGE to control which folds to score in this notebook.
+Run multiple notebooks with different FOLD_RANGE for parallel scoring.
 """
 
 import sys
@@ -18,9 +24,9 @@ import numpy as np
 import pandas as pd
 import pytz
 
-SCRIPT_VERSION = "175.1-score-only"
+SCRIPT_VERSION = "170.2-score-only"
 print(f"Script version: {SCRIPT_VERSION}")
-print("Scoring-only for Walk-Forward fold 175...")
+print("Scoring-only for Walk-Forward folds 170-175 (all assets)...")
 
 try:
     import tensorflow as tf
@@ -61,21 +67,44 @@ if gpus:
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-FOLDS_TO_SCORE = [
+ALL_FOLDS = [
+    {'exp_id': '170_XSECTOR', 'cutoff': '2025-03-01', 'seeds': [17001+i for i in range(15)]},
+    {'exp_id': '171_XSECTOR', 'cutoff': '2025-05-01', 'seeds': [17101+i for i in range(15)]},
     {'exp_id': '172_XSECTOR', 'cutoff': '2025-07-01', 'seeds': [17201+i for i in range(15)]},
     {'exp_id': '173_XSECTOR', 'cutoff': '2025-09-01', 'seeds': [17301+i for i in range(15)]},
     {'exp_id': '174_XSECTOR', 'cutoff': '2025-11-01', 'seeds': [17401+i for i in range(15)]},
+    {'exp_id': '175_XSECTOR', 'cutoff': '2026-01-01', 'seeds': [17501+i for i in range(15)]},
 ]
+
+# Set which folds to score in this notebook (e.g. [0,1,2] for folds 170-172)
+# Leave empty to score all 6
+FOLD_RANGE = []
+
+FOLDS_TO_SCORE = [ALL_FOLDS[i] for i in FOLD_RANGE] if FOLD_RANGE else ALL_FOLDS
 
 TRAIN_TEACHERS = [
     'BBAI', 'RCAT', 'LUNR', 'ASTS', 'ACHR', 'MVIS',
     'WULF', 'CIFR', 'IREN', 'KEEL', 'HUT', 'CLSK', 'APLD',
 ]
 SCORING_POOL = TRAIN_TEACHERS + [
+    # Original 170 scoring pool
     'MARA', 'RIOT', 'MSTR', 'COIN', 'SMCI', 'RKLB', 'BE',
     'FCEL', 'FLNC', 'PLUG', 'MP', 'POWL', 'MOD', 'ALAB',
     'OKLO', 'SMR',
+    # Expanded — all tickers with master_inference data
+    'BGDE', 'RDW', 'PL', 'VOYG', 'SPIR', 'BKSY', 'MNTS',
+    'JOBY', 'ACHR', 'HOOD', 'NNDM', 'KTOS', 'CORZ', 'NBIS',
+    'AVAV', 'BTBT', 'IREN',
+    # Large-cap / tech
+    'AMD', 'NVDA', 'TSLA', 'PLTR', 'SOUN', 'VRT', 'VST', 'MU',
+    # Defense
+    'GD', 'GE', 'GEV', 'LHX', 'LMT', 'NOC', 'RTX',
+    # Energy / resources
+    'BHP', 'CAT', 'CCJ', 'CEG', 'COP', 'CVX', 'XOM', 'FCX',
+    # Infra / utilities
+    'DUK', 'EQIX', 'ETN', 'LIN', 'NEE', 'NBIS',
 ]
+SCORING_POOL = sorted(set(SCORING_POOL))
 
 CONTEXT_ASSETS = ['SPY', 'VIX', 'TLT', 'IWM']
 MICRO_COLS = ['Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
@@ -96,7 +125,7 @@ ALL_COLS = ASSET_COLS + CONTEXT_COLS
 TIME_STEPS = 240
 EMBED_DIM  = 16
 PST = pytz.timezone('America/Los_Angeles')
-TICKER_FILE_MAP = {'BITF': 'KEEL'}
+TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 SPIKE_THRESHOLD = 0.10
 
 BUCKET_NAME   = "time-series-bucket-ys"
