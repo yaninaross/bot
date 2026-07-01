@@ -1,7 +1,7 @@
 """
 compare_strategies.py — BQ-only strategy comparison & ranking
 =============================================================
-Defines 8 portfolio construction strategies, evaluates each using
+Defines 16 portfolio construction strategies, evaluates each using
 val_b (out-of-sample PnL), and produces a single ranking table.
 
 Run this first, pick top 3, then update STRATEGIES_TO_RUN in
@@ -64,11 +64,12 @@ def assign_family(exp):
 q = '''
 SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        prob_thresh, tp_pct, sl_pct,
+       tp_mult, sl_mult, trail_start_mult, trail_end_mult,
+       grace_minutes, dip_pct, max_wait_minutes, vol_filter_pct,
        opt_avg_pnl, opt_win_rate, opt_count,
        val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
        val_b_avg_pnl, val_b_win_rate, val_b_count, val_b_freq,
-       survived_a, survived_b, is_ensemble,
-       dip_pct, max_wait_minutes
+       survived_a, survived_b, is_ensemble
 FROM `ys-time-series.scoring_logs.wf_optimization_results`
 WHERE model_version = 'robust_wf_v12'
   AND survived_a = TRUE AND val_a_count >= 3 AND val_a_avg_pnl > 0
@@ -79,6 +80,16 @@ WHERE model_version = 'robust_wf_v12'
 df = bq.query(q).to_dataframe()
 df['ticker'] = df['ticker'].replace(TICKER_RENAME)
 df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
+
+for col in ['grace_minutes', 'max_wait_minutes', 'vol_filter_pct']:
+    if col not in df.columns:
+        df[col] = 0
+    df[col] = df[col].fillna(0).astype(int)
+for col in ['dip_pct', 'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult']:
+    if col not in df.columns:
+        df[col] = 0.0
+    df[col] = df[col].fillna(0.0)
+
 df['exp_fam'] = df['experiment'].apply(assign_family)
 df = df[df['exp_fam'] != 'other']
 print(f"Loaded {len(df)} rows, {df['ticker'].nunique()} tickers, "
@@ -90,7 +101,10 @@ print(f"Loaded {len(df)} rows, {df['ticker'].nunique()} tickers, "
 # 2. BUILD SEED GROUPS
 # ══════════════════════════════════════════════════════════════════════════════
 GRP = ['ticker', 'experiment', 'tpsl_mode', 'entry_minute',
-       'prob_thresh', 'tp_pct', 'sl_pct']
+       'prob_thresh', 'tp_pct', 'sl_pct',
+       'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult',
+       'grace_minutes', 'dip_pct', 'max_wait_minutes',
+       'vol_filter_pct']
 
 sa = df.groupby(GRP).agg(
     n_seeds  =('seed', 'nunique'),
@@ -153,6 +167,29 @@ def compute_family_agreement(sa_limit):
             'vb_by_fam': dict(zip(tk_rows['exp_fam'], tk_rows['vb_pnl'])),
         }
     return agreement
+
+
+def strategy_seed_family(sa_base, sa_limit, agreement, seed_thresh=None, fam_gate='none'):
+    d = sa_limit.copy()
+    if seed_thresh is not None:
+        d = d[d['ag_18'] >= seed_thresh]
+    if d.empty:
+        return pd.DataFrame()
+
+    if fam_gate != 'none':
+        fam_ag = compute_family_agreement(d)
+        if fam_gate == 'all':
+            ok = {tk for tk, ag in fam_ag.items() if ag['all_pos']}
+        elif fam_gate == 'majority':
+            ok = {tk for tk, ag in fam_ag.items() if ag['majority_pos']}
+        elif fam_gate == 'half':
+            ok = {tk for tk, ag in fam_ag.items()
+                  if ag['frac_pos'] >= 0.5 and ag['n_fams'] >= 2}
+        else:
+            ok = set(d['ticker'].unique())
+        d = d[d['ticker'].isin(ok)]
+
+    return select_best(d, score_fn=score_pnl2)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -336,6 +373,31 @@ def strategy_S11(sa_base, sa_limit, agreement):
     return select_best(fam_limit, score_fn=score_pnl2)
 
 
+def strategy_S12(sa_base, sa_limit, agreement):
+    """S12: Seeds100 + AllFam — 100% seeds ≥1.8%, all families positive vb."""
+    return strategy_seed_family(sa_base, sa_limit, agreement, seed_thresh=1.0, fam_gate='all')
+
+
+def strategy_S13(sa_base, sa_limit, agreement):
+    """S13: Seeds80 — 80% seeds ≥1.8% (seed-only gate)."""
+    return strategy_seed_family(sa_base, sa_limit, agreement, seed_thresh=0.80, fam_gate='none')
+
+
+def strategy_S14(sa_base, sa_limit, agreement):
+    """S14: Seeds50 — 50% seeds ≥1.8% (seed-only gate)."""
+    return strategy_seed_family(sa_base, sa_limit, agreement, seed_thresh=0.50, fam_gate='none')
+
+
+def strategy_S15(sa_base, sa_limit, agreement):
+    """S15: Seeds80 + MajFam — 80% seeds ≥1.8% AND majority-positive families."""
+    return strategy_seed_family(sa_base, sa_limit, agreement, seed_thresh=0.80, fam_gate='majority')
+
+
+def strategy_S16(sa_base, sa_limit, agreement):
+    """S16: Seeds50 + HalfFam — 50% seeds ≥1.8% AND ≥50% families positive."""
+    return strategy_seed_family(sa_base, sa_limit, agreement, seed_thresh=0.50, fam_gate='half')
+
+
 STRATEGIES = {
     'S1': ('Limit All',              strategy_S1, 'limit_entry only, best per ticker'),
     'S2': ('Limit + Multi-Fam',      strategy_S2, 'limit_entry, ≥2 families'),
@@ -348,6 +410,11 @@ STRATEGIES = {
     'S9': ('Best Family',            strategy_S9, 'limit_entry, best vb family per ticker'),
     'S10': ('VB-Positive',           strategy_S10, 'limit_entry, best per ticker, vb > 0 only'),
     'S11': ('180-185 Only',          strategy_S11, 'limit_entry, 180-185 WF family only'),
+    'S12': ('Seeds100 + AllFam',    strategy_S12, '100% seeds ≥1.8%, all families pos vb'),
+    'S13': ('Seeds80',              strategy_S13, '80% seeds ≥1.8% (seed-only gate)'),
+    'S14': ('Seeds50',              strategy_S14, '50% seeds ≥1.8% (seed-only gate)'),
+    'S15': ('Seeds80 + MajFam',     strategy_S15, '80% seeds ≥1.8% + majority fam pos'),
+    'S16': ('Seeds50 + HalfFam',    strategy_S16, '50% seeds ≥1.8% + ≥50% fam pos'),
 }
 
 
@@ -573,4 +640,5 @@ for i, (_, r) in enumerate(top3.iterrows(), 1):
 
 top3_keys = top3['key'].tolist()
 print(f"  → Set STRATEGIES_TO_RUN = {top3_keys} in backtest_strategies.py")
+print(f"  → Run backtest_strategies.py for day-by-day equity curves (requires GPU)")
 print(f"{'═'*W}")

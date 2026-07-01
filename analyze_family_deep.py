@@ -44,11 +44,13 @@ BUCKET_NAME = "time-series-bucket-ys"
 INFERENCE_DIR = "Data/Inference_v2"
 SPIKE_THRESHOLD = 0.10
 
-MODEL_VERSION = 'robust_wf_v5'
+MODEL_VERSION = 'robust_wf_v12'
 
 CLEAN_EXP_BASES = ('152_XSECTOR', '160_XSECTOR',
                    '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
-                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR')
+                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR',
+                   '180_XSECTOR', '181_XSECTOR', '182_XSECTOR',
+                   '183_XSECTOR', '184_XSECTOR', '185_XSECTOR')
 
 FOLD_MAP = {
     '170_XSECTOR': {'cutoff': '2025-03-01', 'label': 'F1 (Mar25)', 'order': 1},
@@ -59,6 +61,15 @@ FOLD_MAP = {
     '175_XSECTOR': {'cutoff': '2026-01-01', 'label': 'F6 (Jan26)', 'order': 6},
 }
 
+FOLD_MAP_180 = {
+    '180_XSECTOR': {'cutoff': '2025-08-01', 'label': 'F1 (Aug25)', 'order': 1},
+    '181_XSECTOR': {'cutoff': '2025-09-01', 'label': 'F2 (Sep25)', 'order': 2},
+    '182_XSECTOR': {'cutoff': '2025-10-01', 'label': 'F3 (Oct25)', 'order': 3},
+    '183_XSECTOR': {'cutoff': '2025-11-01', 'label': 'F4 (Nov25)', 'order': 4},
+    '184_XSECTOR': {'cutoff': '2025-12-01', 'label': 'F5 (Dec25)', 'order': 5},
+    '185_XSECTOR': {'cutoff': '2026-01-01', 'label': 'F6 (Jan26)', 'order': 6},
+}
+
 REGIME_CHECK_TICKERS = [
     'LUNR', 'BBAI', 'WULF', 'CIFR', 'IREN', 'CLSK', 'HUT', 'MARA', 'RIOT',
     'RCAT', 'ASTS', 'ACHR', 'MVIS', 'KEEL', 'APLD',
@@ -67,7 +78,8 @@ REGIME_CHECK_TICKERS = [
 TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
 
-_TPSL_SUFFIXES = ('_ATRADP', '_TRAIL', '_REGIME', '_ATR')
+_TPSL_SUFFIXES = ('_ATRADP', '_REGADP', '_TRAIL', '_REGIME', '_ATRSL', '_ATR',
+                  '_GRACE', '_LIMIT')
 def _base_exp(e):
     for sfx in _TPSL_SUFFIXES:
         if e.endswith(sfx):
@@ -78,17 +90,19 @@ def _exp_family(exp_name):
     base = _base_exp(exp_name)
     if 'XSECTOR' not in base:
         return None
-    if base.startswith('17'):
-        return 'walkforward'
-    if base == '160_XSECTOR':
-        return 'early_cutoff'
-    if base == '152_XSECTOR':
-        return 'late_cutoff'
+    num_str = base.split('_')[0]
+    if not num_str.isdigit():
+        return None
+    num = int(num_str)
+    if num == 152: return 'late_cutoff'
+    if num == 160: return 'early_cutoff'
+    if 170 <= num <= 175: return 'walkforward_170'
+    if 180 <= num <= 185: return 'walkforward_180'
     return None
 
-FAMILIES = ['late_cutoff', 'early_cutoff', 'walkforward']
+FAMILIES = ['late_cutoff', 'early_cutoff', 'walkforward_170', 'walkforward_180']
 FAMILY_LABELS = {'late_cutoff': '152 (Oct25)', 'early_cutoff': '160 (Mar25)',
-                 'walkforward': '170 (WF)'}
+                 'walkforward_170': '170 WF', 'walkforward_180': '180 WF'}
 
 W = 120
 np.random.seed(42)
@@ -103,7 +117,18 @@ print(f"  H2: Too few trades in OPT → optimizer selects flukes")
 print(f"{'='*W}")
 
 client = bigquery.Client()
-query = f"SELECT * FROM `{BQ_TABLE}` ORDER BY experiment, ticker, seed"
+query = f"""
+SELECT experiment, ticker, seed, tpsl_mode, is_ensemble, run_id,
+       opt_avg_pnl, opt_win_rate, opt_count,
+       val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
+       val_b_avg_pnl, val_b_win_rate, val_b_count, val_b_freq,
+       survived_a, survived_b, model_version, run_timestamp,
+       prob_thresh, tp_pct, sl_pct, dip_pct, max_wait_minutes,
+       grace_minutes, vol_filter_pct
+FROM `{BQ_TABLE}`
+WHERE model_version = '{MODEL_VERSION}'
+ORDER BY experiment, ticker, seed
+"""
 df_all = client.query(query).to_dataframe()
 
 if df_all.empty:
@@ -268,8 +293,12 @@ print(f"  Each fold trained on progressively more recent data")
 print(f"  If later folds perform better → regime change IS happening")
 print(f"{'='*W}")
 
-fold_exps = [e for e in sorted(FOLD_MAP.keys()) if e in df['base_experiment'].values]
-if fold_exps:
+for wf_label, wf_fold_map in [('170-175 WF', FOLD_MAP), ('180-185 WF', FOLD_MAP_180)]:
+    fold_exps = [e for e in sorted(wf_fold_map.keys()) if e in df['base_experiment'].values]
+    if not fold_exps:
+        print(f"\n  {wf_label}: No fold data found.")
+        continue
+    print(f"\n  {wf_label}:")
     hdr2 = f"  {'Fold':<14} {'Cutoff':<12} {'Avg TEST':>9} {'Med TEST':>9} {'Avg WR':>7} {'Avg N':>6} {'Surv%':>6} {'Seeds':>6}"
     print(hdr2)
     print(f"  {'─'*14} {'─'*12} {'─'*9} {'─'*9} {'─'*7} {'─'*6} {'─'*6} {'─'*6}")
@@ -278,7 +307,7 @@ if fold_exps:
     fold_orders = []
 
     for fexp in fold_exps:
-        fi = FOLD_MAP[fexp]
+        fi = wf_fold_map[fexp]
         fd = df[df['base_experiment'] == fexp]
         surv = fd[fd['survived_a']]
 
@@ -303,27 +332,20 @@ if fold_exps:
     if len(fold_test_pnls) >= 3:
         slope, _, r_val, p_val, _ = sp_stats.linregress(fold_orders, fold_test_pnls)
         rho, rho_p = sp_stats.spearmanr(fold_orders, fold_test_pnls)
-        print(f"\n  Fold performance trend:")
+        print(f"\n  {wf_label} fold performance trend:")
         print(f"    Linear slope: {slope*100:+.2f}%/fold  (p={p_val:.3f})")
         print(f"    Spearman rho: {rho:+.2f}  (p={rho_p:.3f})")
         if slope > 0 and p_val < 0.15:
-            t2_verdict = "SUPPORTS H1 — later folds (more recent training) perform better"
-            t2_score = 4 if p_val < 0.05 else 3
+            print(f"  → SUPPORTS H1 — later folds (more recent training) perform better")
         elif slope < 0 and p_val < 0.15:
-            t2_verdict = "AGAINST H1 — earlier folds perform better (overfitting to recent noise?)"
-            t2_score = 0
+            print(f"  → AGAINST H1 — earlier folds perform better (overfitting to recent noise?)")
         else:
-            t2_verdict = "INCONCLUSIVE — no clear trend across folds"
-            t2_score = 1
-        print(f"  → {t2_verdict}")
+            print(f"  → INCONCLUSIVE — no clear trend across folds")
     else:
-        t2_verdict = "INCONCLUSIVE (too few folds with data)"
-        t2_score = 1
-        print(f"  → {t2_verdict}")
-else:
-    t2_verdict = "NO DATA (walk-forward folds not in BQ)"
-    t2_score = 0
-    print(f"  No walk-forward fold data found.")
+        print(f"\n  {wf_label}: too few folds with data for trend analysis")
+
+t2_verdict = "See per-family fold analysis above"
+t2_score = 2
 
 # ==============================================================================
 # TABLE 3: STALENESS TEST — 152 vs 160

@@ -432,24 +432,7 @@ else:
     market_df = build_market_context()
 
     # ==============================================================================
-    # ENGINEER TICKER DATA (once per ticker, reused across folds)
-    # ==============================================================================
-    print(f"\nEngineering features for {len(MISSING_TICKERS)} tickers...")
-    ticker_data = {}
-    for ticker in MISSING_TICKERS:
-        print(f"   {ticker}...")
-        df_eng = engineer_asset(ticker, market_df)
-        if df_eng is not None:
-            ticker_data[ticker] = df_eng
-            print(f"      rows={len(df_eng)}  range: {df_eng.index.min()} to {df_eng.index.max()}")
-        else:
-            print(f"      FAILED — skipping")
-        _release_memory()
-
-    print(f"\n   {len(ticker_data)}/{len(MISSING_TICKERS)} tickers loaded successfully")
-
-    # ==============================================================================
-    # SCORE EACH FOLD
+    # SCORE EACH FOLD — engineer one ticker at a time to avoid OOM
     # ==============================================================================
     total_uploaded = 0
 
@@ -500,27 +483,34 @@ else:
                 available_seeds.append(seed)
         print(f"  {len(available_seeds)}/{len(missing_seeds_this_fold)} models ready")
 
-        # --- Score ticker-by-ticker (load data once, score all seeds) ---
+        # --- Score ticker-by-ticker (engineer, score all seeds, free) ---
         fold_uploaded = 0
-        for ticker in missing_tickers_this_fold:
-            if ticker not in ticker_data:
-                continue
-
+        for t_idx, ticker in enumerate(missing_tickers_this_fold, 1):
             seeds_for_ticker = [s for s in available_seeds if (ticker, s) in missing_set]
             if not seeds_for_ticker:
                 continue
 
-            print(f"\n   {ticker} ({len(seeds_for_ticker)} seeds)...")
+            print(f"\n   [{t_idx}/{len(missing_tickers_this_fold)}] {ticker} ({len(seeds_for_ticker)} seeds)...")
 
-            df_scaled = apply_scaling(ticker_data[ticker], stats)
+            df_eng = engineer_asset(ticker, market_df)
+            if df_eng is None:
+                print(f"      FAILED to load — skipping")
+                continue
+
+            df_scaled = apply_scaling(df_eng, stats)
+            del df_eng
+            _release_memory()
+
             test_mask = df_scaled.index > aware_cutoff
             df_test   = df_scaled[test_mask]
+            del df_scaled
+            _release_memory()
 
             idx_v = np.where(df_test['Valid_Row'].values)[0]
             idx_v = idx_v[idx_v >= TIME_STEPS]
             if len(idx_v) == 0:
                 print(f"      No valid rows after cutoff — skipping")
-                del df_scaled, df_test
+                del df_test
                 _release_memory()
                 continue
 
@@ -569,7 +559,7 @@ else:
                 del model
                 _release_memory()
 
-            del df_scaled, df_test, XA_v, XC_v
+            del df_test, XA_v, XC_v
             _release_memory()
 
         total_uploaded += fold_uploaded
@@ -582,7 +572,7 @@ else:
                 os.remove(local_path)
         _release_memory()
 
-    del ticker_data, market_df
+    del market_df
     _release_memory()
 
     print(f"\n{'='*70}")

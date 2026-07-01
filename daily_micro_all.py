@@ -24,11 +24,10 @@ warnings.filterwarnings('ignore')
 # ⚙️  CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # Tier 1+ scored tickers + superset for model inference
-    'ACHR', 'APLD', 'ASTS', 'BE', 'CIFR', 'CLSK', 'CORZ', 'KEEL',
-    'PL', 'RCAT', 'RIOT', 'WULF',
+    # S3 deploy tickers (10)
+    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'PL', 'RCAT', 'RIOT',
     # Train teachers needed for model inference (not already above)
-    'BBAI', 'HUT', 'IREN', 'LUNR', 'MVIS',
+    'ASTS', 'BBAI', 'LUNR', 'MVIS', 'WULF',
     # Additional tickers for broader WF coverage
     'ALAB', 'OKLO', 'RKLB', 'RDW', 'SMCI',
 ]

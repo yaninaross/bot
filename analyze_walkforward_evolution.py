@@ -61,19 +61,24 @@ MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
                'regime_adaptive': '_REGADP', 'atr_sl': '_ATRSL',
                'grace': '_GRACE', 'limit_entry': '_LIMIT'}
 
-FAM_ORDER = ['152', '160', '170', '180']
+FAM_ORDER = ['152', '160', '170', '180', '200']
 FAM_LABELS = {
     '152': '152 Late',
     '160': '160 Early',
     '170': '170-175 WF',
     '180': '180-185 WF',
+    '200': '200 CNN-TX',
 }
 FAM_CUTOFFS = {
     '152': 'Jul 2025',
     '160': 'Apr 2025',
     '170': 'Apr-Jan 2026 (6 folds)',
     '180': 'Aug-Jan 2026 (6 folds)',
+    '200': 'Jan 2026 (CNN-TX)',
 }
+
+TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
+EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
 
 client = bigquery.Client()
 
@@ -105,12 +110,15 @@ WHERE model_version = '{MODEL_VERSION}'
        OR experiment LIKE '174_%' OR experiment LIKE '175_%'
        OR experiment LIKE '180_%' OR experiment LIKE '181_%'
        OR experiment LIKE '182_%' OR experiment LIKE '183_%'
-       OR experiment LIKE '184_%' OR experiment LIKE '185_%')
+       OR experiment LIKE '184_%' OR experiment LIKE '185_%'
+       OR experiment LIKE '200_%')
 """
 
 df_all = client.query(query).to_dataframe()
 print(f"  Loaded {len(df_all)} rows from BQ")
 
+df_all['ticker'] = df_all['ticker'].replace(TICKER_RENAME)
+df_all = df_all[~df_all['ticker'].isin(EXCLUDE_TICKERS)]
 df_all['tpsl_mode'] = df_all['tpsl_mode'].fillna('static')
 df_all['survived_b'] = df_all['survived_b'].fillna(False).astype(bool)
 df_all['survived_a'] = df_all['survived_a'].fillna(False).astype(bool)
@@ -133,6 +141,7 @@ def assign_family(exp):
     if num == 160: return '160'
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
+    if num == 200: return '200'
     return 'other'
 
 
@@ -357,10 +366,11 @@ print(f"{'='*W}")
 best_per_fam_tk = ens.loc[ens.groupby(['family', 'ticker'])['val_b_avg_pnl'].idxmax()].copy()
 pivot_prog = best_per_fam_tk.pivot(index='ticker', columns='family', values='val_b_avg_pnl')
 
-all_4_tickers = sorted(pivot_prog[FAM_ORDER].dropna().index)
+fams_present = [f for f in FAM_ORDER if f in pivot_prog.columns]
+all_fam_tickers = sorted(pivot_prog[fams_present].dropna().index)
 any_tickers = sorted(pivot_prog.index)
 
-print(f"\n  Tickers in ALL 4 families: {len(all_4_tickers)}")
+print(f"\n  Tickers in ALL {len(fams_present)} families: {len(all_fam_tickers)}")
 print(f"  Tickers in ANY family: {len(any_tickers)}")
 
 print(f"\n  {'Ticker':<7}", end='')

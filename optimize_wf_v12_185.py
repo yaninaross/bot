@@ -293,7 +293,7 @@ EXP_FAMILIES = {
     },
 }
 
-ACTIVE_FAMILY = 'single_185'  # fold 185 only — parallel with walkforward_185
+ACTIVE_FAMILY = 'walkforward_185'  # all 6 folds (180-185), all 9 modes
 
 _family = EXP_FAMILIES[ACTIVE_FAMILY]
 CLEAN_EXPERIMENTS = _family['experiments']
@@ -2576,15 +2576,22 @@ else:
         if not mode_results:
             continue
         df_diag = pd.DataFrame(mode_results)
-        n_pairs = len(REGIME_ADAPTIVE_CONFIGS) if mode == 'regime_adaptive' else len(TPSL_PAIRS[mode])
+        if mode == 'regime_adaptive':
+            n_pairs = len(REGIME_ADAPTIVE_CONFIGS)
+        elif mode == 'grace':
+            n_pairs = len(GRACE_CONFIGS)
+        elif mode == 'limit_entry':
+            n_pairs = len(LIMIT_ENTRY_CONFIGS)
+        else:
+            n_pairs = len(TPSL_PAIRS[mode])
         k_tested = len(PROB_THRESHOLDS) * n_pairs
         sigma = 0.10
 
         diag_by_ticker = df_diag.groupby('Ticker').agg(
             n_opt=('Count', 'first'),
             opt_pnl=('Avg_PnL', 'max'),
-            val_pnl=('val_a_avg_pnl', lambda x: x.iloc[df_diag.loc[x.index, 'Avg_PnL'].idxmax()]),
-            test_pnl=('val_b_avg_pnl', lambda x: x.iloc[df_diag.loc[x.index, 'Avg_PnL'].idxmax()]),
+            val_pnl=('val_a_avg_pnl', lambda x: x.iloc[df_diag.loc[x.index, 'Avg_PnL'].values.argmax()]),
+            test_pnl=('val_b_avg_pnl', lambda x: x.iloc[df_diag.loc[x.index, 'Avg_PnL'].values.argmax()]),
         ).sort_values('opt_pnl', ascending=False)
 
         print(f"\n  {mode.upper()}:")

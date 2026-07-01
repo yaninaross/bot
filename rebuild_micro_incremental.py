@@ -41,12 +41,11 @@ GCS_OHLCV_DIR  = "Data/Inference"
 GCS_MASTER_DIR = "Data/Inference_v2"
 
 ALL_TICKERS = [
-    # Strategy H traded tickers (12)
-    'ACHR', 'APLD', 'ASTS', 'BE', 'CIFR', 'CLSK', 'CORZ', 'KEEL',
-    'PL', 'RCAT', 'RIOT', 'WULF',
+    # S3 deploy tickers (10)
+    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'PL', 'RCAT', 'RIOT',
     # Train teachers needed for model inference (not already above)
-    'BBAI', 'HUT', 'IREN', 'LUNR', 'MVIS',
-    # Hardcoded EXP_170 + EXP_185 tickers
+    'ASTS', 'BBAI', 'LUNR', 'MVIS', 'WULF',
+    # Additional tickers for broader WF coverage
     'ALAB', 'OKLO', 'RKLB', 'RDW', 'SMCI',
 ]
 

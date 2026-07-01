@@ -49,8 +49,10 @@ OHLCV_DIR      = "Data/Inference"
 INFERENCE_DIR  = "Data/Inference_v2"
 
 JUNE_START = '2026-06-01'
-JUNE_END   = '2026-06-09'
+JUNE_END   = '2026-06-29'
+LAST_WEEK_START = '2026-06-22'
 STARTING_CAPITAL = 200_000
+SLIPPAGE_PCT = 0.0015
 
 PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
@@ -93,6 +95,10 @@ SELECT
     vol_median,
     tpsl_mode,
     atr_pct_entry,
+    dip_pct,
+    max_wait_minutes,
+    trail_start,
+    trail_end,
     bar_timestamp,
     run_timestamp
 FROM `{BQ_LOG_TABLE}`
@@ -116,6 +122,8 @@ df_log['sl_pct'] = df_log['sl_pct'].fillna(0).astype(float)
 df_log['prob'] = df_log['prob'].fillna(0).astype(float)
 df_log['threshold'] = df_log['threshold'].fillna(0).astype(float)
 df_log['entry_close'] = df_log['entry_close'].fillna(0).astype(float)
+df_log['dip_pct'] = df_log['dip_pct'].fillna(0.01).astype(float)
+df_log['max_wait_minutes'] = df_log['max_wait_minutes'].fillna(30).astype(int)
 
 
 # ==============================================================================
@@ -281,11 +289,14 @@ for ticker in sorted(all_tickers_needed):
 
 MIN_BARS_FULL_DAY = 200
 
-def compute_trade_outcome(ticker, date_str, entry_min, entry_price, tp_pct, sl_pct):
-    """Compute actual TP/SL/EOD outcome for a single trade."""
+def compute_trade_outcome(ticker, date_str, entry_min, entry_price, tp_pct, sl_pct,
+                          tpsl_mode='static', dip_pct=0, max_wait=0):
+    """Compute actual TP/SL/EOD outcome for a single trade.
+    For limit_entry modes: simulates limit fill then TP/SL from fill price."""
     _empty = {'actual_pnl': None, 'actual_exit': 'NO_DATA',
               'max_gain': None, 'max_drop': None, 'eod_price': None, 'eod_ret': None,
-              'time_to_exit': None, 'n_bars': 0, 'last_bar': None, 'data_complete': False}
+              'time_to_exit': None, 'n_bars': 0, 'last_bar': None, 'data_complete': False,
+              'fill_price': None, 'mfe': None, 'mae': None, 'eod_after_sl': None}
 
     if ticker not in ohlcv_cache or entry_price <= 0:
         return _empty
@@ -306,24 +317,58 @@ def compute_trade_outcome(ticker, date_str, entry_min, entry_price, tp_pct, sl_p
         _empty['actual_exit'] = 'NO_BARS'
         return _empty
 
-    n_bars = len(after_entry)
-    last_bar = after_entry.index[-1]
+    is_limit = 'limit' in str(tpsl_mode).lower() and dip_pct > 0
+
+    if is_limit:
+        limit_price = entry_price * (1.0 - dip_pct)
+        fill_idx = None
+        for i in range(1, len(after_entry)):
+            bar_ts = after_entry.index[i]
+            mins_elapsed = (bar_ts - entry_ts).total_seconds() / 60.0
+            if mins_elapsed > max_wait:
+                break
+            if after_entry['Low'].iloc[i] <= limit_price:
+                fill_idx = i
+                break
+
+        if fill_idx is None:
+            return {'actual_pnl': 0.0, 'actual_exit': 'NO_FILL',
+                    'max_gain': None, 'max_drop': None, 'eod_price': None, 'eod_ret': None,
+                    'time_to_exit': None, 'n_bars': len(after_entry), 'last_bar': after_entry.index[-1],
+                    'data_complete': len(after_entry) >= MIN_BARS_FULL_DAY,
+                    'fill_price': None, 'mfe': None, 'mae': None, 'eod_after_sl': None}
+
+        actual_entry = limit_price * (1.0 + SLIPPAGE_PCT)
+        after_fill = after_entry.iloc[fill_idx:]
+    else:
+        actual_entry = entry_price * (1.0 + SLIPPAGE_PCT)
+        after_fill = after_entry
+        fill_idx = 0
+
+    n_bars = len(after_fill)
+    last_bar = after_fill.index[-1]
     data_complete = n_bars >= MIN_BARS_FULL_DAY
 
-    highs_ret = (after_entry['High'].values / entry_price - 1)
-    lows_ret = (after_entry['Low'].values / entry_price - 1)
+    highs_ret = (after_fill['High'].values / actual_entry - 1)
+    lows_ret = (after_fill['Low'].values / actual_entry - 1)
     max_gain = float(np.max(highs_ret))
     max_drop = float(np.min(lows_ret))
-    eod_price = float(after_entry['Close'].iloc[-1])
-    eod_ret = (eod_price / entry_price - 1)
+    eod_price = float(after_fill['Close'].iloc[-1])
+    eod_ret = (eod_price / actual_entry - 1) - SLIPPAGE_PCT
 
     trade_pnl = eod_ret
     exit_type = 'EOD'
+    sl_bar_idx = None
+
     if sl_pct > 0 and max_drop <= -sl_pct:
-        trade_pnl = -sl_pct
+        trade_pnl = -sl_pct - 2 * SLIPPAGE_PCT
         exit_type = 'SL'
-    elif tp_pct > 0 and max_gain >= tp_pct:
-        trade_pnl = tp_pct
+        sl_mask = (after_fill['Low'] / actual_entry - 1) <= -sl_pct
+        sl_bars_df = after_fill[sl_mask]
+        if len(sl_bars_df) > 0:
+            sl_bar_idx = after_fill.index.get_loc(sl_bars_df.index[0])
+    if exit_type != 'SL' and tp_pct > 0 and max_gain >= tp_pct:
+        trade_pnl = tp_pct - 2 * SLIPPAGE_PCT
         exit_type = 'TP'
 
     if not data_complete and exit_type == 'EOD':
@@ -331,27 +376,42 @@ def compute_trade_outcome(ticker, date_str, entry_min, entry_price, tp_pct, sl_p
 
     time_to_exit = None
     if exit_type == 'SL':
-        sl_bars = after_entry[(after_entry['Low'] / entry_price - 1) <= -sl_pct]
-        if len(sl_bars) > 0:
-            time_to_exit = after_entry.index.get_loc(sl_bars.index[0]) - after_entry.index.get_loc(after_entry.index[0])
+        sl_bars_df = after_fill[(after_fill['Low'] / actual_entry - 1) <= -sl_pct]
+        if len(sl_bars_df) > 0:
+            time_to_exit = after_fill.index.get_loc(sl_bars_df.index[0])
     elif exit_type == 'TP':
-        tp_bars = after_entry[(after_entry['High'] / entry_price - 1) >= tp_pct]
-        if len(tp_bars) > 0:
-            time_to_exit = after_entry.index.get_loc(tp_bars.index[0]) - after_entry.index.get_loc(after_entry.index[0])
+        tp_bars_df = after_fill[(after_fill['High'] / actual_entry - 1) >= tp_pct]
+        if len(tp_bars_df) > 0:
+            time_to_exit = after_fill.index.get_loc(tp_bars_df.index[0])
+
+    mfe = max_gain
+    mae = max_drop
+
+    eod_after_sl = None
+    if exit_type == 'SL' and sl_bar_idx is not None and sl_bar_idx < len(after_fill) - 1:
+        remaining = after_fill.iloc[sl_bar_idx + 1:]
+        if len(remaining) > 0:
+            eod_after_sl = (float(remaining['Close'].iloc[-1]) / actual_entry - 1) - SLIPPAGE_PCT
 
     return {'actual_pnl': trade_pnl, 'actual_exit': exit_type,
             'max_gain': max_gain, 'max_drop': max_drop,
             'eod_price': eod_price, 'eod_ret': eod_ret,
             'time_to_exit': time_to_exit,
-            'n_bars': n_bars, 'last_bar': last_bar, 'data_complete': data_complete}
+            'n_bars': n_bars, 'last_bar': last_bar, 'data_complete': data_complete,
+            'fill_price': actual_entry if is_limit else entry_price,
+            'mfe': mfe, 'mae': mae, 'eod_after_sl': eod_after_sl}
 
 
 # Compute outcomes for TRADED signals
 outcomes = []
 for _, sig in df_traded.iterrows():
+    mode = str(sig.get('tpsl_mode', 'static'))
     result = compute_trade_outcome(
         sig['ticker'], sig['score_date'], sig['entry_minute'],
-        sig['entry_close'], sig['tp_pct'], sig['sl_pct'])
+        sig['entry_close'], sig['tp_pct'], sig['sl_pct'],
+        tpsl_mode=mode,
+        dip_pct=float(sig.get('dip_pct', 0)),
+        max_wait=int(sig.get('max_wait_minutes', 0)))
     outcomes.append({**sig.to_dict(), **result})
 
 df_out = pd.DataFrame(outcomes)
@@ -469,9 +529,13 @@ if len(df_blocked_go) > 0:
 
     blocked_outcomes = []
     for _, sig in df_blocked_go.iterrows():
+        mode = str(sig.get('tpsl_mode', 'static'))
         result = compute_trade_outcome(
             sig['ticker'], sig['score_date'], sig['entry_minute'],
-            sig['entry_close'], sig['tp_pct'], sig['sl_pct'])
+            sig['entry_close'], sig['tp_pct'], sig['sl_pct'],
+            tpsl_mode=mode,
+            dip_pct=float(sig.get('dip_pct', 0)),
+            max_wait=int(sig.get('max_wait_minutes', 0)))
         blocked_outcomes.append({**sig.to_dict(), **result})
 
     df_blocked_out = pd.DataFrame(blocked_outcomes)
@@ -617,6 +681,344 @@ if len(all_dedup) > 0:
         b = (day['decision'] == 'BLOCKED').sum()
         n = (day['decision'] == 'NO').sum()
         print(f"  {date:<12} {t:>7} {b:>8} {n:>4} {t+b+n:>6}")
+
+
+# ==============================================================================
+# TABLE 8: LAST WEEK DEEP DIVE (June 22-29)
+# ==============================================================================
+lw_trades = valid[valid['score_date'] >= LAST_WEEK_START].copy() if len(valid) > 0 else pd.DataFrame()
+lw_blocked = df_blocked_out[df_blocked_out['score_date'] >= LAST_WEEK_START] if len(df_blocked_out) > 0 else pd.DataFrame()
+
+print(f"\n\n{'='*W}")
+print(f"  TABLE 8: LAST WEEK DEEP DIVE — {LAST_WEEK_START} → {JUNE_END}")
+print(f"{'='*W}")
+
+if len(lw_trades) > 0:
+    # 8a: Day-by-day for last week
+    print(f"\n  8a) DAY-BY-DAY LAST WEEK")
+    print(f"  {'Date':<12} {'Trades':>7} {'Wins':>5} {'Loss':>5} {'WR':>5} "
+          f"{'AvgPnL':>8} {'AvgMFE':>8} {'AvgMAE':>8} "
+          f"{'TP':>3} {'SL':>3} {'EOD':>4} {'NoFill':>7} {'$PnL(200K)':>12}")
+    print(f"  {'─'*12} {'─'*7} {'─'*5} {'─'*5} {'─'*5} "
+          f"{'─'*8} {'─'*8} {'─'*8} "
+          f"{'─'*3} {'─'*3} {'─'*4} {'─'*7} {'─'*12}")
+
+    lw_dollar_total = 0
+    for date in sorted(lw_trades['score_date'].unique()):
+        day = lw_trades[lw_trades['score_date'] == date]
+        n = len(day)
+        wins = (day['actual_pnl'] > 0).sum()
+        losses = (day['actual_pnl'] <= 0).sum()
+        wr = wins / n * 100 if n > 0 else 0
+        avg_pnl = day['actual_pnl'].mean() * 100
+        avg_mfe = day['mfe'].dropna().mean() * 100 if day['mfe'].notna().any() else 0
+        avg_mae = day['mae'].dropna().mean() * 100 if day['mae'].notna().any() else 0
+        tp_c = (day['actual_exit'] == 'TP').sum()
+        sl_c = (day['actual_exit'] == 'SL').sum()
+        eod_c = (day['actual_exit'] == 'EOD').sum()
+        nf_c = (day['actual_exit'] == 'NO_FILL').sum()
+        alloc_per = STARTING_CAPITAL / n if n > 0 else 0
+        day_dollar = sum(alloc_per * pnl for pnl in day['actual_pnl'])
+        lw_dollar_total += day_dollar
+        marker = '>>' if day_dollar < 0 else '  '
+        print(f"{marker}{date:<12} {n:>7} {wins:>5} {losses:>5} {wr:>4.0f}% "
+              f"{avg_pnl:>+7.2f}% {avg_mfe:>+7.2f}% {avg_mae:>+7.2f}% "
+              f"{tp_c:>3} {sl_c:>3} {eod_c:>4} {nf_c:>7} ${day_dollar:>+11,.0f}")
+
+    lw_n = len(lw_trades)
+    lw_wins = (lw_trades['actual_pnl'] > 0).sum()
+    lw_wr = lw_wins / lw_n * 100 if lw_n > 0 else 0
+    print(f"\n  LAST WEEK TOTAL: {lw_n} trades, {lw_wins} wins ({lw_wr:.0f}% WR), "
+          f"avg PnL={lw_trades['actual_pnl'].mean()*100:+.2f}%, ${lw_dollar_total:+,.0f}")
+
+    # 8b: Loss inventory
+    lw_losses = lw_trades[lw_trades['actual_pnl'] <= 0].copy()
+    if len(lw_losses) > 0:
+        print(f"\n  8b) LOSS INVENTORY — {len(lw_losses)} losing trades last week")
+        print(f"  {'Date':<12} {'Ticker':<7} {'Entry$':>8} {'Fill$':>8} {'Exit':>7} {'PnL':>7} "
+              f"{'MFE':>7} {'MAE':>7} {'EODret':>7} {'Mode':>8}")
+        print(f"  {'─'*12} {'─'*7} {'─'*8} {'─'*8} {'─'*7} {'─'*7} "
+              f"{'─'*7} {'─'*7} {'─'*7} {'─'*8}")
+        for _, r in lw_losses.sort_values('actual_pnl').iterrows():
+            fill_str = f"${r['fill_price']:>7.2f}" if pd.notna(r.get('fill_price')) else '    N/A'
+            mfe_str = f"{r['mfe']*100:>+6.2f}%" if pd.notna(r.get('mfe')) else '   N/A '
+            mae_str = f"{r['mae']*100:>+6.2f}%" if pd.notna(r.get('mae')) else '   N/A '
+            eod_str = f"{r['eod_ret']*100:>+6.2f}%" if pd.notna(r.get('eod_ret')) else '   N/A '
+            mode = str(r.get('tpsl_mode', ''))[:8]
+            print(f"  {r['score_date']:<12} {r['ticker']:<7} ${r['entry_close']:>7.2f} {fill_str} "
+                  f"{r['actual_exit']:>7} {r['actual_pnl']*100:>+6.2f}% "
+                  f"{mfe_str} {mae_str} {eod_str} {mode:>8}")
+
+    # 8c: SL bounce-back analysis
+    lw_sl = lw_trades[lw_trades['actual_exit'] == 'SL'].copy()
+    if len(lw_sl) > 0:
+        print(f"\n  8c) SL BOUNCE-BACK — {len(lw_sl)} SL exits last week")
+        print(f"  {'Date':<12} {'Ticker':<7} {'SL PnL':>7} {'EOD after SL':>13} {'Bounce?':>8} {'Left on table':>14}")
+        print(f"  {'─'*12} {'─'*7} {'─'*7} {'─'*13} {'─'*8} {'─'*14}")
+        bounce_count = 0
+        total_left = 0
+        for _, r in lw_sl.sort_values(['score_date', 'ticker']).iterrows():
+            eod_after = r.get('eod_after_sl')
+            if pd.notna(eod_after):
+                bounced = eod_after > 0
+                if bounced:
+                    bounce_count += 1
+                    left = eod_after - r['actual_pnl']
+                    total_left += left
+                bounce_str = 'YES' if bounced else 'no'
+                eod_str = f"{eod_after*100:>+6.2f}%"
+                left_str = f"{left*100:>+6.2f}%" if bounced else '—'
+            else:
+                bounce_str = '?'
+                eod_str = '      N/A'
+                left_str = '—'
+            print(f"  {r['score_date']:<12} {r['ticker']:<7} {r['actual_pnl']*100:>+6.2f}% "
+                  f"{eod_str:>13} {bounce_str:>8} {left_str:>14}")
+
+        print(f"\n  SL bounce-back rate: {bounce_count}/{len(lw_sl)} "
+              f"({bounce_count/len(lw_sl)*100:.0f}%) would have been profitable at EOD")
+        if bounce_count > 0:
+            print(f"  Total PnL left on table by SL whipsaws: {total_left*100:+.2f}%")
+
+    # 8d: Loss clustering
+    if len(lw_losses) > 0:
+        print(f"\n  8d) LOSS CLUSTERING")
+
+        print(f"\n  By Ticker:")
+        ticker_losses = lw_losses.groupby('ticker').agg(
+            n=('actual_pnl', 'count'),
+            avg_pnl=('actual_pnl', 'mean'),
+            total_pnl=('actual_pnl', 'sum')
+        ).sort_values('total_pnl')
+        for ticker, row in ticker_losses.iterrows():
+            print(f"    {ticker:<7} {row['n']:>3} losses, avg={row['avg_pnl']*100:+.2f}%, total={row['total_pnl']*100:+.2f}%")
+
+        print(f"\n  By Day:")
+        day_losses = lw_losses.groupby('score_date').agg(
+            n=('actual_pnl', 'count'),
+            avg_pnl=('actual_pnl', 'mean'),
+            total_pnl=('actual_pnl', 'sum')
+        ).sort_values('total_pnl')
+        for date, row in day_losses.iterrows():
+            print(f"    {date:<12} {row['n']:>3} losses, avg={row['avg_pnl']*100:+.2f}%, total={row['total_pnl']*100:+.2f}%")
+
+    # 8e: Regime conditions on loss days
+    if len(lw_losses) > 0:
+        print(f"\n  8e) REGIME CONDITIONS ON LOSS DAYS")
+        print(f"  {'Date':<12} {'Ticker':<7} {'VIX':>6} {'TLT%':>7} {'SPY%':>7} {'VolFilt':>8} {'VolOK':>6}")
+        print(f"  {'─'*12} {'─'*7} {'─'*6} {'─'*7} {'─'*7} {'─'*8} {'─'*6}")
+        for _, r in lw_losses.sort_values(['score_date', 'ticker']).iterrows():
+            vix_str = f"{r['vix_value']:.1f}" if pd.notna(r.get('vix_value')) else '—'
+            tlt_str = f"{r['tlt_gap_pct']*100:.2f}%" if pd.notna(r.get('tlt_gap_pct')) else '—'
+            spy_str = f"{r['spy_gap_pct']*100:.2f}%" if pd.notna(r.get('spy_gap_pct')) else '—'
+            vf_str = f"{r['vol_filter_pct']:.0f}" if pd.notna(r.get('vol_filter_pct')) else '—'
+            vo_str = str(r.get('vol_filter_ok', '—'))
+            print(f"  {r['score_date']:<12} {r['ticker']:<7} {vix_str:>6} {tlt_str:>7} {spy_str:>7} {vf_str:>8} {vo_str:>6}")
+else:
+    print(f"\n  No traded signals in last week ({LAST_WEEK_START} → {JUNE_END}).")
+
+
+# ==============================================================================
+# TABLE 9: LOSS DRIVER ANALYSIS (full June)
+# ==============================================================================
+print(f"\n\n{'='*W}")
+print(f"  TABLE 9: LOSS DRIVER ANALYSIS — Full June")
+print(f"{'='*W}")
+
+if len(valid) > 0:
+    all_losses = valid[valid['actual_pnl'] <= 0].copy()
+    no_fills = df_out[df_out['actual_exit'] == 'NO_FILL']
+
+    categories = {}
+
+    sl_trades = all_losses[all_losses['actual_exit'] == 'SL']
+    if len(sl_trades) > 0:
+        sl_pure = sl_trades[sl_trades['eod_after_sl'].apply(lambda x: pd.notna(x) and x <= 0)]
+        sl_whipsaw = sl_trades[sl_trades['eod_after_sl'].apply(lambda x: pd.notna(x) and x > 0)]
+        sl_unknown = sl_trades[sl_trades['eod_after_sl'].isna()]
+        categories['Pure SL (stayed down)'] = sl_pure
+        categories['SL Whipsaw (bounced back)'] = sl_whipsaw
+        if len(sl_unknown) > 0:
+            categories['SL (no EOD data)'] = sl_unknown
+
+    eod_losses = all_losses[all_losses['actual_exit'] == 'EOD']
+    if len(eod_losses) > 0:
+        categories['EOD Loss'] = eod_losses
+
+    partial_losses = all_losses[all_losses['actual_exit'] == 'PARTIAL']
+    if len(partial_losses) > 0:
+        categories['Partial Data'] = partial_losses
+
+    if len(no_fills) > 0:
+        categories['No Fill (limit)'] = no_fills
+
+    print(f"\n  {'Category':<30} {'Count':>6} {'AvgPnL':>8} {'TotalPnL':>10}")
+    print(f"  {'─'*30} {'─'*6} {'─'*8} {'─'*10}")
+    for cat, df_cat in categories.items():
+        n = len(df_cat)
+        avg_pnl = df_cat['actual_pnl'].mean() * 100
+        tot_pnl = df_cat['actual_pnl'].sum() * 100
+        print(f"  {cat:<30} {n:>6} {avg_pnl:>+7.2f}% {tot_pnl:>+9.2f}%")
+
+    total_loss = all_losses['actual_pnl'].sum() * 100
+    print(f"\n  TOTAL LOSSES: {len(all_losses)} trades, {total_loss:+.2f}% total")
+
+    if 'SL Whipsaw (bounced back)' in categories and len(categories['SL Whipsaw (bounced back)']) > 0:
+        ws = categories['SL Whipsaw (bounced back)']
+        print(f"\n  WHIPSAW DETAIL — {len(ws)} trades stopped out then recovered:")
+        print(f"  {'Date':<12} {'Ticker':<7} {'SL PnL':>7} {'EOD if held':>12} {'Left':>7}")
+        print(f"  {'─'*12} {'─'*7} {'─'*7} {'─'*12} {'─'*7}")
+        for _, r in ws.sort_values('score_date').iterrows():
+            eod_a = r['eod_after_sl']
+            left = eod_a - r['actual_pnl']
+            print(f"  {r['score_date']:<12} {r['ticker']:<7} {r['actual_pnl']*100:>+6.2f}% "
+                  f"{eod_a*100:>+6.2f}%      {left*100:>+6.2f}%")
+        total_whip_cost = sum(r['eod_after_sl'] - r['actual_pnl'] for _, r in ws.iterrows()) * 100
+        print(f"\n  Total PnL cost of whipsaws: {total_whip_cost:+.2f}%")
+
+
+# ==============================================================================
+# TABLE 10: PER-TICKER DEEP DIVE FOR BIGGEST LOSERS
+# ==============================================================================
+print(f"\n\n{'='*W}")
+print(f"  TABLE 10: PER-TICKER DEEP DIVE — TOP 5 LOSERS (by total loss contribution)")
+print(f"{'='*W}")
+
+if len(valid) > 0:
+    ticker_stats = valid.groupby('ticker').agg(
+        n_trades=('actual_pnl', 'count'),
+        n_wins=('actual_pnl', lambda x: (x > 0).sum()),
+        avg_pnl=('actual_pnl', 'mean'),
+        total_pnl=('actual_pnl', 'sum'),
+        avg_mfe=('mfe', 'mean'),
+        avg_mae=('mae', 'mean'),
+    )
+    ticker_stats['wr'] = ticker_stats['n_wins'] / ticker_stats['n_trades'] * 100
+
+    worst_5 = ticker_stats.sort_values('total_pnl').head(5)
+
+    for ticker in worst_5.index:
+        ts = worst_5.loc[ticker]
+        t_trades = valid[valid['ticker'] == ticker].sort_values('score_date')
+        lw_sub = t_trades[t_trades['score_date'] >= LAST_WEEK_START]
+
+        print(f"\n  ── {ticker} ──")
+        print(f"  June: {int(ts['n_trades'])} trades, {int(ts['n_wins'])} wins ({ts['wr']:.0f}% WR), "
+              f"avg PnL={ts['avg_pnl']*100:+.2f}%, total PnL={ts['total_pnl']*100:+.2f}%")
+        if pd.notna(ts['avg_mfe']):
+            print(f"  Avg MFE={ts['avg_mfe']*100:+.2f}%, Avg MAE={ts['avg_mae']*100:+.2f}%")
+
+        if len(lw_sub) > 0:
+            lw_wr = (lw_sub['actual_pnl'] > 0).mean() * 100
+            lw_avg = lw_sub['actual_pnl'].mean() * 100
+            print(f"  Last week: {len(lw_sub)} trades, {lw_wr:.0f}% WR, avg PnL={lw_avg:+.2f}%")
+
+        print(f"\n  {'Date':<12} {'Exit':>7} {'PnL':>7} {'MFE':>7} {'MAE':>7} {'EODret':>7} {'Streak':>7}")
+        print(f"  {'─'*12} {'─'*7} {'─'*7} {'─'*7} {'─'*7} {'─'*7} {'─'*7}")
+
+        streak = 0
+        for _, r in t_trades.iterrows():
+            if r['actual_pnl'] > 0:
+                streak = streak + 1 if streak > 0 else 1
+            elif r['actual_pnl'] <= 0:
+                streak = streak - 1 if streak < 0 else -1
+
+            mfe_str = f"{r['mfe']*100:>+6.2f}%" if pd.notna(r.get('mfe')) else '   N/A '
+            mae_str = f"{r['mae']*100:>+6.2f}%" if pd.notna(r.get('mae')) else '   N/A '
+            eod_str = f"{r['eod_ret']*100:>+6.2f}%" if pd.notna(r.get('eod_ret')) else '   N/A '
+            streak_str = f"{'W' if streak > 0 else 'L'}{abs(streak)}"
+            lw_mark = '<<' if r['score_date'] >= LAST_WEEK_START else '  '
+            print(f"{lw_mark}{r['score_date']:<12} {r['actual_exit']:>7} {r['actual_pnl']*100:>+6.2f}% "
+                  f"{mfe_str} {mae_str} {eod_str} {streak_str:>7}")
+
+        sl_sub = t_trades[t_trades['actual_exit'] == 'SL']
+        if len(sl_sub) > 0:
+            sl_with_mfe = sl_sub[sl_sub['mfe'].notna()]
+            if len(sl_with_mfe) > 0:
+                avg_mfe_before_sl = sl_with_mfe['mfe'].mean() * 100
+                print(f"\n  Avg MFE before SL hit: {avg_mfe_before_sl:+.2f}% "
+                      f"(got this close to TP before reversing)")
+
+
+# ==============================================================================
+# LAST WEEK vs REST-OF-JUNE SYNTHESIS
+# ==============================================================================
+print(f"\n\n{'='*W}")
+print(f"  LAST WEEK vs REST-OF-JUNE SYNTHESIS")
+print(f"{'='*W}")
+
+if len(valid) > 0:
+    rest = valid[valid['score_date'] < LAST_WEEK_START]
+    lw = valid[valid['score_date'] >= LAST_WEEK_START]
+
+    def _period_stats(df, label):
+        if len(df) == 0:
+            print(f"\n  {label}: No trades")
+            return
+        n = len(df)
+        wins = (df['actual_pnl'] > 0).sum()
+        wr = wins / n * 100
+        avg = df['actual_pnl'].mean() * 100
+        tp = (df['actual_exit'] == 'TP').sum()
+        sl = (df['actual_exit'] == 'SL').sum()
+        eod = (df['actual_exit'] == 'EOD').sum()
+        nf = (df['actual_exit'] == 'NO_FILL').sum()
+        dollar = 0
+        for date in df['score_date'].unique():
+            day = df[df['score_date'] == date]
+            alloc = STARTING_CAPITAL / len(day)
+            dollar += sum(alloc * p for p in day['actual_pnl'])
+        print(f"\n  {label}:")
+        print(f"    Trades: {n}  |  Wins: {wins} ({wr:.0f}% WR)  |  Avg PnL: {avg:+.2f}%")
+        print(f"    Exits: {tp} TP, {sl} SL, {eod} EOD, {nf} NoFill")
+        print(f"    $PnL on $200K: ${dollar:+,.0f}")
+        return {'n': n, 'wr': wr, 'avg': avg, 'dollar': dollar}
+
+    rest_stats = _period_stats(rest, f"REST OF JUNE ({JUNE_START} → {LAST_WEEK_START})")
+    lw_stats = _period_stats(lw, f"LAST WEEK ({LAST_WEEK_START} → {JUNE_END})")
+
+    if rest_stats and lw_stats:
+        print(f"\n  COMPARISON:")
+        wr_delta = lw_stats['wr'] - rest_stats['wr']
+        avg_delta = lw_stats['avg'] - rest_stats['avg']
+        print(f"    WR change:     {wr_delta:+.1f}pp ({rest_stats['wr']:.0f}% → {lw_stats['wr']:.0f}%)")
+        print(f"    Avg PnL change: {avg_delta:+.2f}pp ({rest_stats['avg']:+.2f}% → {lw_stats['avg']:+.2f}%)")
+
+    if len(lw) > 0:
+        lw_tickers = lw.groupby('ticker')['actual_pnl'].sum().sort_values()
+        lw_total_loss = lw_tickers[lw_tickers < 0].sum() * 100
+        n_losing_tickers = (lw_tickers < 0).sum()
+        n_total_tickers = len(lw_tickers)
+        print(f"\n  CONCENTRATION: {n_losing_tickers}/{n_total_tickers} tickers net-negative last week")
+        if n_losing_tickers > 0:
+            top_loser = lw_tickers.index[0]
+            top_loss = lw_tickers.iloc[0] * 100
+            print(f"    Worst ticker: {top_loser} ({top_loss:+.2f}% total)")
+
+    if len(lw_blocked) > 0:
+        blocked_valid = lw_blocked[lw_blocked['actual_pnl'].notna()]
+        if len(blocked_valid) > 0:
+            saved = blocked_valid[blocked_valid['actual_pnl'] < 0]
+            missed = blocked_valid[blocked_valid['actual_pnl'] > 0]
+            print(f"\n  FILTER EFFECTIVENESS LAST WEEK:")
+            print(f"    Blocked: {len(blocked_valid)} signals")
+            if len(saved) > 0:
+                print(f"    Losses avoided: {len(saved)} trades, {saved['actual_pnl'].sum()*100:+.2f}% total")
+            if len(missed) > 0:
+                print(f"    Wins missed: {len(missed)} trades, {missed['actual_pnl'].sum()*100:+.2f}% total")
+
+    lw_sl_total = lw[lw['actual_exit'] == 'SL'] if len(lw) > 0 else pd.DataFrame()
+    if len(lw_sl_total) > 0:
+        bounce_count = lw_sl_total['eod_after_sl'].apply(lambda x: pd.notna(x) and x > 0).sum()
+        print(f"\n  DIAGNOSIS:")
+        print(f"    SL exits last week: {len(lw_sl_total)}")
+        print(f"    Of which whipsaws: {bounce_count} ({bounce_count/len(lw_sl_total)*100:.0f}%)")
+        if bounce_count > len(lw_sl_total) * 0.4:
+            print(f"    → HIGH whipsaw rate — suggests SL too tight for current volatility")
+        elif (lw['actual_exit'] == 'SL').sum() > (lw['actual_exit'] == 'TP').sum() * 2:
+            print(f"    → SL:TP ratio >2:1 — spike model probabilities may be miscalibrated")
+        else:
+            print(f"    → Losses appear driven by regime conditions, not model failure")
 
 
 # ==============================================================================

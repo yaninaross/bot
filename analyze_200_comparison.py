@@ -22,6 +22,7 @@ Colab-ready. BQ-only for sections 1-7.
 """
 
 import gc
+import ctypes
 import io
 import sys
 import subprocess
@@ -29,6 +30,11 @@ import warnings
 
 import numpy as np
 import pandas as pd
+
+_libc = ctypes.CDLL("libc.so.6")
+def _free_mem():
+    gc.collect()
+    _libc.malloc_trim(0)
 
 warnings.filterwarnings('ignore')
 
@@ -100,37 +106,14 @@ print(f"  Windows: OPT Jan-Mar 2026 | VAL Apr-May | TEST May-Jun")
 print(f"  Model version: {MODEL_VERSION}")
 print(f"{'='*W}")
 
-query = f"""
-SELECT experiment, ticker, seed, tpsl_mode, is_ensemble, n_seeds_avg,
-       opt_avg_pnl, opt_win_rate, opt_count,
-       val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
-       val_b_avg_pnl, val_b_win_rate, val_b_count, val_b_freq,
-       survived_a, survived_b,
-       prob_thresh, tp_pct, sl_pct, tp_mult, sl_mult,
-       trail_start_mult, trail_end_mult, vol_filter_pct, pre_range_filter_pct,
-       grace_minutes, dip_pct, max_wait_minutes,
-       opt_start, opt_end, run_timestamp
-FROM `{BQ_TABLE}`
-WHERE model_version = '{MODEL_VERSION}'
-  AND (experiment LIKE '200_%' OR experiment LIKE '185_%'
+_EXP_FILTER = """(experiment LIKE '200_%' OR experiment LIKE '185_%'
        OR experiment LIKE '175_%'
        OR experiment LIKE '180_%' OR experiment LIKE '181_%'
        OR experiment LIKE '182_%' OR experiment LIKE '183_%'
-       OR experiment LIKE '184_%')
-"""
+       OR experiment LIKE '184_%')"""
 
-df_all = client.query(query).to_dataframe()
-print(f"  Loaded {len(df_all)} rows from BQ")
-
-df_all['tpsl_mode'] = df_all['tpsl_mode'].fillna('static')
-df_all['survived_b'] = df_all['survived_b'].fillna(False).astype(bool)
-df_all['survived_a'] = df_all['survived_a'].fillna(False).astype(bool)
-df_all['val_b_avg_pnl'] = df_all['val_b_avg_pnl'].fillna(0.0)
-df_all['val_b_win_rate'] = df_all['val_b_win_rate'].fillna(0.0)
-df_all['val_b_count'] = df_all['val_b_count'].fillna(0).astype(int)
-for col in ['dip_pct', 'grace_minutes', 'max_wait_minutes']:
-    if col in df_all.columns:
-        df_all[col] = df_all[col].fillna(0)
+TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
+EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
 
 
 def assign_family(exp):
@@ -145,11 +128,52 @@ def assign_family(exp):
     return 'other'
 
 
-df_all['family'] = df_all['experiment'].apply(assign_family)
-df_all = df_all[df_all['family'] != 'other']
+def _clean_df(df):
+    df['ticker'] = df['ticker'].replace(TICKER_RENAME)
+    df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
+    df['tpsl_mode'] = df['tpsl_mode'].fillna('static')
+    df['survived_b'] = df['survived_b'].fillna(False).astype(bool)
+    df['survived_a'] = df['survived_a'].fillna(False).astype(bool)
+    df['val_b_avg_pnl'] = df['val_b_avg_pnl'].fillna(0.0)
+    df['val_b_win_rate'] = df['val_b_win_rate'].fillna(0.0)
+    df['val_b_count'] = df['val_b_count'].fillna(0).astype(int)
+    for col in ['dip_pct', 'grace_minutes', 'max_wait_minutes']:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
+    df['family'] = df['experiment'].apply(assign_family)
+    df = df[df['family'] != 'other']
+    return df
 
-ens = df_all[df_all['is_ensemble'] == True].copy()
-seeds = df_all[df_all['is_ensemble'] != True].copy()
+
+ens_query = f"""
+SELECT experiment, ticker, seed, tpsl_mode, is_ensemble, n_seeds_avg,
+       opt_avg_pnl, opt_win_rate, opt_count,
+       val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
+       val_b_avg_pnl, val_b_win_rate, val_b_count, val_b_freq,
+       survived_a, survived_b,
+       prob_thresh, tp_pct, sl_pct, tp_mult, sl_mult,
+       trail_start_mult, trail_end_mult, vol_filter_pct, pre_range_filter_pct,
+       grace_minutes, dip_pct, max_wait_minutes,
+       opt_start, opt_end, run_timestamp
+FROM `{BQ_TABLE}`
+WHERE model_version = '{MODEL_VERSION}'
+  AND is_ensemble = TRUE
+  AND {_EXP_FILTER}
+"""
+ens = _clean_df(client.query(ens_query).to_dataframe())
+print(f"  Loaded {len(ens)} ensemble rows from BQ")
+
+df_all_query = f"""
+SELECT experiment, ticker, seed, tpsl_mode, is_ensemble,
+       val_a_avg_pnl, val_b_avg_pnl, val_b_count,
+       survived_a, survived_b
+FROM `{BQ_TABLE}`
+WHERE model_version = '{MODEL_VERSION}'
+  AND {_EXP_FILTER}
+"""
+df_all = _clean_df(client.query(df_all_query).to_dataframe())
+print(f"  Loaded {len(df_all)} total rows (lightweight) for census")
+_free_mem()
 
 FAM_ORDER = ['200', '185', '175']
 FAM_LABELS = {'200': '200 CNN-TX', '185': '185 Std-TX', '175': '175 Std-TX', '180': '180-185 WF'}
@@ -184,6 +208,9 @@ if missing_175:
     print(f"\n  NOTE: 175 is missing modes: {', '.join(sorted(missing_175))}")
     print(f"        175 vs 200 comparison limited to: "
           f"{', '.join(sorted(set(ALL_MODES) - missing_175))}")
+
+del df_all
+_free_mem()
 
 
 # ==============================================================================
@@ -328,6 +355,9 @@ print(f"──|{'':─^8} {'':─^10}")
 print(f"\n  WINS: 200 CNN-TX={wins.get('200',0)}  185 Std-TX={wins.get('185',0)}  "
       f"Tie={wins.get('tie',0)}")
 
+del pivot_mode, pivot_wr, pivot_n, best_per
+_free_mem()
+
 
 # ==============================================================================
 # SECTION 4: ARCHITECTURE ADVANTAGE
@@ -363,15 +393,22 @@ if common_200_185:
         print(f"  {sec:<10} {len(sec_tickers):>3} {sec_200.mean():>+7.2%} {sec_185.mean():>+7.2%} "
               f"{sec_delta.mean():>+7.2%} {n_wins}/{len(sec_tickers)}")
 
-    # Seed stability comparison
+    # Seed stability comparison (query BQ on-demand to save RAM)
     print(f"\n  Seed Stability (per-seed test PnL std):")
-    for fam in ['200', '185']:
-        fam_seeds = seeds[seeds['family'] == fam]
-        if len(fam_seeds) == 0:
+    for fam_prefix in ['200', '185']:
+        stab_q = f"""
+        SELECT ticker, tpsl_mode, STDDEV(val_b_avg_pnl) as pnl_std
+        FROM `{BQ_TABLE}`
+        WHERE model_version = '{MODEL_VERSION}' AND is_ensemble = FALSE
+          AND experiment LIKE '{fam_prefix}_%'
+        GROUP BY ticker, tpsl_mode HAVING COUNT(*) >= 3
+        """
+        stab_df = client.query(stab_q).to_dataframe()
+        if len(stab_df) == 0:
             continue
-        seed_std = fam_seeds.groupby(['ticker', 'tpsl_mode'])['val_b_avg_pnl'].std().dropna()
-        print(f"    {FAM_LABELS[fam]}: avg_std={seed_std.mean():.3%}  "
-              f"med_std={seed_std.median():.3%}  ({len(seed_std)} ticker-mode combos)")
+        print(f"    {FAM_LABELS[fam_prefix]}: avg_std={stab_df['pnl_std'].mean():.3%}  "
+              f"med_std={stab_df['pnl_std'].median():.3%}  ({len(stab_df)} ticker-mode combos)")
+        del stab_df
 
     # Top deltas
     print(f"\n  Largest 200 advantages:")
@@ -408,35 +445,39 @@ for fam in FAM_ORDER:
     print(f"    Avg test PnL: {fam_limit['val_b_avg_pnl'].mean():>+.2%}  "
           f"Med: {fam_limit['val_b_avg_pnl'].median():>+.2%}")
 
-# Limit dip_pct distribution
-limit_seeds = seeds[seeds['tpsl_mode'] == 'limit_entry'].copy()
-if 'dip_pct' in limit_seeds.columns and limit_seeds['dip_pct'].notna().any():
-    print(f"\n  Dip_pct distribution (per-seed survivors with test PnL > 0):")
+# Limit dip_pct distribution (query BQ on-demand)
+print(f"\n  Dip_pct distribution (per-seed survivors with test PnL > 0):")
+dip_q = f"""
+SELECT experiment, dip_pct, COUNT(*) as n
+FROM `{BQ_TABLE}`
+WHERE model_version = '{MODEL_VERSION}' AND is_ensemble = FALSE
+  AND tpsl_mode = 'limit_entry' AND val_b_avg_pnl > 0
+  AND dip_pct > 0
+  AND {_EXP_FILTER}
+GROUP BY experiment, dip_pct
+"""
+dip_df = client.query(dip_q).to_dataframe()
+if len(dip_df) > 0:
+    dip_df['family'] = dip_df['experiment'].apply(assign_family)
+    fam_totals = dip_df.groupby('family')['n'].sum()
+    all_dips = sorted(dip_df['dip_pct'].unique())
     print(f"  {'Dip%':<8}", end='')
     for fam in FAM_ORDER:
         print(f"  | {FAM_LABELS[fam]:^12}", end='')
     print()
     print(f"  {'─'*50}")
-
-    fam_survivors = {}
-    for fam in FAM_ORDER:
-        fs = limit_seeds[(limit_seeds['family'] == fam) & (limit_seeds['val_b_avg_pnl'] > 0)]
-        fam_survivors[fam] = fs
-
-    all_dips = sorted(limit_seeds['dip_pct'].unique())
     for dip in all_dips:
-        if dip <= 0:
-            continue
         print(f"  {dip:>6.1%}  ", end='')
         for fam in FAM_ORDER:
-            fs = fam_survivors.get(fam, pd.DataFrame())
-            if len(fs) == 0:
+            fam_dip = dip_df[(dip_df['family'] == fam) & (dip_df['dip_pct'] == dip)]
+            if fam_dip.empty or fam not in fam_totals.index:
                 print(f"  | {'—':^12}", end='')
             else:
-                n_at_dip = len(fs[fs['dip_pct'] == dip])
-                pct = n_at_dip / len(fs) * 100 if len(fs) > 0 else 0
-                print(f"  | {n_at_dip:>4} ({pct:>4.0f}%)", end='')
+                cnt = int(fam_dip['n'].sum())
+                pct = cnt / fam_totals[fam] * 100
+                print(f"  | {cnt:>4} ({pct:>4.0f}%)", end='')
         print()
+    del dip_df
 
 # Head-to-head limit_entry configs for common tickers
 limit_common = set()
@@ -467,6 +508,9 @@ if limit_common:
               f" {r1['val_b_avg_pnl']:>+6.2%} {r1['val_b_win_rate']:>4.0%} "
               f"{int(r1['val_b_count']):>3} {r1['dip_pct']:>4.1%} {r1['prob_thresh']:>5.2f}"
               f"  {delta:>+6.2%}")
+
+del limit_ens
+_free_mem()
 
 
 # ==============================================================================
@@ -505,6 +549,9 @@ if len(wf_ens) > 0 and len(sf_ens) > 0:
         print(f"    {label}: {best} ({mode_avg.iloc[0]:>+.2%})")
 else:
     print(f"\n  Insufficient data for WF vs Single comparison")
+
+del wf_ens, sf_ens
+_free_mem()
 
 
 # ==============================================================================
@@ -766,6 +813,7 @@ if RUN_BACKTEST:
 else:
     print(f"\n\n  [Backtest disabled — set RUN_BACKTEST = True to enable]")
 
+_free_mem()
 
 # ==============================================================================
 # VERDICT

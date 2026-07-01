@@ -1,14 +1,13 @@
 """
-Daily Scoring — v12 Strategy B / Tier 1+ (limit_entry, both 152+160 gate)
-==========================================================================
-Self-contained. Scores tickers that qualify in BOTH exp 152 and 160, using the
-best limit_entry config across all experiment families (152-185).
+Daily Scoring — Strategy S3 (limit_entry, majority-positive val_b family agreement)
+===================================================================================
+Self-contained. Scores tickers that pass S3 family agreement gate, using the
+best limit_entry config across all experiment families (152-200).
 Includes data loading, healing, dynamic TP/SL, regime filter, and BQ logging.
 
-Gate: ticker must have >= 1.8% avg PnL configs in both 152 AND 160.
+Gate: majority of families must have positive val_b (out-of-sample), n_fams >= 2.
 Mode: limit_entry only.
-Deploy: best limit_entry config per ticker across all 6 families.
-Allocation: Cap 2/day, 50/50 split.
+Deploy: best config per ticker by score_pnl2 (mean_va_pnl^2 * agree_18).
 170 uses fold-175 models (latest walkforward cutoff).
 180 uses fold-185 models (latest walkforward cutoff).
 
@@ -145,7 +144,8 @@ WF_DEPLOY_THRESHOLD = 0.018
 WF_MIN_SEEDS = 3
 WF_MAX_VA_OPT_RATIO = 3.0
 WF_DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
-                         '175_XSECTOR', '180_XSECTOR', '185_XSECTOR'}
+                         '175_XSECTOR', '180_XSECTOR', '185_XSECTOR',
+                         '200_XSECTOR'}
 WF_EXCLUDE_TICKERS = {'LUNR'}
 WF_TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 WF_MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
@@ -164,8 +164,20 @@ def _wf_base_exp(exp_name):
             return exp_name[:-len(sfx)]
     return exp_name
 
+def _assign_family(exp_name):
+    base = exp_name.split('_')[0]
+    if not base.isdigit():
+        return 'other'
+    num = int(base)
+    if num == 152: return '152'
+    if num == 160: return '160'
+    if 170 <= num <= 175: return '170'
+    if 180 <= num <= 185: return '180'
+    if num == 200: return '200'
+    return 'other'
+
 def load_deploy_configs_from_bq():
-    """Strategy B / Tier 1+: limit_entry only, both 152+160 gate, best per ticker."""
+    """Strategy S3: limit_entry, majority-positive val_b across families, best per ticker."""
     bq_client = bigquery.Client()
     query = f"""
     SELECT ticker, experiment, seed, tpsl_mode, entry_minute, prob_thresh,
@@ -173,6 +185,7 @@ def load_deploy_configs_from_bq():
            trail_start_mult, trail_end_mult,
            vix_threshold, tlt_crash, spy_ignore, vol_filter_pct,
            val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
+           val_b_avg_pnl,
            opt_avg_pnl, is_ensemble,
            grace_minutes, dip_pct, max_wait_minutes
     FROM `{WF_BQ_TABLE}`
@@ -182,7 +195,7 @@ def load_deploy_configs_from_bq():
       AND val_a_avg_pnl > 0
     """
     df = bq_client.query(query).to_dataframe()
-    print(f"  BQ: {len(df)} rows from {WF_MODEL_VERSION}")
+    # (BQ loading details suppressed for clean output)
 
     df['ticker'] = df['ticker'].replace(WF_TICKER_RENAME)
     df['base_experiment'] = df['experiment'].apply(_wf_base_exp)
@@ -201,15 +214,16 @@ def load_deploy_configs_from_bq():
     before_n = len(df)
     df = df[df['opt_avg_pnl'] > 0].copy()
     df = df[df['val_a_avg_pnl'] / df['opt_avg_pnl'] <= WF_MAX_VA_OPT_RATIO]
-    print(f"  Overfit filter: {before_n} -> {len(df)}")
+    pass  # overfit filter applied
 
     # ── seed groups (individual seeds only) ──
     indiv = df[df['is_ensemble'] == False].copy()
 
     extra_agg = {}
+    _regime_agg = {'vix_threshold': 'max', 'tlt_crash': 'min', 'spy_ignore': 'max'}
     for c in ['vix_threshold', 'tlt_crash', 'spy_ignore']:
         if c in indiv.columns:
-            extra_agg[c] = (c, 'first')
+            extra_agg[c] = (c, _regime_agg[c])
 
     sa = indiv.groupby(WF_GRP_KEYS).agg(
         n_seeds=('seed', 'nunique'),
@@ -218,32 +232,44 @@ def load_deploy_configs_from_bq():
         mean_va_wr=('val_a_win_rate', 'mean'),
         mean_va_count=('val_a_count', 'mean'),
         mean_va_freq=('val_a_freq', 'mean'),
+        vb_pnl=('val_b_avg_pnl', 'mean'),
         **extra_agg,
     ).reset_index()
     sa['agree_18'] = (sa['n_pos_seeds_18'] / sa['n_seeds']).clip(upper=1.0)
 
-    # ── Strategy B / Tier 1+: both 152+160 gate, limit_entry only ──
-    sa = sa[sa['n_seeds'] >= WF_MIN_SEEDS]
+    # ── Strategy S3: majority-positive val_b across families ──
+    # (mirrors backtest_strategies.py: sa_base → sa_limit → _compute_family_agreement_bt → _select_best_bt)
+    sa_limit = sa[
+        (sa['n_seeds'] >= WF_MIN_SEEDS) &
+        (sa['tpsl_mode'] == 'limit_entry')
+    ].copy()
 
-    # Gate: check INDIVIDUAL seed rows (not group means) for both 152+160
-    # Matches backtest find_both_exp_tickers: any single seed >= 1.8% qualifies
-    indiv['exp_fam'] = indiv['experiment'].apply(_wf_base_exp).str[:3]
-    indiv_survived = indiv[indiv['val_a_avg_pnl'] >= WF_DEPLOY_THRESHOLD]
-    fams_per_ticker = indiv_survived.groupby('ticker')['exp_fam'].apply(set)
-    both_152_160 = set(fams_per_ticker[fams_per_ticker.apply(
-        lambda s: '152' in s and '160' in s)].index)
-    print(f"  Tier 1+ gate: {len(both_152_160)} tickers qualify in both 152+160: {sorted(both_152_160)}")
+    # Family agreement gate — threshold applied AFTER best-per-family selection
+    d_fam = sa_limit.copy()
+    d_fam['score'] = (d_fam['mean_va_pnl'] ** 2) * d_fam['agree_18']
+    d_fam = d_fam[np.isfinite(d_fam['score'])]
+    d_fam['exp_fam'] = d_fam['experiment'].apply(_assign_family)
+    d_fam = d_fam[d_fam['exp_fam'] != 'other']
+    best_per_fam = d_fam.loc[d_fam.groupby(['ticker', 'exp_fam'])['score'].idxmax()]
+    best_per_fam = best_per_fam[best_per_fam['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD]
 
-    # Filter: limit_entry only, qualifying tickers only
-    sa_tier1 = sa[
-        (sa['ticker'].isin(both_152_160)) &
-        (sa['tpsl_mode'] == 'limit_entry') &
-        (sa['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD)
-    ]
-    sa_tier1 = sa_tier1.copy()
-    sa_tier1['score'] = (sa_tier1['mean_va_pnl'] ** 2) * sa_tier1['agree_18']
-    best = sa_tier1.loc[sa_tier1.groupby('ticker')['score'].idxmax()] if not sa_tier1.empty else sa_tier1
-    best = best.copy()
+    agreement = {}
+    for tk in best_per_fam['ticker'].unique():
+        tk_rows = best_per_fam[best_per_fam['ticker'] == tk]
+        n_fams = len(tk_rows)
+        n_pos = int((tk_rows['vb_pnl'] > 0).sum())
+        agreement[tk] = {
+            'n_fams': n_fams, 'n_pos': n_pos,
+            'majority_pos': n_pos > n_fams / 2 and n_fams >= 2,
+        }
+
+    maj_tickers = {tk for tk, ag in agreement.items() if ag['majority_pos']}
+
+    # Select best config per ticker — threshold applied after selection
+    sa_s3 = sa_limit[sa_limit['ticker'].isin(maj_tickers)].copy()
+    sa_s3['score'] = (sa_s3['mean_va_pnl'] ** 2) * sa_s3['agree_18']
+    best = sa_s3.loc[sa_s3.groupby('ticker')['score'].idxmax()] if not sa_s3.empty else sa_s3
+    best = best[best['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD].copy()
 
     # ── populate experiment asset_configs ──
     n_selected = 0
@@ -287,13 +313,8 @@ def load_deploy_configs_from_bq():
             cfg['trail_end_mult'] = float(row.get('trail_end_mult', 0))
         exp_dict['asset_configs'][ticker] = cfg
         n_selected += 1
-        mode_str = tpsl_mode
-        if tpsl_mode == 'limit_entry':
-            mode_str += f" dip={row.get('dip_pct',0):.1%} wait={int(row.get('max_wait_minutes',0))}m"
-        print(f"    {ticker:<7} -> {base_exp:<14} {mode_str:<30} "
-              f"pnl={row['mean_va_pnl']:.2%} agree={row['agree_18']:.0%} ({n_seeds}s)")
 
-    print(f"  Strategy B (Tier 1+): {n_selected} configs selected (limit_entry, both 152+160 gate)")
+    pass  # n_selected configs loaded
     return n_selected
 
 EXP_170 = {
@@ -856,7 +877,7 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
     if regime:
         regime_ok, _, _, _ = _filter_pass(cfg, regime)
 
-    vol_pct = max(cfg.get('vol_filter_pct', 0), MIN_VOL_FILTER_PCT)
+    vol_pct = cfg.get('vol_filter_pct', 0)
     vol_ok, entry_vol, vol_median = _check_vol_filter(ticker, entry_min, vol_pct)
 
     vix_value = regime.get('vix') if regime else None
@@ -874,8 +895,7 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
         dollar_vol = rv * rp
         if entry_vol is None:
             entry_vol = rv
-        if MIN_DOLLAR_VOLUME > 0 and dollar_vol < MIN_DOLLAR_VOLUME:
-            dollar_vol_ok = False
+        pass
 
     filter_ok = regime_ok and vol_ok and dollar_vol_ok
 
@@ -1068,9 +1088,70 @@ def print_dashboard(all_results, run_ts):
         spy_s = f"{last_r['spy_gap_pct']:+.2f}%"   if last_r.get('spy_gap_pct') is not None else "N/A"
         print(f"  Market:  VIX={vix_s}   TLT={tlt_s}   SPY={spy_s}")
 
-    for exp, results in all_results:
-        if results:
-            print_experiment_section(exp, results)
+    # ── SINGLE FLAT SIGNAL TABLE ────────────────────────────────────────────
+    all_rows = [(exp, r) for exp, results in all_results for r in results]
+    if all_rows:
+        print()
+        print(f"  {'─'*W}")
+        print(f"  {'Ticker':<6}  {'Exp':<5}  {'SIG':<7}  "
+              f"{'Buy@':>10}  {'SL@':>10}  {'TP@':>10}  "
+              f"{'Prob':>5} / {'Thr':>5}  {'Entry':>5}  "
+              f"{'Close':>8}  {'CONF':<4}  {'Filter'}")
+        print(f"  {'─'*W}")
+
+        for exp, r in all_rows:
+            cfg = exp.get('asset_configs', {}).get(r['ticker'], {})
+            trade_ok = r.get('filter_ok', True)
+            conf = cfg.get('confidence', '??')
+            exp_short = exp['model_id'].split('_')[0]
+
+            if r['signal']:
+                sig_str = ("\033[92m GO  \033[0m" if trade_ok
+                           else "\033[31mBLOCK\033[0m")
+            else:
+                sig_str = "  --  "
+
+            close = r['close']
+
+            dip = r.get('dip_pct', 0) or 0
+            is_limit = r.get('tpsl_mode') == 'limit_entry'
+            entry_price = close * (1 - dip) if is_limit else close
+
+            buy_str = f"${entry_price:.2f}" if is_limit else f"${close:.2f}"
+            sl_price = entry_price * (1 - r['sl_pct'])
+            sl_str = f"${sl_price:.2f}"
+
+            if r.get('tpsl_mode') in ('trail', 'trailing_decay') or r.get('tp_pct') is None:
+                ts = r.get('trail_start', 0)
+                tp_str = f"TRAIL {ts:.0%}"
+            else:
+                tp_price = entry_price * (1 + r['tp_pct'])
+                tp_str = f"${tp_price:.2f}"
+
+            if trade_ok:
+                filt_str = "OK"
+            else:
+                parts = []
+                if r.get('vix_value') is not None and cfg:
+                    parts.append(f"VIX:{r['vix_value']:.1f}>{cfg['vix_threshold']:.0f}")
+                if r.get('tlt_gap_pct') is not None and cfg:
+                    parts.append(f"TLT:{r['tlt_gap_pct']:+.2f}<{cfg['tlt_crash']:+.2f}")
+                if r.get('spy_gap_pct') is not None and cfg:
+                    parts.append(f"SPY:{r['spy_gap_pct']:+.2f}>{cfg['spy_ignore']:+.2f}")
+                if not r.get('vol_filter_ok', True):
+                    parts.append("VOL")
+                if not r.get('dollar_vol_ok', True):
+                    dv = r.get('dollar_volume')
+                    parts.append(f"DOLLAR_VOL:${dv:,.0f}<${MIN_DOLLAR_VOLUME:,.0f}" if dv else "DOLLAR_VOL")
+                filt_str = f"BLOCKED {' & '.join(parts)}"
+
+            em = r['entry_minute']
+            entry_str = f"{em // 60}:{em % 60:02d}"
+
+            print(f"  {r['ticker']:<6}  {exp_short:<5}  {sig_str}  "
+                  f"{buy_str:>10}  {sl_str:>10}  {tp_str:>10}  "
+                  f"{r['prob']:>5.3f} / {r['threshold']:>5.3f}  {entry_str:>5}  "
+                  f"{close:>8.2f}  {conf:<4}  {filt_str}")
 
     # ── SUMMARY ──────────────────────────────────────────────────────────────
     all_flat = [r for _, results in all_results for r in results]
@@ -1345,8 +1426,13 @@ def _check_stitch_freshness():
 
 def main():
     run_ts = datetime.now(pytz.utc)
-    total_tickers = sum(len(e['asset_configs']) for e in EXPERIMENTS)
-    print(f"Scoring {total_tickers} tickers — {run_ts.strftime('%Y-%m-%d %H:%M UTC')}")
+    total_configs = sum(len(e['asset_configs']) for e in EXPERIMENTS)
+    pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
+    all_tickers = sorted({t for e in EXPERIMENTS for t in e['asset_configs']})
+    print(f"\n{'='*80}")
+    print(f"  DAILY SCORING — {pst_str}")
+    print(f"  {total_configs} assets: {', '.join(all_tickers)}")
+    print(f"{'='*80}")
     _check_stitch_freshness()
 
     all_results = []
@@ -1362,6 +1448,12 @@ def main():
         _regime_cache.clear()
         tf.keras.backend.clear_session()
         gc.collect()
+
+    scored_tickers = sorted({r['ticker'] for _, results in all_results for r in results})
+    skipped_tickers = sorted(set(all_tickers) - set(scored_tickers))
+    print(f"\n  ✓ Scored {len(scored_tickers)}/{total_configs}: {', '.join(scored_tickers)}")
+    if skipped_tickers:
+        print(f"  ✗ Skipped {len(skipped_tickers)}: {', '.join(skipped_tickers)}")
 
     print_dashboard(all_results, run_ts)
 

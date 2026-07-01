@@ -23,6 +23,10 @@ except Exception:
 
 BQ_TABLE = 'ys-time-series.scoring_logs.wf_optimization_results'
 MODEL_VERSION = 'robust_wf_v12'
+DEPLOY_THRESHOLD = 0.018
+
+TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
+EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
 
 MODE_MAP = {
     '': 'static', '_ATR': 'atr', '_ATRADP': 'atr_adaptive',
@@ -64,13 +68,23 @@ WHERE model_version = '{MODEL_VERSION}'
 df = client.query(query).to_dataframe()
 print(f"  Loaded {len(df)} rows")
 
+df['ticker'] = df['ticker'].replace(TICKER_RENAME)
+df = df[~df['ticker'].isin(EXCLUDE_TICKERS)]
+for col in ['grace_minutes', 'max_wait_minutes', 'vol_filter_pct']:
+    if col in df.columns:
+        df[col] = df[col].fillna(0).astype(int)
+for col in ['dip_pct']:
+    if col in df.columns:
+        df[col] = df[col].fillna(0.0)
+
 def assign_family(exp):
-    if exp.startswith('17'):
-        return '170'
-    elif exp.startswith('160'):
-        return '160'
-    elif exp.startswith('152'):
-        return '152'
+    base = exp.split('_')[0]
+    if not base.isdigit():
+        return 'other'
+    num = int(base)
+    if num == 152: return '152'
+    if num == 160: return '160'
+    if 170 <= num <= 175: return '170'
     return 'other'
 
 df['family'] = df['experiment'].apply(assign_family)

@@ -24,7 +24,7 @@ except (ImportError, Exception):
 from google.cloud import bigquery
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
-MODEL_VERSION = 'robust_wf_v5'
+MODEL_VERSION = 'robust_wf_v12'
 DEPLOY_THRESHOLD = 0.018
 MIN_TRADES = 3
 BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
@@ -34,10 +34,12 @@ W = 130
 # ── END CONFIG ──────────────────────────────────────────────────────────────
 
 DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
-                      '175_XSECTOR', '180_XSECTOR', '185_XSECTOR'}
+                      '175_XSECTOR', '180_XSECTOR', '185_XSECTOR',
+                      '200_XSECTOR'}
 
 client = bigquery.Client()
-query = f"SELECT * FROM `{BQ_TABLE}` WHERE model_version = '{MODEL_VERSION}'"
+_exp_prefixes = ' OR '.join(f"experiment LIKE '{e.split('_')[0]}%'" for e in DEPLOY_EXPERIMENTS)
+query = f"SELECT * FROM `{BQ_TABLE}` WHERE model_version = '{MODEL_VERSION}' AND ({_exp_prefixes})"
 df = client.query(query).to_dataframe()
 print(f"Loaded {len(df)} rows from BQ (model_version={MODEL_VERSION})")
 
