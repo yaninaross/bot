@@ -1,11 +1,16 @@
 """
-backtest_june_filter_impact.py — June S3 backtest: with vs without vol/dollar filters
-=====================================================================================
-Runs full TF model inference backtest for Strategy S3 (limit_entry + agreement),
-records every trade, and tags which ones would have been blocked by the two
-production-only filters we removed (MIN_VOL_FILTER_PCT=25 floor, MIN_DOLLAR_VOLUME=50K).
+backtest_june_filter_impact.py — Strategy comparison backtest with regime filter impact
+=======================================================================================
+Runs full TF model inference backtest comparing strategies WITH and WITHOUT new
+regime filters (SPY 3-day return, VIX daily range):
+  S3   (benchmark): limit_entry + family agreement, original filters only
+  S3F : S3 + new regime filters (spy_3d > +0.5%, vix_range_5d < 8%)
+  S18  : AllMode + ModeConsist, original filters only
+  S18F: S18 + new regime filters
 
-Day-by-day progression, per-ticker impact, dual equity curves.
+PL excluded from all strategies (net negative in val_b).
+
+Day-by-day progression, per-ticker comparison, multi-strategy equity curves.
 
 Colab-ready (GPU recommended for inference speed).
 """
@@ -70,27 +75,31 @@ except (ImportError, Exception):
 # ══════════════════════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
+# ── BACKTEST DATE RANGE (edit these) ──────────────────────────────────────────
+TEST_START = '2026-04-01'
+TEST_END   = '2026-07-01'
+JUNE_START = '2026-06-01'
+JUNE_END   = TEST_END
+# ─────────────────────────────────────────────────────────────────────────────
+
 MODEL_VERSION = 'robust_wf_v12'
 MIN_TRADES = 3
 DEPLOY_THRESHOLD = 0.018
 HIGH_THRESHOLD   = 0.030
 MIN_SEEDS = 3
 
-TEST_START = '2026-04-01'
-TEST_END   = '2026-06-29'
-JUNE_START = '2026-06-01'
-JUNE_END   = TEST_END
-
 STARTING_CAPITAL = 200_000
 SLIPPAGE_PCT = 0.0015
 
-FILTER_VOL_PCT    = 25
-FILTER_DOLLAR_VOL = 50_000
 
 DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
                       '175_XSECTOR', '180_XSECTOR', '185_XSECTOR',
                       '200_XSECTOR'}
-EXCLUDE_TICKERS = set()
+EXCLUDE_TICKERS = {'PL'}
+
+# ── NEW REGIME FILTER THRESHOLDS ─────────────────────────────────────────────
+SPY_3D_RETURN_MIN = 0.005       # block trades when SPY 3-day return < +0.5%
+VIX_RANGE_5D_MAX  = 0.08        # block trades when VIX 5-day avg daily range >= 8%
 
 WALKFORWARD_FOLDS = {
     '175_XSECTOR': ['170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
@@ -404,6 +413,93 @@ def build_s3_configs(raw_df):
     if best.empty: return []
     best['tier'] = 'S3'
     return _sa_to_configs(best)
+
+
+def _compute_family_agreement_allmode_bt(sa_in):
+    d = sa_in.copy()
+    d['score'] = score_pnl2(d)
+    d = d[np.isfinite(d['score'])]
+    if d.empty: return {}
+    d['exp_fam'] = d['experiment'].apply(assign_family)
+    d = d[d['exp_fam'] != 'other']
+    best = d.loc[d.groupby(['ticker', 'exp_fam'])['score'].idxmax()]
+    best = best[best['mean_va_pnl'] >= DEPLOY_THRESHOLD]
+    result = {}
+    for tk in best['ticker'].unique():
+        tk_rows = best[best['ticker'] == tk]
+        n_fams = len(tk_rows); n_pos = int((tk_rows['vb_pnl'] > 0).sum())
+        result[tk] = {'n_fams': n_fams, 'n_pos': n_pos,
+                      'majority_pos': n_pos > n_fams / 2 and n_fams >= 2}
+    return result
+
+
+def build_s17_configs(raw_df):
+    """S17: AllMode + MajAgree — any mode, majority-positive families (mode-agnostic)."""
+    sa = _build_seed_groups(raw_df)
+    sa_base = sa[sa['n_seeds'] >= MIN_SEEDS].copy()
+    ag = _compute_family_agreement_allmode_bt(sa_base)
+    maj = {tk for tk, a in ag.items() if a['majority_pos']}
+    best = _select_best_bt(sa_base[sa_base['ticker'].isin(maj)], score_fn=score_pnl2)
+    if best.empty: return []
+    best['tier'] = 'S17'
+    return _sa_to_configs(best)
+
+
+def build_s18_configs(raw_df):
+    """S18: AllMode + ModeConsist — per (ticker, mode), check family agreement."""
+    sa = _build_seed_groups(raw_df)
+    sa_base = sa[sa['n_seeds'] >= MIN_SEEDS].copy()
+    d = sa_base.copy()
+    d['score'] = score_pnl2(d)
+    d = d[np.isfinite(d['score'])]
+    if d.empty: return []
+    d['exp_fam'] = d['experiment'].apply(assign_family)
+    d = d[d['exp_fam'] != 'other']
+    best_per_fam_mode = d.loc[d.groupby(['ticker', 'tpsl_mode', 'exp_fam'])['score'].idxmax()]
+    best_per_fam_mode = best_per_fam_mode[best_per_fam_mode['mean_va_pnl'] >= DEPLOY_THRESHOLD]
+    passing = []
+    for (tk, mode), grp in best_per_fam_mode.groupby(['ticker', 'tpsl_mode']):
+        n_fams = len(grp); n_pos = int((grp['vb_pnl'] > 0).sum())
+        if n_fams >= 2 and n_pos > n_fams / 2:
+            passing.append(grp)
+    if not passing: return []
+    pool = pd.concat(passing)
+    best = pool.loc[pool.groupby('ticker')['score'].idxmax()]
+    best['tier'] = 'S18'
+    return _sa_to_configs(best)
+
+
+def build_s19_configs(raw_df):
+    """S19: AllMode + AnyModePasses — if ANY mode passes, deploy best mode overall."""
+    sa = _build_seed_groups(raw_df)
+    sa_base = sa[sa['n_seeds'] >= MIN_SEEDS].copy()
+    d = sa_base.copy()
+    d['score'] = score_pnl2(d)
+    d = d[np.isfinite(d['score'])]
+    if d.empty: return []
+    d['exp_fam'] = d['experiment'].apply(assign_family)
+    d = d[d['exp_fam'] != 'other']
+    best_per_fam_mode = d.loc[d.groupby(['ticker', 'tpsl_mode', 'exp_fam'])['score'].idxmax()]
+    best_per_fam_mode = best_per_fam_mode[best_per_fam_mode['mean_va_pnl'] >= DEPLOY_THRESHOLD]
+    passing_tickers = set()
+    for (tk, mode), grp in best_per_fam_mode.groupby(['ticker', 'tpsl_mode']):
+        n_fams = len(grp); n_pos = int((grp['vb_pnl'] > 0).sum())
+        if n_fams >= 2 and n_pos > n_fams / 2:
+            passing_tickers.add(tk)
+    if not passing_tickers: return []
+    best = _select_best_bt(sa_base[sa_base['ticker'].isin(passing_tickers)], score_fn=score_pnl2)
+    if best.empty: return []
+    best['tier'] = 'S19'
+    return _sa_to_configs(best)
+
+
+STRATEGIES_TO_RUN = {
+    'S3':   ('Limit + Agreement (benchmark)',  build_s3_configs),
+    'S3F':  ('S3 + NewFilters (no PL)',        build_s3_configs),
+    'S18':  ('AllMode + ModeConsist',          build_s18_configs),
+    'S18F': ('S18 + NewFilters (no PL)',       build_s18_configs),
+}
+FILTERED_STRATEGIES = {'S3F', 'S18F'}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -759,6 +855,40 @@ def run_single_trade_limit_entry(prices, highs, lows, date_ints, time_mins,
     return (prices[n-1] - ep) / ep, ed, True
 
 
+@jit(nopython=True)
+def run_single_trade_general(prices, highs, lows, date_ints, time_mins,
+                              entry_idx, tp, sl, exit_time,
+                              dip_pct, max_wait, grace_minutes):
+    n = len(prices)
+    if entry_idx >= n - 1: return 0.0, date_ints[entry_idx], False
+    sp = prices[entry_idx]; ed = date_ints[entry_idx]; et = time_mins[entry_idx]
+
+    if dip_pct > 0.0001:
+        lp = sp * (1.0 - dip_pct)
+        fill_idx = -1
+        for k in range(entry_idx + 1, n):
+            if date_ints[k] != ed: break
+            if time_mins[k] - et > max_wait: break
+            if lows[k] <= lp: fill_idx = k; break
+        if fill_idx < 0: return 0.0, ed, False
+        ep = lp; start_idx = fill_idx + 1; fill_time = time_mins[fill_idx]
+    else:
+        ep = sp; start_idx = entry_idx + 1; fill_time = et
+
+    tgt = ep * (1.0 + tp); stp = ep * (1.0 - sl)
+    for k in range(start_idx, n):
+        if date_ints[k] != ed: return (prices[k-1] - ep) / ep, ed, True
+        elapsed = time_mins[k] - fill_time
+        sl_active = elapsed >= grace_minutes
+        tp_h = highs[k] >= tgt
+        sl_h = lows[k] <= stp if sl_active else False
+        if sl_h and tp_h: return (-sl if np.random.random() < 0.5 else tp), ed, True
+        if sl_h: return -sl, ed, True
+        if tp_h: return tp, ed, True
+        if time_mins[k] >= exit_time: return (prices[k] - ep) / ep, ed, True
+    return (prices[n-1] - ep) / ep, ed, True
+
+
 def precompute_ohlcv_arrays(df_ohlcv, start_date, end_date):
     s = pd.to_datetime(start_date).tz_localize('America/Los_Angeles')
     e = pd.to_datetime(end_date).tz_localize('America/Los_Angeles') + timedelta(days=1)
@@ -791,6 +921,30 @@ def preload_regime_data(eval_start, eval_end):
     vix_df = _load('VIX'); spy_df = _load('SPY'); tlt_df = _load('TLT')
     spy_daily = spy_df['Close'].resample('D').last().dropna() if spy_df is not None else pd.Series(dtype=float)
     tlt_daily = tlt_df['Close'].resample('D').last().dropna() if tlt_df is not None else pd.Series(dtype=float)
+
+    # VIX daily range: (High - Low) / Close per day, then 5-day rolling mean
+    vix_range_daily = pd.Series(dtype=float)
+    if vix_df is not None:
+        vix_d = vix_df.resample('D').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+        vix_d['range_pct'] = (vix_d['High'] - vix_d['Low']) / vix_d['Close']
+        vix_range_daily = vix_d['range_pct'].rolling(5, min_periods=3).mean()
+
+    # SPY 3-day cumulative return
+    spy_3d_return = pd.Series(dtype=float)
+    if not spy_daily.empty:
+        spy_3d_return = spy_daily.pct_change(3)
+
+    # build lookup dicts keyed by date_int
+    def _daily_lk(series):
+        m = {}
+        for idx, val in series.items():
+            d_int = int(idx.strftime('%Y%m%d'))
+            m[d_int] = float(val)
+        return m
+
+    vix_range_lk = _daily_lk(vix_range_daily.dropna())
+    spy_3d_lk    = _daily_lk(spy_3d_return.dropna())
+
     start = pd.Timestamp(eval_start, tz=PST) - timedelta(days=10)
     end = pd.Timestamp(eval_end, tz=PST) + timedelta(days=1)
     def _lk(d):
@@ -818,17 +972,20 @@ def preload_regime_data(eval_start, eval_end):
             s_gap = ((sc - sp) / sp * 100) if sc and sp and sp != 0 else 0.0
             tc = _med(tlt_lk, d_int, em); tp = tlt_prev.get(d_int)
             t_gap = ((tc - tp) / tp * 100) if tc and tp and tp != 0 else 0.0
-            regime_dict[(d_int, em)] = np.array([v, t_gap, s_gap])
-    print(f"    Regime data: {len(regime_dict)} combos")
+            vr = vix_range_lk.get(d_int, 0.0)
+            s3d = spy_3d_lk.get(d_int, 0.0)
+            regime_dict[(d_int, em)] = np.array([v, t_gap, s_gap, vr, s3d])
+    print(f"    Regime data: {len(regime_dict)} combos  |  VIX range days: {len(vix_range_lk)}  SPY 3d days: {len(spy_3d_lk)}")
     return regime_dict
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODIFIED BACKTEST — record all trades, tag filter blocks
+# BACKTEST RUNNER — general, all modes
 # ══════════════════════════════════════════════════════════════════════════════
-def run_backtest_with_filter_tags(configs, regime_dict, market_df):
+def run_backtest(configs, regime_dict, market_df, label='', new_regime_filters=False):
     print(f"\n{'='*W}")
-    print(f"  BACKTEST: S3 with filter tagging — {len(configs)} configs")
+    filt_tag = ' [+SPY3d/VIXrange filters]' if new_regime_filters else ''
+    print(f"  BACKTEST: {label}{filt_tag} — {len(configs)} configs")
     print(f"{'='*W}")
     if not configs: return pd.DataFrame()
 
@@ -849,8 +1006,8 @@ def run_backtest_with_filter_tags(configs, regime_dict, market_df):
         if not signals: print(f"  {ticker}: No signals"); gc.collect(); continue
 
         atr_series = (compute_daily_atr_series(df_pst) if mode in ('atr','trailing_decay','atr_sl')
-                      else compute_adaptive_atr_series(df_pst) if mode == 'atr_adaptive' else None)
-        vol_baselines = precompute_vol_baselines(df_pst)
+                      else compute_adaptive_atr_series(df_pst)
+                      if mode in ('atr_adaptive','regime_adaptive') else None)
         ohlcv = precompute_ohlcv_arrays(df_pst, TEST_START, TEST_END)
         if ohlcv is None: gc.collect(); continue
 
@@ -866,21 +1023,18 @@ def run_backtest_with_filter_tags(configs, regime_dict, market_df):
                     oi = j; break
             if oi is None: continue
 
-            entry_vol = float(ohlcv['volumes'][oi])
-            entry_price = float(ohlcv['prices'][oi])
-            dv = entry_vol * entry_price
-
-            vol_ok_wf = check_volume_filter(vol_baselines, d_int, em, entry_vol, cfg['vol_filter_pct'])
-            vol_ok_floor = check_volume_filter(vol_baselines, d_int, em, entry_vol,
-                                                max(cfg['vol_filter_pct'], FILTER_VOL_PCT))
-            dvol_ok = dv >= FILTER_DOLLAR_VOL
-
             rk = (d_int, em); vix_val = regime_dict[rk][0] if rk in regime_dict else None
             if rk in regime_dict:
                 rv = regime_dict[rk]
                 if (rv[0] > cfg.get('vix_threshold', 99) and
                     rv[1] < cfg.get('tlt_crash', -99) and
                     rv[2] > cfg.get('spy_ignore', 99)):
+                    fr += 1; continue
+
+            if new_regime_filters and rk in regime_dict:
+                rv = regime_dict[rk]
+                vix_rng = rv[3]; spy_3d = rv[4]
+                if vix_rng >= VIX_RANGE_5D_MAX or spy_3d < SPY_3D_RETURN_MIN:
                     fr += 1; continue
 
             atr_pct = 0.05
@@ -896,38 +1050,34 @@ def run_backtest_with_filter_tags(configs, regime_dict, market_df):
                         if not np.isnan(v) and v > 0: atr_pct = v
 
             tp, sl = compute_dynamic_tpsl(cfg, atr_pct, vix_val)
+            dip = float(cfg.get('dip_pct', 0.0))
+            mw = int(cfg.get('max_wait_minutes', 0))
+            gm = int(cfg.get('grace_minutes', 0))
 
-            pnl, td, valid = run_single_trade_limit_entry(
+            pnl, td, valid = run_single_trade_general(
                 ohlcv['prices'], ohlcv['highs'], ohlcv['lows'],
                 ohlcv['dates'], ohlcv['times'], oi, tp, sl,
-                EXIT_TIME_MIN, cfg['dip_pct'], cfg['max_wait_minutes'])
+                EXIT_TIME_MIN, dip, mw, gm)
 
             if not valid:
                 uf += 1; continue
 
             pnl -= 2 * SLIPPAGE_PCT
 
-            blocked_vol = (not vol_ok_floor) and vol_ok_wf
-            blocked_dvol = not dvol_ok
-            blocked_any = blocked_vol or blocked_dvol
-
             trades.append({
                 'ticker': ticker, 'experiment': cfg['experiment'],
                 'date_int': int(td), 'pnl': float(pnl), 'prob': sig['prob'],
                 'tp': tp, 'sl': sl, 'mode': mode,
-                'dip_pct': cfg.get('dip_pct', 0), 'max_wait': cfg.get('max_wait_minutes', 0),
-                'dollar_vol': dv, 'entry_vol': entry_vol, 'entry_price': entry_price,
-                'blocked_vol': blocked_vol, 'blocked_dvol': blocked_dvol,
-                'blocked_any': blocked_any,
+                'dip_pct': dip, 'max_wait': mw, 'grace_minutes': gm,
+                'entry_price': float(ohlcv['prices'][oi]),
                 'vix': vix_val,
             })
             last_d = int(td)
 
         w = sum(1 for t in trades if t['pnl'] > 0); l = len(trades) - w
         avg = np.mean([t['pnl'] for t in trades]) if trades else 0
-        n_blocked = sum(1 for t in trades if t['blocked_any'])
-        print(f"  {ticker:<7} {cfg['experiment']:<20} {len(signals):>3} sig -> {len(trades):>3} trades "
-              f"({w}W/{l}L)  avg {avg:>+6.2%}  blocked={n_blocked}  reg_f={fr} unfilled={uf}")
+        print(f"  {ticker:<7} {cfg['experiment']:<20} {mode:<14} {len(signals):>3} sig -> "
+              f"{len(trades):>3} trades ({w}W/{l}L)  avg {avg:>+6.2%}  reg_f={fr} unfilled={uf}")
         all_trades.extend(trades)
         del ohlcv; gc.collect()
 
@@ -938,18 +1088,24 @@ def run_backtest_with_filter_tags(configs, regime_dict, market_df):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RUN
+# RUN — multi-strategy comparison
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*W}")
-print(f"  JUNE FILTER IMPACT BACKTEST — S3 (Limit + Agreement)")
+print(f"  STRATEGY COMPARISON BACKTEST — S3/S18 vs S3F/S18F (new regime filters, no PL)")
 print(f"  TEST: {TEST_START} → {TEST_END}  |  June analysis: {JUNE_START} → {JUNE_END}")
-print(f"  Filters under test: VOL floor={FILTER_VOL_PCT}%  DOLLAR_VOL=${FILTER_DOLLAR_VOL:,}")
 print(f"{'='*W}")
 
 raw_df = load_raw_wf_data()
-configs = build_s3_configs(raw_df)
-tickers = sorted(set(c['ticker'] for c in configs))
-print(f"  S3: {len(configs)} configs, {len(tickers)} tickers: {tickers}")
+
+all_strategy_configs = {}
+for key, (name, builder) in STRATEGIES_TO_RUN.items():
+    configs = builder(raw_df)
+    all_strategy_configs[key] = configs
+    tickers = sorted(set(c['ticker'] for c in configs))
+    modes = sorted(set(c['tpsl_mode'] for c in configs))
+    print(f"  {key}: {name}")
+    print(f"    {len(configs)} configs, {len(tickers)} tickers: {tickers}")
+    print(f"    modes: {modes}")
 
 market_df = build_market_context()
 regime_dict = preload_regime_data(TEST_START, TEST_END)
@@ -964,304 +1120,299 @@ else:
 import ctypes
 _libc = ctypes.CDLL("libc.so.6")
 
-tdf = run_backtest_with_filter_tags(configs, regime_dict, market_df)
+all_strategy_trades = {}
+for key, (name, _) in STRATEGIES_TO_RUN.items():
+    configs = all_strategy_configs[key]
+    use_new_filters = key in FILTERED_STRATEGIES
+    tdf = run_backtest(configs, regime_dict, market_df,
+                       label=f"{key}: {name}", new_regime_filters=use_new_filters)
+    all_strategy_trades[key] = tdf
+    gc.collect(); _libc.malloc_trim(0)
+
 _model_cache.clear(); _feat_cache.clear(); _stats_cache.clear()
 gc.collect(); _libc.malloc_trim(0)
 
-if tdf.empty:
-    print("  No trades generated — check configs")
+STRAT_COLORS = {'S3': '#2196F3', 'S3F': '#0D47A1', 'S18': '#FF9800', 'S18F': '#E65100'}
+STRAT_MARKERS = {'S3': 'o', 'S3F': 'D', 'S18': '^', 'S18F': 'v'}
+active_keys = [k for k in STRATEGIES_TO_RUN if not all_strategy_trades[k].empty]
+
+if not active_keys:
+    print("  No trades generated for any strategy — check configs")
     raise SystemExit
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SPLIT: filtered vs unfiltered — full period + June
-# ══════════════════════════════════════════════════════════════════════════════
-june_start_int = int(JUNE_START.replace('-', ''))
-june_end_int   = int(JUNE_END.replace('-', ''))
-
-all_trades_full   = tdf.copy()
-filtered_out_full = tdf[tdf['blocked_any'] == True].copy()
-kept_trades_full  = tdf[tdf['blocked_any'] == False].copy()
-
-june = tdf[(tdf['date_int'] >= june_start_int) & (tdf['date_int'] <= june_end_int)].copy()
-all_trades_jun   = june.copy()
-filtered_out_jun = june[june['blocked_any'] == True].copy()
-kept_trades_jun  = june[june['blocked_any'] == False].copy()
-
-def pstats(label, df):
-    if df.empty:
-        print(f"  {label}: 0 trades"); return
-    n = len(df); w = len(df[df['pnl'] > 0]); wr = w/n*100
-    avg = df['pnl'].mean(); tot = df['pnl'].sum()
-    alloc = STARTING_CAPITAL / n
-    dollar = sum(alloc * p for p in df['pnl'])
-    print(f"  {label}:")
-    print(f"    Trades: {n}, Wins: {w}, WR: {wr:.0f}%, "
-          f"Avg: {avg:+.2%}, Total: {tot:+.2%}, $PnL: ${dollar:+,.0f}")
-
-def print_comparison_table(all_t, kept_t, blocked_t):
-    print(f"\n  {'Scenario':<40} {'Trades':>7} {'WR':>5} {'AvgPnL':>9} {'TotalPnL':>10} {'$PnL':>12}")
-    print(f"  {'─'*85}")
-    for label, df in [('ALL (no vol/dollar filters)', all_t),
-                      ('WITH filters (vol+dollar)', kept_t),
-                      ('BLOCKED (would be cut)', blocked_t)]:
-        if df.empty:
-            print(f"  {label:<40} {'0':>7}"); continue
-        n = len(df); w = len(df[df['pnl'] > 0])
-        alloc = STARTING_CAPITAL / n
-        dollar = sum(alloc * p for p in df['pnl'])
-        print(f"  {label:<40} {n:>7} {w/n:>4.0%} {df['pnl'].mean():>+8.2%} "
-              f"{df['pnl'].sum():>+9.2%} ${dollar:>+11,.0f}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FULL PERIOD RESULTS (Apr → Jun)
+# HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\n{'='*W}")
-print(f"  FULL PERIOD RESULTS — {TEST_START} → {TEST_END} — ALL vs FILTERED")
+def _strat_stats(tdf, capital=STARTING_CAPITAL):
+    if tdf.empty: return {'n': 0, 'wins': 0, 'wr': 0, 'avg': 0, 'tot': 0, 'dollar': 0}
+    n = len(tdf); w = int((tdf['pnl'] > 0).sum())
+    alloc = capital / n
+    dollar = sum(alloc * p for p in tdf['pnl'])
+    return {'n': n, 'wins': w, 'wr': w/n, 'avg': tdf['pnl'].mean(),
+            'tot': tdf['pnl'].sum(), 'dollar': dollar}
+
+def _daily_dollar(tdf, dates, capital=STARTING_CAPITAL):
+    out = []
+    for d in dates:
+        day = tdf[tdf['date'] == d] if not tdf.empty else pd.DataFrame()
+        n = len(day)
+        if n > 0:
+            alloc = capital / n
+            out.append(sum(alloc * p for p in day['pnl']))
+        else:
+            out.append(0.0)
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STRATEGY COMPARISON TABLE — Full Period
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n\n{'='*W}")
+print(f"  STRATEGY COMPARISON — Full Period {TEST_START} → {TEST_END}")
 print(f"{'='*W}")
-print()
-pstats('ALL TRADES (no vol/dollar filter)', all_trades_full)
-pstats('WITH FILTERS (vol 25% floor + $50K dvol)', kept_trades_full)
-pstats('BLOCKED by filters (would be removed)', filtered_out_full)
-print_comparison_table(all_trades_full, kept_trades_full, filtered_out_full)
 
-# ── Monthly breakdown ──
-all_trades_full['month'] = pd.to_datetime(all_trades_full['date']).dt.to_period('M')
-kept_full_m = kept_trades_full.copy()
-if not kept_full_m.empty:
-    kept_full_m['month'] = pd.to_datetime(kept_full_m['date']).dt.to_period('M')
+print(f"\n  {'Strategy':<30} {'Trades':>7} {'Wins':>5} {'WR':>5} {'AvgPnL':>9} "
+      f"{'TotalPnL':>10} {'$PnL':>12} {'Tickers':>8}")
+print(f"  {'─'*90}")
 
-months = sorted(all_trades_full['month'].unique())
-print(f"\n  {'Month':<10} {'|':>2} {'All N':>6} {'All WR':>7} {'All Avg':>9} {'All $PnL':>12} "
-      f"{'|':>2} {'Flt N':>6} {'Flt WR':>7} {'Flt Avg':>9} {'Flt $PnL':>12} {'|':>2} {'Delta$':>10}")
-print(f"  {'─'*105}")
+for key in active_keys:
+    name = STRATEGIES_TO_RUN[key][0]
+    tdf = all_strategy_trades[key]
+    s = _strat_stats(tdf)
+    n_tk = tdf['ticker'].nunique() if not tdf.empty else 0
+    tag = '  ← BENCHMARK' if key == 'S3' else ''
+    print(f"  {key}: {name:<25} {s['n']:>7} {s['wins']:>5} {s['wr']:>4.0%} "
+          f"{s['avg']:>+8.2%} {s['tot']:>+9.2%} ${s['dollar']:>+11,.0f} {n_tk:>8}{tag}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MONTHLY BREAKDOWN — per strategy
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n\n{'='*W}")
+print(f"  MONTHLY BREAKDOWN — per strategy")
+print(f"{'='*W}")
+
+ref = all_strategy_trades[active_keys[0]]
+ref['month'] = pd.to_datetime(ref['date']).dt.to_period('M')
+months = sorted(ref['month'].unique())
+
+hdr = ''.join(f" {'|':>2} {k:>5}N {k:>6}WR {k:>8}Avg {k:>10}$PnL" for k in active_keys)
+print(f"\n  {'Month':<10}{hdr}")
+print(f"  {'─'*(10 + 33 * len(active_keys))}")
 
 for mo in months:
-    aw = all_trades_full[all_trades_full['month'] == mo]
-    kw = kept_full_m[kept_full_m['month'] == mo] if not kept_full_m.empty else pd.DataFrame()
-    a_n = len(aw)
-    a_wr = len(aw[aw['pnl'] > 0]) / a_n * 100 if a_n > 0 else 0
-    a_avg = aw['pnl'].mean() if a_n > 0 else 0
-    a_alloc = STARTING_CAPITAL / a_n if a_n > 0 else 0
-    a_dollar = sum(a_alloc * p for p in aw['pnl']) if a_n > 0 else 0
-    k_n = len(kw)
-    k_wr = len(kw[kw['pnl'] > 0]) / k_n * 100 if k_n > 0 else 0
-    k_avg = kw['pnl'].mean() if k_n > 0 else 0
-    k_alloc = STARTING_CAPITAL / k_n if k_n > 0 else 0
-    k_dollar = sum(k_alloc * p for p in kw['pnl']) if k_n > 0 else 0
-    delta = a_dollar - k_dollar
-    print(f"  {str(mo):<10} {'|':>2} {a_n:>6} {a_wr:>6.0f}% {a_avg:>+8.2%} ${a_dollar:>+11,.0f} "
-          f"{'|':>2} {k_n:>6} {k_wr:>6.0f}% {k_avg:>+8.2%} ${k_dollar:>+11,.0f} {'|':>2} ${delta:>+9,.0f}")
+    print(f"  {str(mo):<10}", end='')
+    for key in active_keys:
+        tdf = all_strategy_trades[key]
+        if tdf.empty:
+            print(f" {'|':>2} {'':>5} {'':>7} {'':>9} {'':>11}", end=''); continue
+        tdf_m = tdf.copy()
+        tdf_m['month'] = pd.to_datetime(tdf_m['date']).dt.to_period('M')
+        mw = tdf_m[tdf_m['month'] == mo]
+        s = _strat_stats(mw)
+        print(f" {'|':>2} {s['n']:>5} {s['wr']:>6.0%} {s['avg']:>+8.2%} ${s['dollar']:>+10,.0f}", end='')
+    print()
 
-# ── Per-ticker impact (full period) ──
-print(f"\n{'='*W}")
-print(f"  PER-TICKER FILTER IMPACT — Full Period {TEST_START} → {TEST_END}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PER-TICKER COMPARISON
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n\n{'='*W}")
+print(f"  PER-TICKER COMPARISON — Full Period {TEST_START} → {TEST_END}")
 print(f"{'='*W}")
-tickers_full = sorted(all_trades_full['ticker'].unique())
-print(f"\n  {'Ticker':<7} {'All':>4} {'Kept':>5} {'Blk':>4} {'All Avg':>9} {'Kept Avg':>9} "
-      f"{'All $PnL':>12} {'Kept $PnL':>12} {'Delta$':>10}")
-print(f"  {'─'*85}")
-for tk in tickers_full:
-    tk_all = all_trades_full[all_trades_full['ticker'] == tk]
-    tk_kept = kept_trades_full[kept_trades_full['ticker'] == tk] if not kept_trades_full.empty else pd.DataFrame()
-    tk_blk = filtered_out_full[filtered_out_full['ticker'] == tk] if not filtered_out_full.empty else pd.DataFrame()
-    n_a = len(tk_all); n_k = len(tk_kept); n_b = len(tk_blk)
-    a_avg = tk_all['pnl'].mean() if n_a > 0 else 0
-    k_avg = tk_kept['pnl'].mean() if n_k > 0 else 0
-    a_alloc = STARTING_CAPITAL / max(len(all_trades_full), 1)
-    k_alloc = STARTING_CAPITAL / max(len(kept_trades_full), 1)
-    a_dollar = tk_all['pnl'].sum() * a_alloc if n_a > 0 else 0
-    k_dollar = tk_kept['pnl'].sum() * k_alloc if n_k > 0 else 0
-    delta = a_dollar - k_dollar
-    marker = ' <<<' if abs(delta) > 2000 else ''
-    print(f"  {tk:<7} {n_a:>4} {n_k:>5} {n_b:>4} {a_avg:>+8.2%} {k_avg:>+8.2%} "
-          f"${a_dollar:>+11,.0f} ${k_dollar:>+11,.0f} ${delta:>+9,.0f}{marker}")
+
+all_bt_tickers = sorted(set().union(*[
+    set(all_strategy_trades[k]['ticker'].unique())
+    for k in active_keys if not all_strategy_trades[k].empty
+]))
+
+hdr = ''.join(f" {k+' N':>6} {k+' Avg':>8} {k+' Mode':>14}" for k in active_keys)
+print(f"\n  {'Ticker':<7}{hdr}")
+print(f"  {'─'*(7 + 30 * len(active_keys))}")
+
+for tk in all_bt_tickers:
+    print(f"  {tk:<7}", end='')
+    for key in active_keys:
+        tdf = all_strategy_trades[key]
+        tk_data = tdf[tdf['ticker'] == tk] if not tdf.empty else pd.DataFrame()
+        if tk_data.empty:
+            print(f" {'·':>6} {'·':>8} {'·':>14}", end='')
+        else:
+            n = len(tk_data); avg = tk_data['pnl'].mean()
+            mode = tk_data['mode'].iloc[0]
+            print(f" {n:>6} {avg:>+7.2%} {mode:>14}", end='')
+    print()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONFIG DIFFERENCES — what changed between strategies?
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n\n{'='*W}")
+print(f"  CONFIG DIFFERENCES — tickers/modes that differ from S3 benchmark")
+print(f"{'='*W}")
+
+s3_tdf = all_strategy_trades.get('S3', pd.DataFrame())
+s3_configs = {}
+if not s3_tdf.empty:
+    for tk in s3_tdf['ticker'].unique():
+        r = s3_tdf[s3_tdf['ticker'] == tk].iloc[0]
+        s3_configs[tk] = (r['mode'], r['experiment'])
+
+for key in active_keys:
+    if key == 'S3': continue
+    name = STRATEGIES_TO_RUN[key][0]
+    tdf = all_strategy_trades[key]
+    if tdf.empty: continue
+
+    added = []; changed = []; same = []
+    for tk in sorted(tdf['ticker'].unique()):
+        r = tdf[tdf['ticker'] == tk].iloc[0]
+        mode, exp = r['mode'], r['experiment']
+        if tk not in s3_configs:
+            added.append(f"{tk} ({mode})")
+        elif s3_configs[tk][0] != mode or s3_configs[tk][1] != exp:
+            changed.append(f"{tk}: {s3_configs[tk][0]} → {mode}")
+        else:
+            same.append(tk)
+
+    s3_only = sorted(set(s3_configs.keys()) - set(tdf['ticker'].unique()))
+    print(f"\n  {key}: {name}")
+    if added: print(f"    ADDED vs S3:   {', '.join(added)}")
+    if changed: print(f"    CHANGED mode:  {', '.join(changed)}")
+    if s3_only: print(f"    DROPPED vs S3: {', '.join(s3_only)}")
+    if same: print(f"    SAME as S3:    {', '.join(same)}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JUNE RESULTS
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\n{'='*W}")
-print(f"  JUNE RESULTS — {JUNE_START} → {JUNE_END} — ALL vs FILTERED")
+june_start_int = int(JUNE_START.replace('-', ''))
+june_end_int   = int(JUNE_END.replace('-', ''))
+
+print(f"\n\n{'='*W}")
+print(f"  JUNE RESULTS — {JUNE_START} → {JUNE_END}")
 print(f"{'='*W}")
-print()
-pstats('ALL TRADES (no vol/dollar filter)', all_trades_jun)
-pstats('WITH FILTERS (vol 25% floor + $50K dvol)', kept_trades_jun)
-pstats('BLOCKED by filters (would be removed)', filtered_out_jun)
-print_comparison_table(all_trades_jun, kept_trades_jun, filtered_out_jun)
+
+print(f"\n  {'Strategy':<30} {'Trades':>7} {'Wins':>5} {'WR':>5} {'AvgPnL':>9} "
+      f"{'TotalPnL':>10} {'$PnL':>12}")
+print(f"  {'─'*82}")
+
+for key in active_keys:
+    name = STRATEGIES_TO_RUN[key][0]
+    tdf = all_strategy_trades[key]
+    jun = tdf[(tdf['date_int'] >= june_start_int) & (tdf['date_int'] <= june_end_int)] if not tdf.empty else pd.DataFrame()
+    s = _strat_stats(jun)
+    tag = '  ← BENCHMARK' if key == 'S3' else ''
+    print(f"  {key}: {name:<25} {s['n']:>7} {s['wins']:>5} {s['wr']:>4.0%} "
+          f"{s['avg']:>+8.2%} {s['tot']:>+9.2%} ${s['dollar']:>+11,.0f}{tag}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOCKED TRADES DETAIL (full period)
+# WEEKLY BREAKDOWN
 # ══════════════════════════════════════════════════════════════════════════════
-if not filtered_out_full.empty:
-    print(f"\n{'='*W}")
-    print(f"  BLOCKED TRADES DETAIL — Full Period")
-    print(f"{'='*W}")
-    print(f"  {'Date':<12} {'Ticker':<7} {'Prob':>6} {'Entry$':>9} {'TP':>5} {'SL':>5} "
-          f"{'PnL':>8} {'$Vol':>10} {'Vol?':>5} {'DVol?':>5} {'W/L':>4}")
-    print(f"  {'─'*90}")
-    for _, r in filtered_out_full.sort_values('date').iterrows():
-        wl = 'W' if r['pnl'] > 0 else 'L'
-        vf = 'BLK' if r['blocked_vol'] else 'ok'
-        df_ = 'BLK' if r['blocked_dvol'] else 'ok'
-        print(f"  {str(r['date'].date()):<12} {r['ticker']:<7} {r['prob']:>5.3f} "
-              f"${r['entry_price']:>8.2f} {r['tp']:>4.0%} {r['sl']:>4.0%} "
-              f"{r['pnl']:>+7.2%} ${r['dollar_vol']:>9,.0f} {vf:>5} {df_:>5} {wl:>4}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# WEEKLY BREAKDOWN (full period)
-# ══════════════════════════════════════════════════════════════════════════════
-print(f"\n{'='*W}")
+print(f"\n\n{'='*W}")
 print(f"  WEEKLY BREAKDOWN — Full Period {TEST_START} → {TEST_END}")
 print(f"{'='*W}")
 
-all_trades_full['week_label'] = (pd.to_datetime(all_trades_full['date']).dt.isocalendar().year.astype(str) +
-                                  '-W' + pd.to_datetime(all_trades_full['date']).dt.isocalendar().week.astype(str).str.zfill(2))
-kept_full_wk = kept_trades_full.copy()
-if not kept_full_wk.empty:
-    kept_full_wk['week_label'] = (pd.to_datetime(kept_full_wk['date']).dt.isocalendar().year.astype(str) +
-                                   '-W' + pd.to_datetime(kept_full_wk['date']).dt.isocalendar().week.astype(str).str.zfill(2))
+ref_wk = all_strategy_trades[active_keys[0]].copy()
+ref_wk['week_label'] = (pd.to_datetime(ref_wk['date']).dt.isocalendar().year.astype(str) +
+                          '-W' + pd.to_datetime(ref_wk['date']).dt.isocalendar().week.astype(str).str.zfill(2))
+weeks = sorted(ref_wk['week_label'].unique())
 
-weeks = sorted(all_trades_full['week_label'].unique())
-
-print(f"\n  {'Week':<10} {'|':>2} {'All N':>6} {'All WR':>7} {'All Avg':>9} {'All $PnL':>12} "
-      f"{'|':>2} {'Flt N':>6} {'Flt WR':>7} {'Flt Avg':>9} {'Flt $PnL':>12} {'|':>2} {'Delta$':>10}")
-print(f"  {'─'*107}")
+hdr = ''.join(f" {'|':>2} {k:>4}N {k:>7}$PnL" for k in active_keys)
+print(f"\n  {'Week':<10}{hdr}")
+print(f"  {'─'*(10 + 16 * len(active_keys))}")
 
 for wk in weeks:
-    aw = all_trades_full[all_trades_full['week_label'] == wk]
-    kw = kept_full_wk[kept_full_wk['week_label'] == wk] if not kept_full_wk.empty else pd.DataFrame()
-    a_n = len(aw)
-    a_wr = len(aw[aw['pnl'] > 0]) / a_n * 100 if a_n > 0 else 0
-    a_avg = aw['pnl'].mean() if a_n > 0 else 0
-    a_alloc = STARTING_CAPITAL / a_n if a_n > 0 else 0
-    a_dollar = sum(a_alloc * p for p in aw['pnl']) if a_n > 0 else 0
-    k_n = len(kw)
-    k_wr = len(kw[kw['pnl'] > 0]) / k_n * 100 if k_n > 0 else 0
-    k_avg = kw['pnl'].mean() if k_n > 0 else 0
-    k_alloc = STARTING_CAPITAL / k_n if k_n > 0 else 0
-    k_dollar = sum(k_alloc * p for p in kw['pnl']) if k_n > 0 else 0
-    delta = a_dollar - k_dollar
-    print(f"  {wk:<10} {'|':>2} {a_n:>6} {a_wr:>6.0f}% {a_avg:>+8.2%} ${a_dollar:>+11,.0f} "
-          f"{'|':>2} {k_n:>6} {k_wr:>6.0f}% {k_avg:>+8.2%} ${k_dollar:>+11,.0f} {'|':>2} ${delta:>+9,.0f}")
+    print(f"  {wk:<10}", end='')
+    for key in active_keys:
+        tdf = all_strategy_trades[key]
+        if tdf.empty:
+            print(f" {'|':>2} {'':>5} {'':>8}", end=''); continue
+        tdf_w = tdf.copy()
+        tdf_w['week_label'] = (pd.to_datetime(tdf_w['date']).dt.isocalendar().year.astype(str) +
+                                '-W' + pd.to_datetime(tdf_w['date']).dt.isocalendar().week.astype(str).str.zfill(2))
+        ww = tdf_w[tdf_w['week_label'] == wk]
+        s = _strat_stats(ww)
+        print(f" {'|':>2} {s['n']:>4} ${s['dollar']:>+7,.0f}", end='')
+    print()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DAY-BY-DAY PROGRESSION (full period)
+# DAY-BY-DAY — all strategies
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\n{'='*W}")
+print(f"\n\n{'='*W}")
 print(f"  DAY-BY-DAY — Full Period {TEST_START} → {TEST_END}")
 print(f"{'='*W}")
 
-dates_full = sorted(all_trades_full['date'].unique())
-cum_all = 0.0
-cum_flt = 0.0
+all_dates = sorted(set().union(*[
+    set(all_strategy_trades[k]['date'].unique())
+    for k in active_keys if not all_strategy_trades[k].empty
+]))
 
-for d in dates_full:
-    day_all = all_trades_full[all_trades_full['date'] == d]
-    day_kept = kept_trades_full[kept_trades_full['date'] == d] if not kept_trades_full.empty else pd.DataFrame()
-    day_blocked = filtered_out_full[filtered_out_full['date'] == d] if not filtered_out_full.empty else pd.DataFrame()
+cum = {k: 0.0 for k in active_keys}
 
-    n_all = len(day_all); n_kept = len(day_kept); n_blk = len(day_blocked)
-    alloc_all = STARTING_CAPITAL / n_all if n_all > 0 else 0
-    alloc_kept = STARTING_CAPITAL / n_kept if n_kept > 0 else 0
-    dollar_all = sum(alloc_all * p for p in day_all['pnl']) if n_all > 0 else 0
-    dollar_kept = sum(alloc_kept * p for p in day_kept['pnl']) if n_kept > 0 else 0
-    cum_all += dollar_all
-    cum_flt += dollar_kept
-    delta = dollar_all - dollar_kept
-
+for d in all_dates:
     is_june = d >= pd.Timestamp(JUNE_START)
     month_tag = ' [JUN]' if is_june else ''
+    parts = []
+    for key in active_keys:
+        tdf = all_strategy_trades[key]
+        day = tdf[tdf['date'] == d] if not tdf.empty else pd.DataFrame()
+        n = len(day)
+        if n > 0:
+            alloc = STARTING_CAPITAL / n
+            dollar = sum(alloc * p for p in day['pnl'])
+        else:
+            dollar = 0.0
+        cum[key] += dollar
+        parts.append(f"{key}: {n}t ${dollar:+,.0f} (cum ${cum[key]:+,.0f})")
 
-    print(f"\n  ┌─ {d.date()}{month_tag} ───────────────────────────────────────────────────────────────┐")
-    print(f"  │  ALL: {n_all} trades ${dollar_all:+,.0f} (cum ${cum_all:+,.0f})  │  "
-          f"FILTERED: {n_kept} trades ${dollar_kept:+,.0f} (cum ${cum_flt:+,.0f})  │  "
-          f"Δ ${delta:+,.0f}")
+    print(f"\n  ┌─ {d.date()}{month_tag} ─┐")
+    print(f"  │  {'  │  '.join(parts)}")
     print(f"  └{'─'*(W-3)}┘")
 
-    for _, t in day_all.sort_values('ticker').iterrows():
-        wl = 'W' if t['pnl'] > 0 else 'L'
-        tag = ''
-        if t['blocked_vol']: tag = ' [VOL-BLOCKED]'
-        elif t['blocked_dvol']: tag = ' [DVOL-BLOCKED]'
-        print(f"    {wl} {t['ticker']:<7} {t['pnl']:>+7.2%}  entry ${t['entry_price']:.2f}  "
-              f"prob {t['prob']:.3f}  dv=${t['dollar_vol']:,.0f}{tag}")
+    for key in active_keys:
+        tdf = all_strategy_trades[key]
+        day = tdf[tdf['date'] == d] if not tdf.empty else pd.DataFrame()
+        if day.empty: continue
+        for _, t in day.sort_values('ticker').iterrows():
+            wl = 'W' if t['pnl'] > 0 else 'L'
+            mode_tag = f" [{t['mode']}]" if t['mode'] != 'limit_entry' else ''
+            print(f"    [{key}] {wl} {t['ticker']:<7} {t['pnl']:>+7.2%}  "
+                  f"entry ${t['entry_price']:.2f}  prob {t['prob']:.3f}{mode_tag}")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PER-TICKER IMPACT — June only
-# ══════════════════════════════════════════════════════════════════════════════
-print(f"\n{'='*W}")
-print(f"  PER-TICKER FILTER IMPACT — June Only")
-print(f"{'='*W}")
-
-tickers_jun = sorted(all_trades_jun['ticker'].unique())
-print(f"\n  {'Ticker':<7} {'All':>4} {'Kept':>5} {'Blk':>4} {'All Avg':>9} {'Kept Avg':>9} "
-      f"{'All $PnL':>12} {'Kept $PnL':>12} {'Delta$':>10}")
-print(f"  {'─'*85}")
-
-for tk in tickers_jun:
-    tk_all = all_trades_jun[all_trades_jun['ticker'] == tk]
-    tk_kept = kept_trades_jun[kept_trades_jun['ticker'] == tk] if not kept_trades_jun.empty else pd.DataFrame()
-    tk_blk = filtered_out_jun[filtered_out_jun['ticker'] == tk] if not filtered_out_jun.empty else pd.DataFrame()
-    n_a = len(tk_all); n_k = len(tk_kept); n_b = len(tk_blk)
-    a_avg = tk_all['pnl'].mean() if n_a > 0 else 0
-    k_avg = tk_kept['pnl'].mean() if n_k > 0 else 0
-    a_alloc = STARTING_CAPITAL / max(len(all_trades_jun), 1)
-    k_alloc = STARTING_CAPITAL / max(len(kept_trades_jun), 1)
-    a_dollar = tk_all['pnl'].sum() * a_alloc if n_a > 0 else 0
-    k_dollar = tk_kept['pnl'].sum() * k_alloc if n_k > 0 else 0
-    delta = a_dollar - k_dollar
-    marker = ' <<<' if abs(delta) > 2000 else ''
-    print(f"  {tk:<7} {n_a:>4} {n_k:>5} {n_b:>4} {a_avg:>+8.2%} {k_avg:>+8.2%} "
-          f"${a_dollar:>+11,.0f} ${k_dollar:>+11,.0f} ${delta:>+9,.0f}{marker}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CHARTS — Full period
+# CHARTS — multi-strategy equity curves
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\n  Generating charts...")
 
-all_daily_dollar = []
-flt_daily_dollar = []
-all_daily_n = []
-flt_daily_n = []
+daily_dollars = {}
+for key in active_keys:
+    daily_dollars[key] = _daily_dollar(all_strategy_trades[key], all_dates)
 
-for d in dates_full:
-    da = all_trades_full[all_trades_full['date'] == d]
-    dk = kept_trades_full[kept_trades_full['date'] == d] if not kept_trades_full.empty else pd.DataFrame()
-    n_a = len(da); n_k = len(dk)
-    a_alloc = STARTING_CAPITAL / n_a if n_a > 0 else 0
-    k_alloc = STARTING_CAPITAL / n_k if n_k > 0 else 0
-    all_daily_dollar.append(sum(a_alloc * p for p in da['pnl']) if n_a > 0 else 0)
-    flt_daily_dollar.append(sum(k_alloc * p for p in dk['pnl']) if n_k > 0 else 0)
-    all_daily_n.append(n_a)
-    flt_daily_n.append(n_k)
-
-date_labels = [d.strftime('%b %d') for d in dates_full]
-x = np.arange(len(dates_full))
-bar_w = 0.35
-
-june_start_idx = next((i for i, d in enumerate(dates_full) if d >= pd.Timestamp(JUNE_START)), len(dates_full))
+date_labels = [d.strftime('%b %d') for d in all_dates]
+x = np.arange(len(all_dates))
+june_start_idx = next((i for i, d in enumerate(all_dates)
+                       if d >= pd.Timestamp(JUNE_START)), len(all_dates))
 
 fig, axes = plt.subplots(3, 1, figsize=(20, 14))
-fig.suptitle(f'S3 Filter Impact — Full Backtest {TEST_START} → {TEST_END}\n'
-             f'VOL floor={FILTER_VOL_PCT}% | DOLLAR_VOL=${FILTER_DOLLAR_VOL:,}',
+fig.suptitle(f'Strategy Comparison — {TEST_START} → {TEST_END}\n'
+             f'S3/S18 (original) vs S3F/S18F (+SPY 3d return, +VIX range, -PL)',
              fontsize=14, fontweight='bold')
 
-# Chart 1: Dual cumulative equity
-all_cum = np.cumsum(all_daily_dollar)
-flt_cum = np.cumsum(flt_daily_dollar)
-axes[0].plot(x, [STARTING_CAPITAL + c for c in all_cum], 'o-',
-             label='ALL trades (no vol/dvol filter)', color='#4CAF50', linewidth=2, markersize=3)
-axes[0].plot(x, [STARTING_CAPITAL + c for c in flt_cum], 's-',
-             label='WITH filters (vol+dvol)', color='#F44336', linewidth=2, markersize=3)
+# Chart 1: Cumulative equity
+for key in active_keys:
+    cum_vals = np.cumsum(daily_dollars[key])
+    lw = 3 if key == 'S3' else 2
+    axes[0].plot(x, [STARTING_CAPITAL + c for c in cum_vals],
+                 f'{STRAT_MARKERS[key]}-', label=f'{key}: {STRATEGIES_TO_RUN[key][0]}',
+                 color=STRAT_COLORS[key], linewidth=lw, markersize=3)
 axes[0].axhline(y=STARTING_CAPITAL, color='gray', linewidth=0.5, linestyle='--')
-axes[0].axvline(x=june_start_idx - 0.5, color='blue', linewidth=1, linestyle='--', alpha=0.5, label='June start')
-axes[0].fill_between(x, [STARTING_CAPITAL + c for c in all_cum],
-                     [STARTING_CAPITAL + c for c in flt_cum],
-                     alpha=0.15, color='green',
-                     where=[a >= f for a, f in zip(all_cum, flt_cum)])
-axes[0].fill_between(x, [STARTING_CAPITAL + c for c in all_cum],
-                     [STARTING_CAPITAL + c for c in flt_cum],
-                     alpha=0.15, color='red',
-                     where=[a < f for a, f in zip(all_cum, flt_cum)])
+axes[0].axvline(x=june_start_idx - 0.5, color='blue', linewidth=1,
+                linestyle='--', alpha=0.5, label='June start')
 axes[0].set_title(f'Cumulative Equity (${STARTING_CAPITAL/1000:.0f}K start)', fontsize=12)
 axes[0].set_ylabel('Equity ($)')
 axes[0].set_xticks(x[::max(1, len(x)//30)])
@@ -1270,12 +1421,17 @@ axes[0].set_xticklabels([date_labels[i] for i in range(0, len(date_labels), max(
 axes[0].legend(fontsize=9); axes[0].grid(True, alpha=0.3)
 axes[0].yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'${v/1000:.0f}K'))
 
-# Chart 2: Daily $PnL bars
-axes[1].bar(x - bar_w/2, all_daily_dollar, bar_w, label='ALL trades', color='#4CAF50', alpha=0.85)
-axes[1].bar(x + bar_w/2, flt_daily_dollar, bar_w, label='WITH filters', color='#F44336', alpha=0.85)
+# Chart 2: Daily $PnL — S3 vs best alternative
+n_strats = len(active_keys)
+bar_w = 0.8 / n_strats
+for i, key in enumerate(active_keys):
+    offset = (i - (n_strats - 1) / 2) * bar_w
+    alpha = 1.0 if key == 'S3' else 0.7
+    axes[1].bar(x + offset, daily_dollars[key], bar_w, label=key,
+                color=STRAT_COLORS[key], alpha=alpha)
 axes[1].axhline(y=0, color='gray', linewidth=0.5, linestyle='--')
 axes[1].axvline(x=june_start_idx - 0.5, color='blue', linewidth=1, linestyle='--', alpha=0.5)
-axes[1].set_title('Daily $PnL', fontsize=12)
+axes[1].set_title('Daily $PnL by Strategy', fontsize=12)
 axes[1].set_ylabel('$PnL')
 axes[1].set_xticks(x[::max(1, len(x)//30)])
 axes[1].set_xticklabels([date_labels[i] for i in range(0, len(date_labels), max(1, len(x)//30))],
@@ -1283,10 +1439,14 @@ axes[1].set_xticklabels([date_labels[i] for i in range(0, len(date_labels), max(
 axes[1].legend(fontsize=9); axes[1].grid(True, alpha=0.3, axis='y')
 
 # Chart 3: Trade count
-axes[2].bar(x - bar_w/2, all_daily_n, bar_w, label='ALL trades', color='#4CAF50', alpha=0.85)
-axes[2].bar(x + bar_w/2, flt_daily_n, bar_w, label='WITH filters', color='#F44336', alpha=0.85)
+for i, key in enumerate(active_keys):
+    offset = (i - (n_strats - 1) / 2) * bar_w
+    tdf = all_strategy_trades[key]
+    daily_n = [len(tdf[tdf['date'] == d]) if not tdf.empty else 0 for d in all_dates]
+    axes[2].bar(x + offset, daily_n, bar_w, label=key,
+                color=STRAT_COLORS[key], alpha=0.85)
 axes[2].axvline(x=june_start_idx - 0.5, color='blue', linewidth=1, linestyle='--', alpha=0.5)
-axes[2].set_title('Daily Trade Count', fontsize=12)
+axes[2].set_title('Daily Trade Count by Strategy', fontsize=12)
 axes[2].set_ylabel('Trades')
 axes[2].set_xticks(x[::max(1, len(x)//30)])
 axes[2].set_xticklabels([date_labels[i] for i in range(0, len(date_labels), max(1, len(x)//30))],
@@ -1294,7 +1454,7 @@ axes[2].set_xticklabels([date_labels[i] for i in range(0, len(date_labels), max(
 axes[2].legend(fontsize=9); axes[2].grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
-chart_path = '/tmp/filter_impact_backtest_full.png'
+chart_path = '/tmp/strategy_comparison_backtest.png'
 plt.savefig(chart_path, dpi=150, bbox_inches='tight')
 print(f"  Charts saved: {chart_path}")
 try:
@@ -1303,26 +1463,94 @@ try:
 except ImportError:
     plt.show()
 
-# ── Final summary ──
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONCLUSION + MAX DRAWDOWN SUMMARY
+# ══════════════════════════════════════════════════════════════════════════════
+def _compute_max_drawdown(tdf, dates, capital=STARTING_CAPITAL):
+    daily = _daily_dollar(tdf, dates, capital)
+    cum = np.cumsum(daily)
+    equity = capital + cum
+    peak = np.maximum.accumulate(equity)
+    dd = (equity - peak) / peak
+    max_dd = float(dd.min())
+    max_dd_dollar = float((equity - peak).min())
+    return max_dd, max_dd_dollar
+
 print(f"\n{'='*W}")
-print(f"  CONCLUSION")
+print(f"  SUMMARY — {TEST_START} → {TEST_END}")
 print(f"{'='*W}")
 
-for period_label, at, kt, fo in [
-    (f'Full ({TEST_START} → {TEST_END})', all_trades_full, kept_trades_full, filtered_out_full),
-    (f'June ({JUNE_START} → {JUNE_END})', all_trades_jun, kept_trades_jun, filtered_out_jun),
-]:
-    if at.empty or kt.empty: continue
-    a_alloc = STARTING_CAPITAL / len(at)
-    k_alloc = STARTING_CAPITAL / len(kt)
-    a_dollar = sum(a_alloc * p for p in at['pnl'])
-    k_dollar = sum(k_alloc * p for p in kt['pnl'])
-    delta = a_dollar - k_dollar
-    print(f"\n  {period_label}:")
-    print(f"    ALL trades:        {len(at):>3} trades, ${a_dollar:>+10,.0f}")
-    print(f"    WITH filters:      {len(kt):>3} trades, ${k_dollar:>+10,.0f}")
-    print(f"    Blocked:           {len(fo):>3} trades")
-    print(f"    Filter impact:     ${delta:>+10,.0f} ({'filters HURT' if delta > 0 else 'filters HELPED'})")
+print(f"\n  {'Strategy':<30} {'Trades':>7} {'WR':>5} {'Avg PnL':>9} {'Total $PnL':>12} "
+      f"{'Max DD %':>9} {'Max DD $':>12} {'Δ vs S3 $':>12}")
+print(f"  {'─'*100}")
+
+s3_stats = _strat_stats(all_strategy_trades.get('S3', pd.DataFrame()))
+s3_dd_pct, s3_dd_dollar = _compute_max_drawdown(
+    all_strategy_trades.get('S3', pd.DataFrame()), all_dates)
+
+for key in active_keys:
+    name = STRATEGIES_TO_RUN[key][0]
+    tdf = all_strategy_trades[key]
+    s = _strat_stats(tdf)
+    dd_pct, dd_dollar = _compute_max_drawdown(tdf, all_dates)
+    tag = '  ← BENCH' if key == 'S3' else ''
+    delta = '' if key == 'S3' else f"${s['dollar'] - s3_stats['dollar']:>+11,.0f}"
+    print(f"  {key}: {name:<25} {s['n']:>7} {s['wr']:>4.0%} {s['avg']:>+8.2%} "
+          f"${s['dollar']:>+11,.0f} {dd_pct:>+8.2%} ${dd_dollar:>+11,.0f} {delta:>12}{tag}")
+
+print(f"\n  June only ({JUNE_START} → {JUNE_END}):")
+print(f"  {'Strategy':<30} {'Trades':>7} {'WR':>5} {'Avg PnL':>9} {'Total $PnL':>12}")
+print(f"  {'─'*68}")
+
+s3_jun = all_strategy_trades.get('S3', pd.DataFrame())
+s3_jun = s3_jun[(s3_jun['date_int'] >= june_start_int) & (s3_jun['date_int'] <= june_end_int)] if not s3_jun.empty else pd.DataFrame()
+s3_jun_stats = _strat_stats(s3_jun)
+
+for key in active_keys:
+    tdf = all_strategy_trades[key]
+    jun = tdf[(tdf['date_int'] >= june_start_int) & (tdf['date_int'] <= june_end_int)] if not tdf.empty else pd.DataFrame()
+    s = _strat_stats(jun)
+    name = STRATEGIES_TO_RUN[key][0]
+    tag = '  ← BENCH' if key == 'S3' else ''
+    delta = '' if key == 'S3' else f"  (Δ ${s['dollar'] - s3_jun_stats['dollar']:+,.0f})"
+    print(f"  {key}: {name:<25} {s['n']:>7} {s['wr']:>4.0%} {s['avg']:>+8.2%} "
+          f"${s['dollar']:>+11,.0f}{tag}{delta}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FILTER IMPACT — side-by-side: original vs filtered
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\n\n{'='*W}")
+print(f"  FILTER IMPACT — SPY 3d return >= {SPY_3D_RETURN_MIN:.1%}, VIX range 5d < {VIX_RANGE_5D_MAX:.0%}, PL excluded")
+print(f"{'='*W}")
+
+for base, filt in [('S3', 'S3F'), ('S18', 'S18F')]:
+    if base not in active_keys or filt not in active_keys: continue
+    b_all = _strat_stats(all_strategy_trades[base])
+    f_all = _strat_stats(all_strategy_trades[filt])
+    b_jun = all_strategy_trades[base]
+    b_jun = b_jun[(b_jun['date_int'] >= june_start_int) & (b_jun['date_int'] <= june_end_int)] if not b_jun.empty else pd.DataFrame()
+    f_jun = all_strategy_trades[filt]
+    f_jun = f_jun[(f_jun['date_int'] >= june_start_int) & (f_jun['date_int'] <= june_end_int)] if not f_jun.empty else pd.DataFrame()
+    bs = _strat_stats(b_jun); fs = _strat_stats(f_jun)
+
+    print(f"\n  {base} → {filt}:")
+    print(f"    {'Period':<12} {'Metric':<10} {base:>10} {filt:>10} {'Delta':>10}")
+    print(f"    {'─'*55}")
+    print(f"    {'Full':12} {'Trades':<10} {b_all['n']:>10} {f_all['n']:>10} {f_all['n']-b_all['n']:>+10}")
+    print(f"    {'':12} {'WR':<10} {b_all['wr']:>9.0%} {f_all['wr']:>9.0%} {f_all['wr']-b_all['wr']:>+9.0%}")
+    print(f"    {'':12} {'Avg PnL':<10} {b_all['avg']:>+9.2%} {f_all['avg']:>+9.2%} {f_all['avg']-b_all['avg']:>+9.2%}")
+    print(f"    {'':12} {'$PnL':<10} ${b_all['dollar']:>+9,.0f} ${f_all['dollar']:>+9,.0f} ${f_all['dollar']-b_all['dollar']:>+9,.0f}")
+    print(f"    {'June':12} {'Trades':<10} {bs['n']:>10} {fs['n']:>10} {fs['n']-bs['n']:>+10}")
+    print(f"    {'':12} {'WR':<10} {bs['wr']:>9.0%} {fs['wr']:>9.0%} {fs['wr']-bs['wr']:>+9.0%}")
+    print(f"    {'':12} {'Avg PnL':<10} {bs['avg']:>+9.2%} {fs['avg']:>+9.2%} {fs['avg']-bs['avg']:>+9.2%}")
+    print(f"    {'':12} {'$PnL':<10} ${bs['dollar']:>+9,.0f} ${fs['dollar']:>+9,.0f} ${fs['dollar']-bs['dollar']:>+9,.0f}")
+
+    # trades blocked by filter
+    b_tickers = set(all_strategy_trades[base]['ticker'].unique()) if not all_strategy_trades[base].empty else set()
+    f_tickers = set(all_strategy_trades[filt]['ticker'].unique()) if not all_strategy_trades[filt].empty else set()
+    blocked_trades = b_all['n'] - f_all['n']
+    print(f"    Filter blocked {blocked_trades} trades total ({blocked_trades / max(b_all['n'], 1):.0%} of original)")
 
 print(f"\n{'='*W}")
 print(f"  DONE")

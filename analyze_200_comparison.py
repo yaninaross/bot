@@ -51,6 +51,7 @@ from google.cloud import bigquery
 # ==============================================================================
 BQ_TABLE       = 'ys-time-series.scoring_logs.wf_optimization_results'
 MODEL_VERSION  = 'robust_wf_v12'
+MODEL_VERSION_STITCHED = 'robust_wf_v12_stitched'
 DEPLOY_THRESHOLD = 0.018
 MIN_TRADES     = 3
 RUN_BACKTEST   = False
@@ -110,7 +111,10 @@ _EXP_FILTER = """(experiment LIKE '200_%' OR experiment LIKE '185_%'
        OR experiment LIKE '175_%'
        OR experiment LIKE '180_%' OR experiment LIKE '181_%'
        OR experiment LIKE '182_%' OR experiment LIKE '183_%'
-       OR experiment LIKE '184_%')"""
+       OR experiment LIKE '184_%'
+       OR experiment LIKE '201_%' OR experiment LIKE '202_%'
+       OR experiment LIKE '203_%' OR experiment LIKE '204_%'
+       OR experiment LIKE '205_%')"""
 
 TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
@@ -122,6 +126,7 @@ def assign_family(exp):
         return 'other'
     num = int(base)
     if num == 200: return '200'
+    if 201 <= num <= 205: return '200_wf'
     if num == 185: return '185'
     if num == 175: return '175'
     if 180 <= num <= 184: return '180'
@@ -134,9 +139,12 @@ def _clean_df(df):
     df['tpsl_mode'] = df['tpsl_mode'].fillna('static')
     df['survived_b'] = df['survived_b'].fillna(False).astype(bool)
     df['survived_a'] = df['survived_a'].fillna(False).astype(bool)
-    df['val_b_avg_pnl'] = df['val_b_avg_pnl'].fillna(0.0)
-    df['val_b_win_rate'] = df['val_b_win_rate'].fillna(0.0)
-    df['val_b_count'] = df['val_b_count'].fillna(0).astype(int)
+    if 'val_b_avg_pnl' in df.columns:
+        df['val_b_avg_pnl'] = df['val_b_avg_pnl'].fillna(0.0)
+    if 'val_b_win_rate' in df.columns:
+        df['val_b_win_rate'] = df['val_b_win_rate'].fillna(0.0)
+    if 'val_b_count' in df.columns:
+        df['val_b_count'] = df['val_b_count'].fillna(0).astype(int)
     for col in ['dip_pct', 'grace_minutes', 'max_wait_minutes']:
         if col in df.columns:
             df[col] = df[col].fillna(0)
@@ -156,7 +164,7 @@ SELECT experiment, ticker, seed, tpsl_mode, is_ensemble, n_seeds_avg,
        grace_minutes, dip_pct, max_wait_minutes,
        opt_start, opt_end, run_timestamp
 FROM `{BQ_TABLE}`
-WHERE model_version = '{MODEL_VERSION}'
+WHERE model_version IN ('{MODEL_VERSION}', '{MODEL_VERSION_STITCHED}')
   AND is_ensemble = TRUE
   AND {_EXP_FILTER}
 """
@@ -168,15 +176,15 @@ SELECT experiment, ticker, seed, tpsl_mode, is_ensemble,
        val_a_avg_pnl, val_b_avg_pnl, val_b_count,
        survived_a, survived_b
 FROM `{BQ_TABLE}`
-WHERE model_version = '{MODEL_VERSION}'
+WHERE model_version IN ('{MODEL_VERSION}', '{MODEL_VERSION_STITCHED}')
   AND {_EXP_FILTER}
 """
 df_all = _clean_df(client.query(df_all_query).to_dataframe())
 print(f"  Loaded {len(df_all)} total rows (lightweight) for census")
 _free_mem()
 
-FAM_ORDER = ['200', '185', '175']
-FAM_LABELS = {'200': '200 CNN-TX', '185': '185 Std-TX', '175': '175 Std-TX', '180': '180-185 WF'}
+FAM_ORDER = ['200_wf', '200', '185', '175']
+FAM_LABELS = {'200_wf': '200 WF', '200': '200 Single', '185': '185 Std-TX', '175': '175 Std-TX', '180': '180-185 WF'}
 
 
 # ==============================================================================
@@ -277,7 +285,7 @@ print()
 
 
 # ==============================================================================
-# SECTION 3: HEAD-TO-HEAD PER TICKER (200 vs 185)
+# SECTION 3: HEAD-TO-HEAD PER TICKER (all families)
 # ==============================================================================
 print(f"\n\n{'='*W}")
 print(f"  SECTION 3: HEAD-TO-HEAD PER TICKER (Ensemble, Best Mode Per Family)")
@@ -300,115 +308,155 @@ for fam in FAM_ORDER:
         print(f"  {FAM_LABELS[fam]}={n}", end='')
 print()
 
-common_200_185 = sorted(pivot_pnl[['200', '185']].dropna().index) if '200' in pivot_pnl.columns and '185' in pivot_pnl.columns else []
-print(f"  Common 200+185: {len(common_200_185)} tickers")
+H2H_PAIRS = [('200_wf', '200'), ('200_wf', '180'), ('200_wf', '185')]
+for fam_a, fam_b in H2H_PAIRS:
+    if fam_a not in pivot_pnl.columns or fam_b not in pivot_pnl.columns:
+        print(f"\n  {FAM_LABELS.get(fam_a, fam_a)} vs {FAM_LABELS.get(fam_b, fam_b)}: "
+              f"insufficient data (missing family)")
+        continue
+    common = sorted(pivot_pnl[[fam_a, fam_b]].dropna().index)
+    if not common:
+        print(f"\n  {FAM_LABELS[fam_a]} vs {FAM_LABELS[fam_b]}: no common tickers")
+        continue
 
-print(f"\n  {'Ticker':<7} {'Sector':<8}", end='')
-for fam in ['200', '185']:
-    print(f"  | {FAM_LABELS.get(fam, fam):^28}", end='')
-print(f"  | {'Delta':>8} {'Winner':>10}")
-print(f"  {'':─<7} {'':─<8}", end='')
-for _ in ['200', '185']:
-    print(f"──|{'':─^28}", end='')
-print(f"──|{'':─^8} {'':─^10}")
-print(f"  {'':7} {'':8}", end='')
-for _ in ['200', '185']:
-    print(f"  | {'Mode':>12} {'PnL':>7} {'WR':>5} {'N':>3}", end='')
-print(f"  |")
-print(f"  {'':─<7} {'':─<8}", end='')
-for _ in ['200', '185']:
-    print(f"──|{'':─^28}", end='')
-print(f"──|{'':─^8} {'':─^10}")
+    print(f"\n  ── {FAM_LABELS[fam_a]} vs {FAM_LABELS[fam_b]} ({len(common)} common tickers) ──")
+    print(f"\n  {'Ticker':<7} {'Sector':<8}", end='')
+    for fam in [fam_a, fam_b]:
+        print(f"  | {FAM_LABELS.get(fam, fam):^28}", end='')
+    print(f"  | {'Delta':>8} {'Winner':>10}")
+    print(f"  {'':─<7} {'':─<8}", end='')
+    for _ in [fam_a, fam_b]:
+        print(f"──|{'':─^28}", end='')
+    print(f"──|{'':─^8} {'':─^10}")
+    print(f"  {'':7} {'':8}", end='')
+    for _ in [fam_a, fam_b]:
+        print(f"  | {'Mode':>12} {'PnL':>7} {'WR':>5} {'N':>3}", end='')
+    print(f"  |")
+    print(f"  {'':─<7} {'':─<8}", end='')
+    for _ in [fam_a, fam_b]:
+        print(f"──|{'':─^28}", end='')
+    print(f"──|{'':─^8} {'':─^10}")
 
-wins = {'200': 0, '185': 0, 'tie': 0}
-
-for ticker in all_tickers:
-    sector = TICKER_TO_SECTOR.get(ticker, '?')[:7]
-    print(f"  {ticker:<7} {sector:<8}", end='')
-    pnl_vals = {}
-    for fam in ['200', '185']:
-        pnl = pivot_pnl.loc[ticker].get(fam) if fam in pivot_pnl.columns else None
-        mode = pivot_mode.loc[ticker].get(fam) if fam in pivot_mode.columns else None
-        wr = pivot_wr.loc[ticker].get(fam) if fam in pivot_wr.columns else None
-        n = pivot_n.loc[ticker].get(fam) if fam in pivot_n.columns else None
-        if pd.isna(pnl) or pnl is None:
-            print(f"  | {'—':>12} {'—':>7} {'—':>5} {'—':>3}", end='')
-        else:
-            pnl_vals[fam] = pnl
-            mode_short = (mode or 'static')[:12]
-            print(f"  | {mode_short:>12} {pnl:>+6.2%} {wr:>4.0%} {int(n):>3}", end='')
-
-    if '200' in pnl_vals and '185' in pnl_vals:
-        delta = pnl_vals['200'] - pnl_vals['185']
-        winner = '200' if delta > 0.001 else ('185' if delta < -0.001 else 'tie')
-        wins[winner] = wins.get(winner, 0) + 1
-        winner_label = FAM_LABELS.get(winner, winner)[:8]
+    pair_wins = {fam_a: 0, fam_b: 0, 'tie': 0}
+    for ticker in common:
+        sector = TICKER_TO_SECTOR.get(ticker, '?')[:7]
+        print(f"  {ticker:<7} {sector:<8}", end='')
+        pnl_vals = {}
+        for fam in [fam_a, fam_b]:
+            pnl = pivot_pnl.loc[ticker].get(fam)
+            mode = pivot_mode.loc[ticker].get(fam)
+            wr = pivot_wr.loc[ticker].get(fam)
+            n = pivot_n.loc[ticker].get(fam)
+            if pd.isna(pnl) or pnl is None:
+                print(f"  | {'—':>12} {'—':>7} {'—':>5} {'—':>3}", end='')
+            else:
+                pnl_vals[fam] = pnl
+                mode_short = (mode or 'static')[:12]
+                print(f"  | {mode_short:>12} {pnl:>+6.2%} {wr:>4.0%} {int(n):>3}", end='')
+        delta = pnl_vals.get(fam_a, 0) - pnl_vals.get(fam_b, 0)
+        winner = fam_a if delta > 0.001 else (fam_b if delta < -0.001 else 'tie')
+        pair_wins[winner] = pair_wins.get(winner, 0) + 1
+        winner_label = FAM_LABELS.get(winner, winner)[:10]
         print(f"  | {delta:>+7.2%} {winner_label:>10}")
-    else:
-        print(f"  | {'—':>8} {'—':>10}")
 
-print(f"  {'':─<7} {'':─<8}", end='')
-for _ in ['200', '185']:
-    print(f"──|{'':─^28}", end='')
-print(f"──|{'':─^8} {'':─^10}")
+    print(f"  {'':─<7} {'':─<8}", end='')
+    for _ in [fam_a, fam_b]:
+        print(f"──|{'':─^28}", end='')
+    print(f"──|{'':─^8} {'':─^10}")
+    print(f"\n  WINS: {FAM_LABELS[fam_a]}={pair_wins.get(fam_a,0)}  "
+          f"{FAM_LABELS[fam_b]}={pair_wins.get(fam_b,0)}  Tie={pair_wins.get('tie',0)}")
 
-print(f"\n  WINS: 200 CNN-TX={wins.get('200',0)}  185 Std-TX={wins.get('185',0)}  "
-      f"Tie={wins.get('tie',0)}")
+common_200_185 = sorted(pivot_pnl[['200', '185']].dropna().index) if '200' in pivot_pnl.columns and '185' in pivot_pnl.columns else []
+wins = {}
+if common_200_185:
+    for t in common_200_185:
+        d = pivot_pnl.loc[t, '200'] - pivot_pnl.loc[t, '185']
+        w = '200' if d > 0.001 else ('185' if d < -0.001 else 'tie')
+        wins[w] = wins.get(w, 0) + 1
 
 del pivot_mode, pivot_wr, pivot_n, best_per
 _free_mem()
 
 
 # ==============================================================================
-# SECTION 4: ARCHITECTURE ADVANTAGE
+# SECTION 4: PAIRED ANALYSIS — All Key Comparisons
 # ==============================================================================
 print(f"\n\n{'='*W}")
-print(f"  SECTION 4: ARCHITECTURE ADVANTAGE — 200 vs 185 Paired Analysis")
-print(f"  {len(common_200_185)} tickers with data in BOTH families (same windows)")
+print(f"  SECTION 4: PAIRED ANALYSIS — WF vs Single, CNN-TX vs Std-TX")
 print(f"{'='*W}")
 
-if common_200_185:
-    common_pnl = pivot_pnl.loc[common_200_185]
-    delta_series = common_pnl['200'] - common_pnl['185']
+PAIRED_COMPARISONS = [
+    ('200_wf', '200',  'WF benefit (CNN-TX architecture)'),
+    ('200_wf', '180',  'CNN-TX WF vs Std-TX WF'),
+    ('200',    '185',  'Architecture advantage (single fold)'),
+]
 
-    print(f"\n  Overall (best mode per family):")
-    print(f"    200 avg test PnL: {common_pnl['200'].mean():>+.3%}  med: {common_pnl['200'].median():>+.3%}")
-    print(f"    185 avg test PnL: {common_pnl['185'].mean():>+.3%}  med: {common_pnl['185'].median():>+.3%}")
-    print(f"    Delta (200-185):  avg={delta_series.mean():>+.3%}  med={delta_series.median():>+.3%}")
-    print(f"    200 better: {(delta_series > 0).sum()}/{len(delta_series)}  "
-          f"185 better: {(delta_series < 0).sum()}/{len(delta_series)}")
+for fam_a, fam_b, desc in PAIRED_COMPARISONS:
+    if fam_a not in pivot_pnl.columns or fam_b not in pivot_pnl.columns:
+        print(f"\n  {desc}: skipped (missing data for {fam_a} or {fam_b})")
+        continue
+    common = sorted(pivot_pnl[[fam_a, fam_b]].dropna().index)
+    if not common:
+        print(f"\n  {desc}: no common tickers")
+        continue
 
-    # Sector breakdown
-    print(f"\n  By sector:")
-    print(f"  {'Sector':<10} {'N':>3} {'200 avg':>8} {'185 avg':>8} {'Delta':>8} {'200 wins':>9}")
-    print(f"  {'─'*50}")
+    common_pnl = pivot_pnl.loc[common]
+    delta_series = common_pnl[fam_a] - common_pnl[fam_b]
+
+    print(f"\n  ── {desc} ({len(common)} tickers) ──")
+    print(f"    {FAM_LABELS[fam_a]} avg: {common_pnl[fam_a].mean():>+.3%}  "
+          f"med: {common_pnl[fam_a].median():>+.3%}")
+    print(f"    {FAM_LABELS[fam_b]} avg: {common_pnl[fam_b].mean():>+.3%}  "
+          f"med: {common_pnl[fam_b].median():>+.3%}")
+    print(f"    Delta ({FAM_LABELS[fam_a]} - {FAM_LABELS[fam_b]}):  "
+          f"avg={delta_series.mean():>+.3%}  med={delta_series.median():>+.3%}")
+    n_a_wins = (delta_series > 0.001).sum()
+    n_b_wins = (delta_series < -0.001).sum()
+    n_ties = len(delta_series) - n_a_wins - n_b_wins
+    print(f"    {FAM_LABELS[fam_a]} better: {n_a_wins}/{len(common)}  "
+          f"{FAM_LABELS[fam_b]} better: {n_b_wins}/{len(common)}  Tie: {n_ties}")
+
+    print(f"\n    By sector:")
+    print(f"    {'Sector':<10} {'N':>3} {FAM_LABELS[fam_a]:>10} {FAM_LABELS[fam_b]:>10} {'Delta':>8} {'A wins':>7}")
+    print(f"    {'─'*55}")
     for sec in sorted(SECTORS.keys()):
-        sec_tickers = [t for t in common_200_185 if TICKER_TO_SECTOR.get(t) == sec]
+        sec_tickers = [t for t in common if TICKER_TO_SECTOR.get(t) == sec]
         if not sec_tickers:
             continue
-        sec_200 = common_pnl.loc[sec_tickers, '200']
-        sec_185 = common_pnl.loc[sec_tickers, '185']
-        sec_delta = sec_200 - sec_185
-        n_wins = (sec_delta > 0).sum()
-        print(f"  {sec:<10} {len(sec_tickers):>3} {sec_200.mean():>+7.2%} {sec_185.mean():>+7.2%} "
-              f"{sec_delta.mean():>+7.2%} {n_wins}/{len(sec_tickers)}")
+        sec_a = common_pnl.loc[sec_tickers, fam_a]
+        sec_b = common_pnl.loc[sec_tickers, fam_b]
+        sec_d = sec_a - sec_b
+        sec_wins = (sec_d > 0).sum()
+        print(f"    {sec:<10} {len(sec_tickers):>3} {sec_a.mean():>+9.2%} {sec_b.mean():>+9.2%} "
+              f"{sec_d.mean():>+7.2%} {sec_wins}/{len(sec_tickers)}")
 
-    # Seed stability comparison (query BQ on-demand to save RAM)
-    print(f"\n  Seed Stability (per-seed test PnL std):")
-    for fam_prefix in ['200', '185']:
-        stab_q = f"""
-        SELECT ticker, tpsl_mode, STDDEV(val_b_avg_pnl) as pnl_std
-        FROM `{BQ_TABLE}`
-        WHERE model_version = '{MODEL_VERSION}' AND is_ensemble = FALSE
-          AND experiment LIKE '{fam_prefix}_%'
-        GROUP BY ticker, tpsl_mode HAVING COUNT(*) >= 3
-        """
-        stab_df = client.query(stab_q).to_dataframe()
-        if len(stab_df) == 0:
-            continue
-        print(f"    {FAM_LABELS[fam_prefix]}: avg_std={stab_df['pnl_std'].mean():.3%}  "
-              f"med_std={stab_df['pnl_std'].median():.3%}  ({len(stab_df)} ticker-mode combos)")
-        del stab_df
+    top_a = delta_series.nlargest(3)
+    top_b = delta_series.nsmallest(3)
+    print(f"\n    Top {FAM_LABELS[fam_a]} advantages:")
+    for t, d in top_a.items():
+        print(f"      {t:<7} {FAM_LABELS[fam_a]}={common_pnl.loc[t,fam_a]:>+.2%}  "
+              f"{FAM_LABELS[fam_b]}={common_pnl.loc[t,fam_b]:>+.2%}  delta={d:>+.2%}")
+    print(f"    Top {FAM_LABELS[fam_b]} advantages:")
+    for t, d in top_b.items():
+        print(f"      {t:<7} {FAM_LABELS[fam_a]}={common_pnl.loc[t,fam_a]:>+.2%}  "
+              f"{FAM_LABELS[fam_b]}={common_pnl.loc[t,fam_b]:>+.2%}  delta={d:>+.2%}")
+
+# Seed stability
+print(f"\n  Seed Stability (per-seed test PnL std):")
+for fam_prefix, label in [('20', '200 family'), ('18', '180-185 family')]:
+    stab_q = f"""
+    SELECT ticker, tpsl_mode, STDDEV(val_b_avg_pnl) as pnl_std
+    FROM `{BQ_TABLE}`
+    WHERE model_version IN ('{MODEL_VERSION}', '{MODEL_VERSION_STITCHED}') AND is_ensemble = FALSE
+      AND experiment LIKE '{fam_prefix}%_XSECTOR%'
+    GROUP BY ticker, tpsl_mode HAVING COUNT(*) >= 3
+    """
+    stab_df = client.query(stab_q).to_dataframe()
+    if len(stab_df) == 0:
+        continue
+    print(f"    {label}: avg_std={stab_df['pnl_std'].mean():.3%}  "
+          f"med_std={stab_df['pnl_std'].median():.3%}  ({len(stab_df)} ticker-mode combos)")
+    del stab_df
 
     # Top deltas
     print(f"\n  Largest 200 advantages:")
@@ -450,7 +498,7 @@ print(f"\n  Dip_pct distribution (per-seed survivors with test PnL > 0):")
 dip_q = f"""
 SELECT experiment, dip_pct, COUNT(*) as n
 FROM `{BQ_TABLE}`
-WHERE model_version = '{MODEL_VERSION}' AND is_ensemble = FALSE
+WHERE model_version IN ('{MODEL_VERSION}', '{MODEL_VERSION_STITCHED}') AND is_ensemble = FALSE
   AND tpsl_mode = 'limit_entry' AND val_b_avg_pnl > 0
   AND dip_pct > 0
   AND {_EXP_FILTER}
@@ -514,43 +562,57 @@ _free_mem()
 
 
 # ==============================================================================
-# SECTION 6: WALKFORWARD vs SINGLE FOLD (context)
+# SECTION 6: WALKFORWARD vs SINGLE FOLD
 # ==============================================================================
 print(f"\n\n{'='*W}")
-print(f"  SECTION 6: WALKFORWARD vs SINGLE FOLD (context, different TEST windows)")
-print(f"  180-185 WF: TEST Apr-Jun | 185 Single: TEST May-Jun")
+print(f"  SECTION 6: WALKFORWARD vs SINGLE FOLD")
 print(f"{'='*W}")
 
-wf_ens = ens[ens['family'] == '180']
-sf_ens = ens[ens['family'] == '185']
+WF_SF_PAIRS = [
+    ('200_wf', '200', '200 WF (5 folds, CNN-TX)', '200 Single (CNN-TX)'),
+    ('180',    '185', '180-185 WF (6 folds, Std-TX)', '185 Single (Std-TX)'),
+]
 
-if len(wf_ens) > 0 and len(sf_ens) > 0:
-    print(f"\n  {'Metric':<25} {'180-185 WF':>14} {'185 Single':>14}")
-    print(f"  {'─'*55}")
-    print(f"  {'Tickers':<25} {wf_ens['ticker'].nunique():>14} {sf_ens['ticker'].nunique():>14}")
-    print(f"  {'Modes':<25} {wf_ens['tpsl_mode'].nunique():>14} {sf_ens['tpsl_mode'].nunique():>14}")
-    print(f"  {'Avg test PnL':<25} {wf_ens['val_b_avg_pnl'].mean():>+13.2%} "
-          f"{sf_ens['val_b_avg_pnl'].mean():>+13.2%}")
-    print(f"  {'Med test PnL':<25} {wf_ens['val_b_avg_pnl'].median():>+13.2%} "
-          f"{sf_ens['val_b_avg_pnl'].median():>+13.2%}")
-    print(f"  {'Test pass rate':<25} {wf_ens['survived_b'].mean():>13.0%} "
-          f"{sf_ens['survived_b'].mean():>13.0%}")
+for wf_fam, sf_fam, wf_label, sf_label in WF_SF_PAIRS:
+    wf_ens_df = ens[ens['family'] == wf_fam]
+    sf_ens_df = ens[ens['family'] == sf_fam]
 
-    wf_deploy = wf_ens[wf_ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD]
-    sf_deploy = sf_ens[sf_ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD]
-    print(f"  {'Deployable tickers':<25} {wf_deploy['ticker'].nunique():>14} "
-          f"{sf_deploy['ticker'].nunique():>14}")
+    if len(wf_ens_df) == 0 and len(sf_ens_df) == 0:
+        print(f"\n  {wf_label} vs {sf_label}: no data for either")
+        continue
 
-    # Best mode comparison
-    print(f"\n  Best mode by avg test PnL:")
-    for fam, fam_ens_df, label in [('180', wf_ens, '180-185 WF'), ('185', sf_ens, '185 Single')]:
-        mode_avg = fam_ens_df.groupby('tpsl_mode')['val_b_avg_pnl'].mean().sort_values(ascending=False)
-        best = mode_avg.index[0]
-        print(f"    {label}: {best} ({mode_avg.iloc[0]:>+.2%})")
-else:
-    print(f"\n  Insufficient data for WF vs Single comparison")
+    print(f"\n  ── {wf_label} vs {sf_label} ──")
+    col_w = 16
+    print(f"\n  {'Metric':<25} {wf_label:>{col_w}} {sf_label:>{col_w}}")
+    print(f"  {'─'*60}")
+    for fam_df, label in [(wf_ens_df, wf_label), (sf_ens_df, sf_label)]:
+        if len(fam_df) == 0:
+            continue
+    print(f"  {'Tickers':<25} {wf_ens_df['ticker'].nunique():>{col_w}} "
+          f"{sf_ens_df['ticker'].nunique():>{col_w}}")
+    print(f"  {'Modes':<25} {wf_ens_df['tpsl_mode'].nunique():>{col_w}} "
+          f"{sf_ens_df['tpsl_mode'].nunique():>{col_w}}")
+    if len(wf_ens_df) > 0 and len(sf_ens_df) > 0:
+        print(f"  {'Avg test PnL':<25} {wf_ens_df['val_b_avg_pnl'].mean():>+{col_w-1}.2%} "
+              f"{sf_ens_df['val_b_avg_pnl'].mean():>+{col_w-1}.2%}")
+        print(f"  {'Med test PnL':<25} {wf_ens_df['val_b_avg_pnl'].median():>+{col_w-1}.2%} "
+              f"{sf_ens_df['val_b_avg_pnl'].median():>+{col_w-1}.2%}")
+        print(f"  {'Test pass rate':<25} {wf_ens_df['survived_b'].mean():>{col_w-1}.0%} "
+              f"{sf_ens_df['survived_b'].mean():>{col_w-1}.0%}")
+        wf_deploy = wf_ens_df[wf_ens_df['val_b_avg_pnl'] >= DEPLOY_THRESHOLD]
+        sf_deploy = sf_ens_df[sf_ens_df['val_b_avg_pnl'] >= DEPLOY_THRESHOLD]
+        print(f"  {'Deployable tickers':<25} {wf_deploy['ticker'].nunique():>{col_w}} "
+              f"{sf_deploy['ticker'].nunique():>{col_w}}")
 
-del wf_ens, sf_ens
+        print(f"\n  Best mode by avg test PnL:")
+        for fam_df, label in [(wf_ens_df, wf_label), (sf_ens_df, sf_label)]:
+            if len(fam_df) == 0:
+                continue
+            mode_avg = fam_df.groupby('tpsl_mode')['val_b_avg_pnl'].mean().sort_values(ascending=False)
+            best = mode_avg.index[0]
+            print(f"    {label}: {best} ({mode_avg.iloc[0]:>+.2%})")
+
+del wf_ens_df, sf_ens_df
 _free_mem()
 
 
@@ -558,23 +620,28 @@ _free_mem()
 # SECTION 7: TOP PERFORMERS
 # ==============================================================================
 print(f"\n\n{'='*W}")
-print(f"  SECTION 7: TOP PERFORMERS — 200 deployable tickers (test PnL >= {DEPLOY_THRESHOLD:.1%})")
+print(f"  SECTION 7: TOP PERFORMERS — deployable tickers (test PnL >= {DEPLOY_THRESHOLD:.1%})")
 print(f"{'='*W}")
 
-deploy_200 = ens[(ens['family'] == '200') & (ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD)].copy()
-if len(deploy_200) > 0:
-    deploy_best = deploy_200.loc[deploy_200.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+for deploy_fam, deploy_label in [('200_wf', '200 WF'), ('200', '200 Single')]:
+    deploy_df = ens[(ens['family'] == deploy_fam) & (ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD)].copy()
+    if len(deploy_df) == 0:
+        print(f"\n  {deploy_label}: No tickers meet deploy threshold")
+        continue
+    deploy_best = deploy_df.loc[deploy_df.groupby('ticker')['val_b_avg_pnl'].idxmax()]
     deploy_best = deploy_best.sort_values('val_b_avg_pnl', ascending=False)
 
-    deploy_185_tickers = set(ens[(ens['family'] == '185') &
-                                  (ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD)]['ticker'].unique())
+    other_fam = '200' if deploy_fam == '200_wf' else '185'
+    other_deploy_tickers = set(ens[(ens['family'] == other_fam) &
+                                    (ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD)]['ticker'].unique())
 
-    print(f"\n  {'Ticker':<7} {'Mode':<15} {'TestPnL':>8} {'TestWR':>7} {'TestN':>6} "
+    print(f"\n  ── {deploy_label} (vs {FAM_LABELS.get(other_fam, other_fam)}) ──")
+    print(f"  {'Ticker':<7} {'Mode':<15} {'TestPnL':>8} {'TestWR':>7} {'TestN':>6} "
           f"{'Prob':>6} {'dip%':>5} {'New?':>5}")
     print(f"  {'─'*65}")
     n_new = 0
     for _, r in deploy_best.iterrows():
-        is_new = r['ticker'] not in deploy_185_tickers
+        is_new = r['ticker'] not in other_deploy_tickers
         if is_new:
             n_new += 1
         new_tag = "NEW" if is_new else ""
@@ -583,9 +650,14 @@ if len(deploy_200) > 0:
               f"{r['val_b_win_rate']:>6.1%} {int(r['val_b_count']):>6} "
               f"{r['prob_thresh']:>6.2f} {dip_str:>5} {new_tag:>5}")
     print(f"  {'─'*65}")
-    print(f"  {len(deploy_best)} deployable tickers ({n_new} NEW vs 185 baseline)")
+    print(f"  {len(deploy_best)} deployable tickers ({n_new} NEW vs {FAM_LABELS.get(other_fam, other_fam)})")
+
+all_deploy = ens[ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD].copy()
+if len(all_deploy) > 0:
+    all_deploy_best = all_deploy.loc[all_deploy.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+    all_deploy_best = all_deploy_best.sort_values('val_b_avg_pnl', ascending=False)
 else:
-    print(f"\n  No tickers meet deploy threshold for exp 200")
+    all_deploy_best = pd.DataFrame()
 
 
 # ==============================================================================
@@ -703,8 +775,8 @@ if RUN_BACKTEST:
             return (prices[n-1] - ep) / ep, ed, True
 
         bt_configs = []
-        if len(deploy_best) > 0:
-            for _, r in deploy_best.head(10).iterrows():
+        if len(all_deploy_best) > 0:
+            for _, r in all_deploy_best.head(10).iterrows():
                 base_exp = r['experiment']
                 for sfx in sorted(MODE_SUFFIX.values(), key=len, reverse=True):
                     if sfx and base_exp.endswith(sfx):
@@ -834,10 +906,17 @@ for fam in FAM_ORDER:
           f"best_mode={best_mode} ({best_mode_avg.max():>+.2%})  "
           f"deployable={deployable_n}/{fam_ens['ticker'].nunique()}")
 
-if common_200_185:
-    delta_avg = (pivot_pnl.loc[common_200_185, '200'] - pivot_pnl.loc[common_200_185, '185']).mean()
-    direction = "outperforms" if delta_avg > 0 else "underperforms"
-    print(f"\n  200 CNN-TX {direction} 185 Std-TX by {abs(delta_avg):.2%} avg on {len(common_200_185)} common tickers")
-    print(f"  200 wins on {wins.get('200',0)}/{len(common_200_185)} tickers (best-mode comparison)")
+VERDICT_PAIRS = [('200_wf', '180'), ('200_wf', '200'), ('200_wf', '185'), ('200', '185')]
+for fam_a, fam_b in VERDICT_PAIRS:
+    if fam_a not in pivot_pnl.columns or fam_b not in pivot_pnl.columns:
+        continue
+    common = sorted(pivot_pnl[[fam_a, fam_b]].dropna().index)
+    if not common:
+        continue
+    delta = (pivot_pnl.loc[common, fam_a] - pivot_pnl.loc[common, fam_b]).mean()
+    w_a = int((pivot_pnl.loc[common, fam_a] - pivot_pnl.loc[common, fam_b] > 0.001).sum())
+    direction = "outperforms" if delta > 0 else "underperforms"
+    print(f"\n  {FAM_LABELS[fam_a]} {direction} {FAM_LABELS[fam_b]} by {abs(delta):.2%} avg "
+          f"on {len(common)} common tickers ({w_a}/{len(common)} wins)")
 
 print(f"\n{'='*W}")

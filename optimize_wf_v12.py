@@ -291,6 +291,19 @@ EXP_FAMILIES = {
         'test_end':   '2026-06-17',
         'fallback_tickers': _FULL_TICKERS,
     },
+    'walkforward_200': {
+        'label': 'Walk-Forward 200 v12 (5 folds, CNN-Transformer, cutoffs Sep25-Jan26)',
+        'experiments': {'201_XSECTOR', '202_XSECTOR', '203_XSECTOR',
+                        '204_XSECTOR', '205_XSECTOR'},
+        'wf_rounds': [
+            {'name': 'R1', 'opt': ('2025-08-01', '2026-01-31'),
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 5},
+        ],
+        'test_start': '2026-04-01',
+        'test_end':   '2026-07-05',
+        'stitch': True,
+        'fallback_tickers': _FULL_TICKERS,
+    },
     'v12_160_152': {
         'label': 'v12 — 160 + 152 combined',
         'experiments': {'160_XSECTOR', '152_XSECTOR'},
@@ -304,7 +317,7 @@ EXP_FAMILIES = {
     },
 }
 
-ACTIVE_FAMILY = 'single_175'  # change per run: 'late_cutoff', 'early_cutoff', 'walkforward', 'single_175', 'single_185', 'v12_160_152', 'single_200'
+ACTIVE_FAMILY = 'walkforward_200'  # change per run: 'late_cutoff', 'early_cutoff', 'walkforward', 'single_175', 'single_185', 'v12_160_152', 'single_200', 'walkforward_200'
 
 _family = EXP_FAMILIES[ACTIVE_FAMILY]
 CLEAN_EXPERIMENTS = _family['experiments']
@@ -324,7 +337,7 @@ SLIPPAGE_PCT         = 0.0015  # 0.15% each way = 0.3% round-trip
 FIXED_ENTRY_TIME   = '06:15'
 FIXED_ENTRY_MINUTE = 375       # 6*60+15
 
-MODEL_VERSION_TAG = 'robust_wf_v12'
+MODEL_VERSION_TAG = 'robust_wf_v12_stitched' if EXP_FAMILIES[ACTIVE_FAMILY].get('stitch') else 'robust_wf_v12'
 SKIP_COMPLETED = True
 TICKER_SUBSET  = []  # empty = all assets with scored data
 
@@ -1971,6 +1984,17 @@ print(f"  MIN_TRADES_ABSOLUTE = {MIN_TRADES_ABSOLUTE}")
 print(f"{'='*110}\n")
 
 deploy_configs = load_deploy_configs()
+
+if _family.get('stitch'):
+    first_exp = sorted(_family['experiments'])[0]
+    seen_tickers = set()
+    deduped = []
+    for c in deploy_configs:
+        if c['ticker'] not in seen_tickers:
+            deduped.append({'ticker': c['ticker'], 'experiment': first_exp})
+            seen_tickers.add(c['ticker'])
+    print(f"  STITCH dedup: {len(deploy_configs)} combos → {len(deduped)} unique tickers (base={first_exp})")
+    deploy_configs = deduped
 
 if TICKER_SUBSET:
     deploy_configs = [c for c in deploy_configs if c['ticker'] in TICKER_SUBSET]

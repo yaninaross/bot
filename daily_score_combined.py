@@ -1,20 +1,21 @@
 """
-Daily Scoring — Strategy S3 (limit_entry, majority-positive val_b family agreement)
-===================================================================================
-Self-contained. Scores tickers that pass S3 family agreement gate, using the
-best limit_entry config across all experiment families (152-200).
-Includes data loading, healing, dynamic TP/SL, regime filter, and BQ logging.
+Daily Scoring — Strategy S3 + S18
+==================================
+Self-contained. Scores tickers under two strategies and prints both dashboards.
 
-Gate: majority of families must have positive val_b (out-of-sample), n_fams >= 2.
-Mode: limit_entry only.
-Deploy: best config per ticker by score_pnl2 (mean_va_pnl^2 * agree_18).
-170 uses fold-175 models (latest walkforward cutoff).
-180 uses fold-185 models (latest walkforward cutoff).
+Strategy S3 (limit_entry + family agreement):
+  Gate: majority of families positive val_b, n_fams >= 2. Mode: limit_entry only.
+  Deploy: best limit_entry config per ticker by score_pnl2.
+
+Strategy S18 (AllMode + ModeConsist):
+  Gate: per (ticker, mode) pair, majority of families positive val_b, n_fams >= 2.
+  Deploy: best config per ticker from passing (ticker, mode) pool (any mode).
+
+Both: score_pnl2 = mean_va_pnl^2 * agree_18.
+170 uses fold-175 models; 180 uses fold-185 models.
 
 Confidence tiers:
-  HIGH  — N>=10 seeds, reliable signal
-  MED   — N=4-9 seeds, moderate sample
-  LOW   — N<=3 seeds, may be noise
+  HIGH  — N>=7 seeds    MED — N=4-6 seeds    LOW — N<=3 seeds
 
 Run AFTER daily_ohlcv scripts have finished updating GCS.
 """
@@ -23,6 +24,7 @@ import os
 import sys
 import json
 import gc
+import copy
 import subprocess
 
 os.environ['TF_USE_LEGACY_KERAS'] = '1'
@@ -133,9 +135,9 @@ EXP_160 = {
 }
 
 # ==============================================================================
-# BQ CONFIG SELECTION — Strategy B / Tier 1+ (limit_entry, both 152+160 gate)
-# Gate: ticker qualifies in both 152 AND 160. Mode: limit_entry only.
-# Deploy: best limit_entry config per ticker across all families.
+# BQ CONFIG SELECTION — Strategy S3 (limit_entry, majority-positive val_b)
+# Gate: majority of families positive val_b, n_fams >= 2. Mode: limit_entry.
+# Deploy: best config by score_pnl2 per ticker across scorable families.
 # ==============================================================================
 WF_MODEL_VERSION = 'robust_wf_v12'
 WF_BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
@@ -144,14 +146,20 @@ WF_DEPLOY_THRESHOLD = 0.018
 WF_MIN_SEEDS = 3
 WF_MAX_VA_OPT_RATIO = 3.0
 WF_DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
-                         '175_XSECTOR', '180_XSECTOR', '185_XSECTOR',
-                         '200_XSECTOR'}
+                         '175_XSECTOR',
+                         '180_XSECTOR', '181_XSECTOR', '182_XSECTOR',
+                         '183_XSECTOR', '184_XSECTOR', '185_XSECTOR',
+                         '200_XSECTOR', '201_XSECTOR', '202_XSECTOR',
+                         '203_XSECTOR', '204_XSECTOR', '205_XSECTOR'}
 WF_EXCLUDE_TICKERS = {'LUNR'}
 WF_TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 WF_MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
                    'regime_scaled': '_REGIME', 'trailing_decay': '_TRAIL',
                    'regime_adaptive': '_REGADP', 'atr_sl': '_ATRSL',
                    'grace': '_GRACE', 'limit_entry': '_LIMIT'}
+SPY_3D_RETURN_MIN = 0.005
+VIX_RANGE_5D_MAX  = 0.08
+
 WF_GRP_KEYS = ['ticker', 'experiment', 'tpsl_mode', 'entry_minute',
                'prob_thresh', 'tp_pct', 'sl_pct',
                'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult',
@@ -173,7 +181,7 @@ def _assign_family(exp_name):
     if num == 160: return '160'
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
-    if num == 200: return '200'
+    if 200 <= num <= 205: return '200'
     return 'other'
 
 def load_deploy_configs_from_bq():
@@ -265,8 +273,15 @@ def load_deploy_configs_from_bq():
 
     maj_tickers = {tk for tk, ag in agreement.items() if ag['majority_pos']}
 
-    # Select best config per ticker — threshold applied after selection
-    sa_s3 = sa_limit[sa_limit['ticker'].isin(maj_tickers)].copy()
+    # Select best config per ticker — only from scorable experiments
+    scorable_exps = set(_EXP_MAP.keys())
+    sa_s3 = sa_limit[
+        sa_limit['ticker'].isin(maj_tickers) &
+        sa_limit['experiment'].apply(_wf_base_exp).isin(scorable_exps)
+    ].copy()
+    dropped = maj_tickers - set(sa_s3['ticker'].unique())
+    for tk in sorted(dropped):
+        print(f"  WARNING: {tk} passes S3 gate but has no scorable configs (best may be from unsupported experiment)")
     sa_s3['score'] = (sa_s3['mean_va_pnl'] ** 2) * sa_s3['agree_18']
     best = sa_s3.loc[sa_s3.groupby('ticker')['score'].idxmax()] if not sa_s3.empty else sa_s3
     best = best[best['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD].copy()
@@ -276,8 +291,6 @@ def load_deploy_configs_from_bq():
     for _, row in best.sort_values(['ticker', 'experiment']).iterrows():
         base_exp = _wf_base_exp(row['experiment'])
         exp_dict = _EXP_MAP.get(base_exp)
-        if not exp_dict:
-            continue
         ticker = row['ticker']
         tpsl_mode = row['tpsl_mode']
         n_seeds = int(row['n_seeds'])
@@ -316,6 +329,140 @@ def load_deploy_configs_from_bq():
 
     pass  # n_selected configs loaded
     return n_selected
+
+
+def load_deploy_configs_s18_from_bq():
+    """Strategy S18: AllMode + ModeConsist — per (ticker, mode) family agreement, best per ticker."""
+    bq_client = bigquery.Client()
+    query = f"""
+    SELECT ticker, experiment, seed, tpsl_mode, entry_minute, prob_thresh,
+           tp_pct, sl_pct, tp_mult, sl_mult,
+           trail_start_mult, trail_end_mult,
+           vix_threshold, tlt_crash, spy_ignore, vol_filter_pct,
+           val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
+           val_b_avg_pnl,
+           opt_avg_pnl, is_ensemble,
+           grace_minutes, dip_pct, max_wait_minutes
+    FROM `{WF_BQ_TABLE}`
+    WHERE model_version = '{WF_MODEL_VERSION}'
+      AND survived_a = TRUE
+      AND val_a_count >= {WF_MIN_TRADES}
+      AND val_a_avg_pnl > 0
+    """
+    df = bq_client.query(query).to_dataframe()
+
+    df['ticker'] = df['ticker'].replace(WF_TICKER_RENAME)
+    df['base_experiment'] = df['experiment'].apply(_wf_base_exp)
+    df = df[df['base_experiment'].isin(WF_DEPLOY_EXPERIMENTS)]
+    df = df[~df['ticker'].isin(WF_EXCLUDE_TICKERS)]
+
+    for col in ['grace_minutes', 'max_wait_minutes', 'vol_filter_pct']:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = df[col].fillna(0).astype(int)
+    for col in ['dip_pct', 'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult']:
+        if col not in df.columns:
+            df[col] = 0.0
+        df[col] = df[col].fillna(0.0)
+
+    df = df[df['opt_avg_pnl'] > 0].copy()
+    df = df[df['val_a_avg_pnl'] / df['opt_avg_pnl'] <= WF_MAX_VA_OPT_RATIO]
+
+    indiv = df[df['is_ensemble'] == False].copy()
+
+    extra_agg = {}
+    _regime_agg = {'vix_threshold': 'max', 'tlt_crash': 'min', 'spy_ignore': 'max'}
+    for c in ['vix_threshold', 'tlt_crash', 'spy_ignore']:
+        if c in indiv.columns:
+            extra_agg[c] = (c, _regime_agg[c])
+
+    sa = indiv.groupby(WF_GRP_KEYS).agg(
+        n_seeds=('seed', 'nunique'),
+        n_pos_seeds_18=('val_a_avg_pnl', lambda x: (x >= 0.018).sum()),
+        mean_va_pnl=('val_a_avg_pnl', 'mean'),
+        mean_va_wr=('val_a_win_rate', 'mean'),
+        mean_va_count=('val_a_count', 'mean'),
+        mean_va_freq=('val_a_freq', 'mean'),
+        vb_pnl=('val_b_avg_pnl', 'mean'),
+        **extra_agg,
+    ).reset_index()
+    sa['agree_18'] = (sa['n_pos_seeds_18'] / sa['n_seeds']).clip(upper=1.0)
+
+    # ── S18: all modes allowed, per (ticker, mode) family agreement ──
+    sa_all = sa[sa['n_seeds'] >= WF_MIN_SEEDS].copy()
+
+    d = sa_all.copy()
+    d['score'] = (d['mean_va_pnl'] ** 2) * d['agree_18']
+    d = d[np.isfinite(d['score'])]
+    d['exp_fam'] = d['experiment'].apply(_assign_family)
+    d = d[d['exp_fam'] != 'other']
+
+    best_per_fam_mode = d.loc[d.groupby(['ticker', 'tpsl_mode', 'exp_fam'])['score'].idxmax()]
+    best_per_fam_mode = best_per_fam_mode[best_per_fam_mode['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD]
+
+    passing = []
+    for (tk, mode), grp in best_per_fam_mode.groupby(['ticker', 'tpsl_mode']):
+        n_fams = len(grp)
+        n_pos = int((grp['vb_pnl'] > 0).sum())
+        if n_fams >= 2 and n_pos > n_fams / 2:
+            passing.append(grp)
+
+    if not passing:
+        return 0
+    pool = pd.concat(passing)
+
+    scorable_exps = set(_EXP_MAP_S18.keys())
+    pool_scorable = pool[pool['experiment'].apply(_wf_base_exp).isin(scorable_exps)].copy()
+    if pool_scorable.empty:
+        return 0
+
+    best = pool_scorable.loc[pool_scorable.groupby('ticker')['score'].idxmax()]
+    best = best[best['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD].copy()
+
+    n_selected = 0
+    for _, row in best.sort_values(['ticker', 'experiment']).iterrows():
+        base_exp = _wf_base_exp(row['experiment'])
+        exp_dict = _EXP_MAP_S18.get(base_exp)
+        if exp_dict is None:
+            continue
+        ticker = row['ticker']
+        tpsl_mode = row['tpsl_mode']
+        n_seeds = int(row['n_seeds'])
+        cfg = {
+            'seed': -1, 'is_ensemble': True,
+            'prob_threshold': float(row['prob_thresh']),
+            'entry_minute': int(row['entry_minute']),
+            'tpsl_mode': tpsl_mode,
+            'tp_pct': float(row['tp_pct']),
+            'sl_pct': float(row['sl_pct']),
+            'vix_threshold': float(row.get('vix_threshold', 999)),
+            'tlt_crash': float(row.get('tlt_crash', -999)),
+            'spy_ignore': float(row.get('spy_ignore', 999)),
+            'vol_filter_pct': int(row.get('vol_filter_pct', 0)),
+            'confidence': 'HIGH' if n_seeds >= 7 else ('MED' if n_seeds >= 4 else 'LOW'),
+            'confidence_note': f'{n_seeds} seeds, agree={row["agree_18"]:.0%}',
+            'stats': {
+                'win_rate': f'{row["mean_va_wr"]:.0%}',
+                'avg_pnl': f'{row["mean_va_pnl"]:.1%}',
+                'freq': f'{row["mean_va_freq"]:.1f}',
+            },
+        }
+        if tpsl_mode == 'limit_entry':
+            cfg['dip_pct'] = float(row.get('dip_pct', 0))
+            cfg['max_wait_minutes'] = int(row.get('max_wait_minutes', 0))
+        if tpsl_mode == 'grace':
+            cfg['grace_minutes'] = int(row.get('grace_minutes', 0))
+        if tpsl_mode in ('atr', 'atr_adaptive', 'trailing_decay', 'atr_sl'):
+            cfg['tp_mult'] = float(row.get('tp_mult', 0))
+            cfg['sl_mult'] = float(row.get('sl_mult', 0))
+        if tpsl_mode == 'trailing_decay':
+            cfg['trail_start_mult'] = float(row.get('trail_start_mult', 0))
+            cfg['trail_end_mult'] = float(row.get('trail_end_mult', 0))
+        exp_dict['asset_configs'][ticker] = cfg
+        n_selected += 1
+
+    return n_selected
+
 
 EXP_170 = {
     'model_id': '175_XSECTOR',
@@ -414,7 +561,22 @@ EXP_185 = {
     'asset_cols': ASSET_COLS,
 }
 
-for _exp in (EXP_152, EXP_160, EXP_170, EXP_185):
+# ── EXP-200 family (same teachers as 185, per-fold models) ──
+_EXP_200_FOLDS = {}
+for _fold_id in ['200', '201', '202', '203', '204', '205']:
+    _EXP_200_FOLDS[_fold_id] = {
+        'model_id': f'{_fold_id}_XSECTOR',
+        'label': f'EXP-{_fold_id} XSECTOR (200 family)',
+        'train_teachers': TEACHERS_31,
+        'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
+        'has_smh_rsi': False,
+        'asset_configs': {},
+        'asset_cols': ASSET_COLS,
+    }
+
+_ALL_EXPS = [EXP_152, EXP_160, EXP_170, EXP_185] + list(_EXP_200_FOLDS.values())
+
+for _exp in _ALL_EXPS:
     _acols = _exp.get('asset_cols', ASSET_COLS)
     _exp['asset_cols'] = _acols
     _exp['context_cols'] = _build_context_cols(
@@ -438,20 +600,50 @@ _EXP_MAP = {
     '180_XSECTOR': EXP_185,
     '185_XSECTOR': EXP_185,
 }
+for _fold_id, _fold_exp in _EXP_200_FOLDS.items():
+    _EXP_MAP[f'{_fold_id}_XSECTOR'] = _fold_exp
 
-# Clear hardcoded configs — Tier 1+ is fully BQ-driven
-for _exp in (EXP_152, EXP_160, EXP_170, EXP_185):
+# ── S18 deep copies (independent experiment dicts for AllMode + ModeConsist) ──
+EXP_152_S18 = copy.deepcopy(EXP_152)
+EXP_160_S18 = copy.deepcopy(EXP_160)
+EXP_170_S18 = copy.deepcopy(EXP_170)
+EXP_185_S18 = copy.deepcopy(EXP_185)
+_EXP_200_FOLDS_S18 = {k: copy.deepcopy(v) for k, v in _EXP_200_FOLDS.items()}
+
+_EXP_MAP_S18 = {
+    '152_XSECTOR': EXP_152_S18,
+    '160_XSECTOR': EXP_160_S18,
+    '170_XSECTOR': EXP_170_S18,
+    '175_XSECTOR': EXP_170_S18,
+    '180_XSECTOR': EXP_185_S18,
+    '185_XSECTOR': EXP_185_S18,
+}
+for _fold_id, _fold_exp in _EXP_200_FOLDS_S18.items():
+    _EXP_MAP_S18[f'{_fold_id}_XSECTOR'] = _fold_exp
+
+# Clear hardcoded configs — both S3 and S18 are fully BQ-driven
+for _exp in _ALL_EXPS:
+    _exp['asset_configs'] = {}
+for _exp in list(_EXP_200_FOLDS_S18.values()) + [EXP_152_S18, EXP_160_S18, EXP_170_S18, EXP_185_S18]:
     _exp['asset_configs'] = {}
 
 try:
     _n_bq = load_deploy_configs_from_bq()
     if _n_bq == 0:
-        print("  WARNING: No Tier 1+ configs selected from BQ — check that tickers qualify in both 152+160")
+        print("  WARNING: No S3 configs selected from BQ — check family agreement in wf_optimization_results")
 except Exception as _e:
-    print(f"  ERROR loading BQ configs: {_e}")
-    print(f"  Scoring will have 0 tickers — check BQ access and WF table")
+    print(f"  ERROR loading S3 BQ configs: {_e}")
+    print(f"  S3 scoring will have 0 tickers — check BQ access and WF table")
 
-EXPERIMENTS = [e for e in (EXP_152, EXP_160, EXP_170, EXP_185) if e['asset_configs']]
+try:
+    _n_s18 = load_deploy_configs_s18_from_bq()
+    if _n_s18 == 0:
+        print("  WARNING: No S18 configs selected from BQ")
+except Exception as _e:
+    print(f"  ERROR loading S18 BQ configs: {_e}")
+
+EXPERIMENTS = [e for e in _ALL_EXPS if e['asset_configs']]
+EXPERIMENTS_S18 = [e for e in list(_EXP_200_FOLDS_S18.values()) + [EXP_152_S18, EXP_160_S18, EXP_170_S18, EXP_185_S18] if e['asset_configs']]
 
 # ==============================================================================
 # GCS CLIENT
@@ -916,6 +1108,8 @@ def score_ticker(ticker, cfg, df_scaled, df_raw, exp):
         'vix_value': vix_value,
         'tlt_gap_pct': regime.get('tlt_gap') if regime else None,
         'spy_gap_pct': regime.get('spy_gap') if regime else None,
+        'vix_range_5d': regime.get('vix_range_5d') if regime else None,
+        'spy_3d_return': regime.get('spy_3d_return') if regime else None,
         'vol_filter_pct': vol_pct,
         'vol_filter_ok': vol_ok,
         'dollar_vol_ok': dollar_vol_ok,
@@ -984,7 +1178,27 @@ def load_regime_data(score_date, entry_minute):
             if prev_close != 0:
                 spy_gap = ((entry_close - prev_close) / prev_close) * 100
 
-    regime = {'vix': vix_level, 'tlt_gap': tlt_gap, 'spy_gap': spy_gap}
+    vix_range_5d = None
+    if df_vix is not None:
+        dpst = df_vix.copy()
+        dpst.index = dpst.index.tz_convert(PST)
+        vix_d = dpst.resample('D').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+        vix_d = vix_d[vix_d.index.date <= score_date]
+        if len(vix_d) >= 3:
+            rng = (vix_d['High'] - vix_d['Low']) / vix_d['Close']
+            vix_range_5d = float(rng.rolling(5, min_periods=3).mean().iloc[-1])
+
+    spy_3d_return = None
+    if df_spy is not None:
+        dpst = df_spy.copy()
+        dpst.index = dpst.index.tz_convert(PST)
+        spy_d = dpst['Close'].resample('D').last().dropna()
+        spy_d = spy_d[spy_d.index.date <= score_date]
+        if len(spy_d) >= 4:
+            spy_3d_return = float(spy_d.pct_change(3).iloc[-1])
+
+    regime = {'vix': vix_level, 'tlt_gap': tlt_gap, 'spy_gap': spy_gap,
+              'vix_range_5d': vix_range_5d, 'spy_3d_return': spy_3d_return}
     _regime_cache[cache_key] = regime
     return regime
 
@@ -994,7 +1208,17 @@ def _filter_pass(cfg, regime):
     tlt_bad = regime['tlt_gap'] is not None and regime['tlt_gap'] < cfg['tlt_crash']
     spy_bad = regime['spy_gap'] is not None and regime['spy_gap'] > cfg['spy_ignore']
     blocked = vix_bad and tlt_bad and spy_bad
-    return not blocked, not vix_bad, not tlt_bad, not spy_bad
+    if blocked:
+        return False, not vix_bad, not tlt_bad, not spy_bad
+
+    vr = regime.get('vix_range_5d')
+    s3d = regime.get('spy_3d_return')
+    if vr is not None and vr >= VIX_RANGE_5D_MAX:
+        return False, True, True, True
+    if s3d is not None and s3d < SPY_3D_RETURN_MIN:
+        return False, True, True, True
+
+    return True, not vix_bad, not tlt_bad, not spy_bad
 
 
 # ==============================================================================
@@ -1059,6 +1283,12 @@ def print_experiment_section(exp, results):
             if not r.get('dollar_vol_ok', True):
                 dv = r.get('dollar_volume')
                 parts.append(f"DOLLAR_VOL:${dv:,.0f}<${MIN_DOLLAR_VOLUME:,.0f}" if dv else "DOLLAR_VOL")
+            vr = r.get('vix_range_5d')
+            if vr is not None and vr >= VIX_RANGE_5D_MAX:
+                parts.append(f"VIX_RNG:{vr:.1%}>={VIX_RANGE_5D_MAX:.0%}")
+            s3d = r.get('spy_3d_return')
+            if s3d is not None and s3d < SPY_3D_RETURN_MIN:
+                parts.append(f"SPY3d:{s3d:+.2%}<{SPY_3D_RETURN_MIN:+.1%}")
             filt_str = f"BLOCKED {' & '.join(parts)}"
 
         em = r['entry_minute']
@@ -1071,13 +1301,13 @@ def print_experiment_section(exp, results):
               f"{close:>8.2f}  {conf:<4}  {filt_str}")
 
 
-def print_dashboard(all_results, run_ts):
+def print_dashboard(all_results, run_ts, strategy='S3'):
     W = 120
     pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %H:%M PST')
 
     print()
     print(f"  {'='*W}")
-    print(f"  DAILY SIGNALS   {pst_str}")
+    print(f"  DAILY SIGNALS — {strategy}   {pst_str}")
     print(f"  {'='*W}")
 
     all_flat_r = [r for _, results in all_results for r in results]
@@ -1086,7 +1316,9 @@ def print_dashboard(all_results, run_ts):
         vix_s = f"{last_r['vix_value']:.1f}"       if last_r.get('vix_value')   is not None else "N/A"
         tlt_s = f"{last_r['tlt_gap_pct']:+.2f}%"   if last_r.get('tlt_gap_pct') is not None else "N/A"
         spy_s = f"{last_r['spy_gap_pct']:+.2f}%"   if last_r.get('spy_gap_pct') is not None else "N/A"
-        print(f"  Market:  VIX={vix_s}   TLT={tlt_s}   SPY={spy_s}")
+        vr_s  = f"{last_r['vix_range_5d']:.1%}"     if last_r.get('vix_range_5d') is not None else "N/A"
+        s3d_s = f"{last_r['spy_3d_return']:+.2%}"    if last_r.get('spy_3d_return') is not None else "N/A"
+        print(f"  Market:  VIX={vix_s}   TLT={tlt_s}   SPY={spy_s}   VIX_rng5d={vr_s}   SPY_3d={s3d_s}")
 
     # ── SINGLE FLAT SIGNAL TABLE ────────────────────────────────────────────
     all_rows = [(exp, r) for exp, results in all_results for r in results]
@@ -1143,6 +1375,12 @@ def print_dashboard(all_results, run_ts):
                 if not r.get('dollar_vol_ok', True):
                     dv = r.get('dollar_volume')
                     parts.append(f"DOLLAR_VOL:${dv:,.0f}<${MIN_DOLLAR_VOLUME:,.0f}" if dv else "DOLLAR_VOL")
+                vr = r.get('vix_range_5d')
+                if vr is not None and vr >= VIX_RANGE_5D_MAX:
+                    parts.append(f"VIX_RNG:{vr:.1%}>={VIX_RANGE_5D_MAX:.0%}")
+                s3d = r.get('spy_3d_return')
+                if s3d is not None and s3d < SPY_3D_RETURN_MIN:
+                    parts.append(f"SPY3d:{s3d:+.2%}<{SPY_3D_RETURN_MIN:+.1%}")
                 filt_str = f"BLOCKED {' & '.join(parts)}"
 
             em = r['entry_minute']
@@ -1290,6 +1528,9 @@ _BQ_SCHEMA_DEFS = [
     ("vix_regime_idx", "INT64"),
     ("trail_start",    "FLOAT64"),
     ("trail_end",      "FLOAT64"),
+    ("vix_range_5d",   "FLOAT64"),
+    ("spy_3d_return",  "FLOAT64"),
+    ("strategy",       "STRING"),
 ]
 
 
@@ -1300,7 +1541,7 @@ def _ensure_bq_schema(bq_client):
         bq_client.query(sql).result()
 
 
-def log_to_bigquery(all_results, run_ts):
+def log_to_bigquery(all_results, run_ts, strategy='S3'):
     if bigquery is None:
         print("   BigQuery not available — skipping")
         return
@@ -1335,6 +1576,9 @@ def log_to_bigquery(all_results, run_ts):
                 'vix_regime_idx': r.get('vix_regime_idx'),
                 'trail_start':    r.get('trail_start'),
                 'trail_end':      r.get('trail_end'),
+                'vix_range_5d':   r.get('vix_range_5d'),
+                'spy_3d_return':  r.get('spy_3d_return'),
+                'strategy':       strategy,
             })
     if not rows:
         return
@@ -1424,19 +1668,14 @@ def _check_stitch_freshness():
         print(f"   ⚠️  Stitch last ran {ts.strftime('%Y-%m-%d %H:%M')} — not today")
 
 
-def main():
-    run_ts = datetime.now(pytz.utc)
-    total_configs = sum(len(e['asset_configs']) for e in EXPERIMENTS)
-    pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
-    all_tickers = sorted({t for e in EXPERIMENTS for t in e['asset_configs']})
-    print(f"\n{'='*80}")
-    print(f"  DAILY SCORING — {pst_str}")
-    print(f"  {total_configs} assets: {', '.join(all_tickers)}")
-    print(f"{'='*80}")
-    _check_stitch_freshness()
+def _run_strategy(experiments, run_ts, strategy_name):
+    """Score all tickers for one strategy. Returns list of (exp, results)."""
+    total = sum(len(e['asset_configs']) for e in experiments)
+    tickers = sorted({t for e in experiments for t in e['asset_configs']})
+    print(f"\n  {strategy_name}: {total} assets — {', '.join(tickers)}")
 
     all_results = []
-    for exp in EXPERIMENTS:
+    for exp in experiments:
         try:
             results = run_experiment(exp, run_ts)
         except Exception as e:
@@ -1449,15 +1688,58 @@ def main():
         tf.keras.backend.clear_session()
         gc.collect()
 
-    scored_tickers = sorted({r['ticker'] for _, results in all_results for r in results})
-    skipped_tickers = sorted(set(all_tickers) - set(scored_tickers))
-    print(f"\n  ✓ Scored {len(scored_tickers)}/{total_configs}: {', '.join(scored_tickers)}")
-    if skipped_tickers:
-        print(f"  ✗ Skipped {len(skipped_tickers)}: {', '.join(skipped_tickers)}")
+    scored = sorted({r['ticker'] for _, results in all_results for r in results})
+    skipped = sorted(set(tickers) - set(scored))
+    print(f"  {strategy_name}: scored {len(scored)}/{total}: {', '.join(scored)}")
+    if skipped:
+        print(f"  {strategy_name}: skipped {len(skipped)}: {', '.join(skipped)}")
 
-    print_dashboard(all_results, run_ts)
+    return all_results
 
-    log_to_bigquery(all_results, run_ts)
+
+def main():
+    run_ts = datetime.now(pytz.utc)
+    pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
+    print(f"\n{'='*80}")
+    print(f"  DAILY SCORING — {pst_str}")
+    print(f"{'='*80}")
+    _check_stitch_freshness()
+
+    s3_results = _run_strategy(EXPERIMENTS, run_ts, 'S3')
+    s18_results = _run_strategy(EXPERIMENTS_S18, run_ts, 'S18')
+
+    print_dashboard(s3_results, run_ts, strategy='S3')
+    print_dashboard(s18_results, run_ts, strategy='S18')
+
+    # ── S18 vs S3 diff ──
+    s3_tickers = {r['ticker'] for _, results in s3_results for r in results}
+    s18_tickers = {r['ticker'] for _, results in s18_results for r in results}
+    new_in_s18 = sorted(s18_tickers - s3_tickers)
+    removed_in_s18 = sorted(s3_tickers - s18_tickers)
+    shared = sorted(s3_tickers & s18_tickers)
+    s3_modes = {r['ticker']: r.get('tpsl_mode', 'static')
+                for _, results in s3_results for r in results}
+    s18_modes = {r['ticker']: r.get('tpsl_mode', 'static')
+                 for _, results in s18_results for r in results}
+    mode_changes = [(tk, s3_modes[tk], s18_modes[tk])
+                    for tk in shared if s3_modes.get(tk) != s18_modes.get(tk)]
+
+    print(f"\n  {'='*80}")
+    print(f"  S18 vs S3 DIFF")
+    print(f"  {'─'*80}")
+    if new_in_s18:
+        print(f"  NEW in S18:     {', '.join(new_in_s18)}")
+    if removed_in_s18:
+        print(f"  DROPPED in S18: {', '.join(removed_in_s18)}")
+    if mode_changes:
+        for tk, s3m, s18m in mode_changes:
+            print(f"  MODE CHANGE:    {tk}: {s3m} → {s18m}")
+    if not new_in_s18 and not removed_in_s18 and not mode_changes:
+        print(f"  No differences — S3 and S18 selected identical configs")
+    print(f"  {'='*80}")
+
+    log_to_bigquery(s3_results, run_ts, strategy='S3')
+    log_to_bigquery(s18_results, run_ts, strategy='S18')
 
 
 main()

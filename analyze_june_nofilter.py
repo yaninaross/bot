@@ -289,6 +289,23 @@ recovered = filled[(filled['filter'] != 'OK') & (filled['pass_nofilter'] == True
 still_blocked = filled[(filled['filter'] != 'OK') & (filled['pass_nofilter'] == False)].copy()
 nofilter = pd.concat([actual, recovered], ignore_index=True)
 
+def _add_daily_dollar(df):
+    """Add dollar_pnl: each day allocates full CAPITAL equally across that day's trades."""
+    if df.empty:
+        return df
+    df = df.copy()
+    df['dollar_pnl'] = 0.0
+    for d in df['date'].unique():
+        mask = df['date'] == d
+        n = mask.sum()
+        df.loc[mask, 'dollar_pnl'] = df.loc[mask, 'pnl'] * (CAPITAL / n)
+    return df
+
+actual = _add_daily_dollar(actual)
+recovered = _add_daily_dollar(recovered)
+still_blocked = _add_daily_dollar(still_blocked)
+nofilter = _add_daily_dollar(nofilter)
+
 print(f"\n{'='*W}")
 print(f"  ACTUAL vs NO-FILTER COMPARISON")
 print(f"{'='*W}")
@@ -302,8 +319,7 @@ def print_stats(label, df, indent='  '):
     wr = wins / n * 100
     avg = df['pnl'].mean()
     tot = df['pnl'].sum()
-    alloc = CAPITAL / n if n > 0 else 0
-    dollar = sum(alloc * p for p in df['pnl'])
+    dollar = df['dollar_pnl'].sum()
     print(f"{indent}{label}:")
     print(f"{indent}  Trades: {n}, Wins: {wins}, WR: {wr:.0f}%, "
           f"Avg PnL: {avg:+.2%}, Total: {tot:+.2%}, $PnL: ${dollar:+,.0f}")
@@ -325,19 +341,14 @@ for label, df in [('ACTUAL (with filters)', actual),
         continue
     n = len(df)
     w = len(df[df['pnl'] > 0])
-    alloc = CAPITAL / n
-    dollar = sum(alloc * p for p in df['pnl'])
+    dollar = df['dollar_pnl'].sum()
     print(f"  {label:<35} {n:>7} {w/n:>4.0%} {df['pnl'].mean():>+8.2%} "
           f"{df['pnl'].sum():>+9.2%} ${dollar:>+11,.0f}")
 
 delta_trades = len(nofilter) - len(actual)
-delta_dollar = 0
-if not nofilter.empty and not actual.empty:
-    d_nf = sum((CAPITAL / len(nofilter)) * p for p in nofilter['pnl'])
-    d_ac = sum((CAPITAL / len(actual)) * p for p in actual['pnl'])
-    delta_dollar = d_nf - d_ac
-elif not nofilter.empty:
-    delta_dollar = sum((CAPITAL / len(nofilter)) * p for p in nofilter['pnl'])
+d_nf = nofilter['dollar_pnl'].sum() if not nofilter.empty else 0
+d_ac = actual['dollar_pnl'].sum() if not actual.empty else 0
+delta_dollar = d_nf - d_ac
 print(f"\n  Net filter removal impact: {delta_trades:+d} trades, ${delta_dollar:+,.0f}")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -369,15 +380,15 @@ if not actual.empty:
     actual = actual.copy()
     actual['week'] = pd.to_datetime(actual['date']).dt.isocalendar().week.values
 if not nofilter.empty:
-    nofilter_w = nofilter.copy()
-    nofilter_w['week'] = pd.to_datetime(nofilter_w['date']).dt.isocalendar().week.values
+    nofilter = nofilter.copy()
+    nofilter['week'] = pd.to_datetime(nofilter['date']).dt.isocalendar().week.values
 if not recovered.empty:
-    recovered_w = recovered.copy()
-    recovered_w['week'] = pd.to_datetime(recovered_w['date']).dt.isocalendar().week.values
+    recovered = recovered.copy()
+    recovered['week'] = pd.to_datetime(recovered['date']).dt.isocalendar().week.values
 
 weeks = sorted(set(
     list(actual['week'].unique() if not actual.empty else []) +
-    list(nofilter_w['week'].unique() if not nofilter.empty else [])
+    list(nofilter['week'].unique() if not nofilter.empty else [])
 ))
 
 print(f"\n  {'Week':<8} {'|':>2} {'Act Tr':>7} {'Act WR':>7} {'Act Avg':>9} {'Act $PnL':>12} "
@@ -386,19 +397,17 @@ print(f"  {'─'*105}")
 
 for wk in weeks:
     aw = actual[actual['week'] == wk] if not actual.empty else pd.DataFrame()
-    nw = nofilter_w[nofilter_w['week'] == wk] if not nofilter.empty else pd.DataFrame()
+    nw = nofilter[nofilter['week'] == wk] if not nofilter.empty else pd.DataFrame()
 
     a_n = len(aw)
     a_wr = len(aw[aw['pnl'] > 0]) / a_n * 100 if a_n > 0 else 0
     a_avg = aw['pnl'].mean() if a_n > 0 else 0
-    a_alloc = CAPITAL / a_n if a_n > 0 else 0
-    a_dollar = sum(a_alloc * p for p in aw['pnl']) if a_n > 0 else 0
+    a_dollar = aw['dollar_pnl'].sum() if a_n > 0 else 0
 
     n_n = len(nw)
     n_wr = len(nw[nw['pnl'] > 0]) / n_n * 100 if n_n > 0 else 0
     n_avg = nw['pnl'].mean() if n_n > 0 else 0
-    n_alloc = CAPITAL / n_n if n_n > 0 else 0
-    n_dollar = sum(n_alloc * p for p in nw['pnl']) if n_n > 0 else 0
+    n_dollar = nw['dollar_pnl'].sum() if n_n > 0 else 0
 
     delta = n_dollar - a_dollar
     print(f"  W{wk:<6} {'|':>2} {a_n:>7} {a_wr:>6.0f}% {a_avg:>+8.2%} ${a_dollar:>+11,.0f} "
@@ -467,16 +476,14 @@ print(f"  {'─'*85}")
 for tk in tickers:
     tk_act = actual[actual['ticker'] == tk] if not actual.empty else pd.DataFrame()
     tk_rec = recovered[recovered['ticker'] == tk] if not recovered.empty else pd.DataFrame()
-    tk_nf = pd.concat([tk_act[['pnl']], tk_rec[['pnl']]], ignore_index=True) if not tk_act.empty or not tk_rec.empty else pd.DataFrame()
+    tk_nf = nofilter[nofilter['ticker'] == tk] if not nofilter.empty else pd.DataFrame()
 
     n_a, n_r, n_nf = len(tk_act), len(tk_rec), len(tk_nf)
     a_avg = tk_act['pnl'].mean() if n_a > 0 else 0
     nf_avg = tk_nf['pnl'].mean() if n_nf > 0 else 0
 
-    a_alloc = CAPITAL / max(len(actual), 1) * n_a if not actual.empty else 0
-    nf_alloc = CAPITAL / max(len(nofilter), 1) * n_nf if not nofilter.empty else 0
-    a_dollar = tk_act['pnl'].sum() * (CAPITAL / max(len(actual), 1)) if n_a > 0 else 0
-    nf_dollar = tk_nf['pnl'].sum() * (CAPITAL / max(len(nofilter), 1)) if n_nf > 0 else 0
+    a_dollar = tk_act['dollar_pnl'].sum() if n_a > 0 else 0
+    nf_dollar = tk_nf['dollar_pnl'].sum() if n_nf > 0 else 0
 
     delta = nf_dollar - a_dollar
     marker = ' <<<' if abs(delta) > 2000 else ''
@@ -496,17 +503,12 @@ if not filled.empty:
 
     for d in dates:
         da = actual[actual['date'] == d] if not actual.empty else pd.DataFrame()
-        dr = recovered[recovered['date'] == d] if not recovered.empty else pd.DataFrame()
-        dn = pd.concat([da[['pnl']], dr[['pnl']]], ignore_index=True)
+        dn = nofilter[nofilter['date'] == d] if not nofilter.empty else pd.DataFrame()
 
-        n_a = len(da)
-        n_n = len(dn)
-        a_alloc = CAPITAL / n_a if n_a > 0 else 0
-        n_alloc = CAPITAL / n_n if n_n > 0 else 0
-        act_daily_dollar.append(sum(a_alloc * p for p in da['pnl']) if n_a > 0 else 0)
-        nf_daily_dollar.append(sum(n_alloc * p for p in dn['pnl']) if n_n > 0 else 0)
-        act_daily_trades.append(n_a)
-        nf_daily_trades.append(n_n)
+        act_daily_dollar.append(da['dollar_pnl'].sum() if not da.empty else 0)
+        nf_daily_dollar.append(dn['dollar_pnl'].sum() if not dn.empty else 0)
+        act_daily_trades.append(len(da))
+        nf_daily_trades.append(len(dn))
 
     date_labels = [d.strftime('%b %d') if hasattr(d, 'strftime') else str(d)[:10] for d in dates]
     x = np.arange(len(dates))

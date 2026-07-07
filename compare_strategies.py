@@ -398,6 +398,89 @@ def strategy_S16(sa_base, sa_limit, agreement):
     return strategy_seed_family(sa_base, sa_limit, agreement, seed_thresh=0.50, fam_gate='half')
 
 
+def compute_family_agreement_allmode(sa_in):
+    """Family agreement computed on ALL modes (not just limit_entry)."""
+    d = sa_in.copy()
+    d['score'] = score_pnl2(d)
+    d = d[np.isfinite(d['score'])]
+    if d.empty:
+        return {}
+    best = d.loc[d.groupby(['ticker', 'exp_fam'])['score'].idxmax()]
+    best = best[best['mean_va'] >= DEPLOY_THRESHOLD]
+
+    result = {}
+    for tk in best['ticker'].unique():
+        tk_rows = best[best['ticker'] == tk]
+        n_fams = len(tk_rows)
+        n_pos = int((tk_rows['vb_pnl'] > 0).sum())
+        result[tk] = {
+            'n_fams': n_fams,
+            'n_pos': n_pos,
+            'frac_pos': n_pos / n_fams if n_fams > 0 else 0,
+            'all_pos': n_pos == n_fams and n_fams >= 2,
+            'majority_pos': n_pos > n_fams / 2 and n_fams >= 2,
+        }
+    return result
+
+
+def strategy_S17(sa_base, sa_limit, agreement):
+    """S17: AllMode + MajAgree — any mode, best per ticker, majority-positive families.
+    Agreement computed across all modes (mode-agnostic)."""
+    ag = compute_family_agreement_allmode(sa_base)
+    maj_tickers = {tk for tk, a in ag.items() if a['majority_pos']}
+    return select_best(sa_base[sa_base['ticker'].isin(maj_tickers)], score_fn=score_pnl2)
+
+
+def strategy_S18(sa_base, sa_limit, agreement):
+    """S18: AllMode + ModeConsistent — per (ticker, mode), check family agreement.
+    Only deploy a ticker+mode combo where that specific mode has majority-positive families."""
+    d = sa_base.copy()
+    d['score'] = score_pnl2(d)
+    d = d[np.isfinite(d['score'])]
+    if d.empty:
+        return pd.DataFrame()
+
+    best_per_fam_mode = d.loc[d.groupby(['ticker', 'tpsl_mode', 'exp_fam'])['score'].idxmax()]
+    best_per_fam_mode = best_per_fam_mode[best_per_fam_mode['mean_va'] >= DEPLOY_THRESHOLD]
+
+    passing = []
+    for (tk, mode), grp in best_per_fam_mode.groupby(['ticker', 'tpsl_mode']):
+        n_fams = len(grp)
+        n_pos = int((grp['vb_pnl'] > 0).sum())
+        if n_fams >= 2 and n_pos > n_fams / 2:
+            passing.append(grp)
+    if not passing:
+        return pd.DataFrame()
+    pool = pd.concat(passing)
+
+    best = pool.loc[pool.groupby('ticker')['score'].idxmax()]
+    return best
+
+
+def strategy_S19(sa_base, sa_limit, agreement):
+    """S19: AllMode + AnyModePasses — per ticker, if ANY mode passes majority-positive
+    family agreement, deploy that ticker using whichever mode scored highest overall."""
+    d = sa_base.copy()
+    d['score'] = score_pnl2(d)
+    d = d[np.isfinite(d['score'])]
+    if d.empty:
+        return pd.DataFrame()
+
+    best_per_fam_mode = d.loc[d.groupby(['ticker', 'tpsl_mode', 'exp_fam'])['score'].idxmax()]
+    best_per_fam_mode = best_per_fam_mode[best_per_fam_mode['mean_va'] >= DEPLOY_THRESHOLD]
+
+    passing_tickers = set()
+    for (tk, mode), grp in best_per_fam_mode.groupby(['ticker', 'tpsl_mode']):
+        n_fams = len(grp)
+        n_pos = int((grp['vb_pnl'] > 0).sum())
+        if n_fams >= 2 and n_pos > n_fams / 2:
+            passing_tickers.add(tk)
+
+    if not passing_tickers:
+        return pd.DataFrame()
+    return select_best(sa_base[sa_base['ticker'].isin(passing_tickers)], score_fn=score_pnl2)
+
+
 STRATEGIES = {
     'S1': ('Limit All',              strategy_S1, 'limit_entry only, best per ticker'),
     'S2': ('Limit + Multi-Fam',      strategy_S2, 'limit_entry, ≥2 families'),
@@ -415,6 +498,9 @@ STRATEGIES = {
     'S14': ('Seeds50',              strategy_S14, '50% seeds ≥1.8% (seed-only gate)'),
     'S15': ('Seeds80 + MajFam',     strategy_S15, '80% seeds ≥1.8% + majority fam pos'),
     'S16': ('Seeds50 + HalfFam',    strategy_S16, '50% seeds ≥1.8% + ≥50% fam pos'),
+    'S17': ('AllMode + MajAgree',   strategy_S17, 'any mode, majority-pos families (mode-agnostic)'),
+    'S18': ('AllMode + ModeConsist', strategy_S18, 'any mode, per-mode family agreement'),
+    'S19': ('AllMode + AnyPass',    strategy_S19, 'any mode if ANY mode passes fam agreement'),
 }
 
 

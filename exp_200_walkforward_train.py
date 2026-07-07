@@ -33,6 +33,8 @@ import pytz
 from datetime import datetime
 import gc
 import ctypes
+import tempfile
+import shutil
 
 def _release_memory():
     gc.collect()
@@ -45,7 +47,7 @@ def _release_memory():
 # ==============================================================================
 # ENVIRONMENT SYNC & AUTH
 # ==============================================================================
-SCRIPT_VERSION = "200WF.1"
+SCRIPT_VERSION = "200WF.2"
 print(f"Script version: {SCRIPT_VERSION}")
 print("Syncing environment for Experiment 200 Walkforward (CNN-Transformer, 5 Folds)...")
 
@@ -643,6 +645,226 @@ def make_per_ticker_ds(df_scaled, tickers, start_dt, end_dt, steps, batch_size,
 
 
 # ==============================================================================
+# STREAMING DATA LOADING (T4-safe: one ticker at a time, memmap arrays)
+# ==============================================================================
+def _compute_stats_streaming(market_df, aware_cutoff):
+    """Load each teacher individually, accumulate only valid rows for stats (~80MB).
+    Also prints diagnostics matching the original output format.
+    """
+    print("\nStreaming stats pass (one ticker at a time)...")
+    valid_chunks = []
+    total_vr_0, total_vr_1 = 0, 0
+    total_tgt_0, total_tgt_1 = 0, 0
+    total_valid_pos = 0
+    date_min, date_max = None, None
+    per_ticker_diag = []
+    sw_diag = []
+
+    for ticker in STATS_POOL:
+        print(f"   Loading {ticker}...")
+        df = engineer_asset(ticker, market_df)
+        if df is None:
+            continue
+        print(f"      rows={len(df)}  range: {df.index.min()} to {df.index.max()}")
+        df = df.loc[TRAIN_START_DATE:]
+        print(f"      after filter: rows={len(df)}")
+
+        vr = df['Valid_Row'].values
+        tgt = df['Target'].values
+        total_vr_0 += int((vr == 0).sum())
+        total_vr_1 += int((vr == 1).sum())
+        total_tgt_0 += int((tgt == 0).sum())
+        total_tgt_1 += int((tgt == 1).sum())
+        if date_min is None or df.index.min() < date_min:
+            date_min = df.index.min()
+        if date_max is None or df.index.max() > date_max:
+            date_max = df.index.max()
+
+        mask_vr = vr == 1
+        n_valid = int(mask_vr.sum())
+        sr = float(tgt[mask_vr].mean()) if n_valid > 0 else 0.0
+        total_valid_pos += int((mask_vr & (tgt == 1)).sum())
+        idx_aware = np.array(df.index > aware_cutoff)
+        n_val = int((mask_vr & idx_aware).sum())
+        per_ticker_diag.append((ticker, n_valid, sr, n_val))
+
+        idx_pre = np.array(df.index <= aware_cutoff)
+        mask_pos = mask_vr & (tgt == 1) & idx_pre
+        if mask_pos.sum() > 0:
+            sw_vals = df.loc[mask_pos, 'Sample_Weight']
+            sw_diag.append((ticker, int(mask_pos.sum()), float(sw_vals.mean()),
+                           float(sw_vals.max()),
+                           float((sw_vals >= SAMPLE_WEIGHT_CAP).mean())))
+
+        valid_pre = mask_vr & idx_pre
+        if valid_pre.sum() > 0:
+            valid_chunks.append(df.loc[valid_pre, [c for c in ALL_COLS if c in df.columns]].copy())
+
+        del df
+        _release_memory()
+
+    stats_df = pd.concat(valid_chunks)
+    del valid_chunks
+    _release_memory()
+
+    stats = {col: {'med': float(stats_df[col].median()),
+                   'iqr': float(max(1e-6, stats_df[col].quantile(0.75) -
+                                           stats_df[col].quantile(0.25)))}
+             for col in ALL_COLS if col != 'Time_Pos' and col in stats_df.columns}
+    del stats_df
+    _release_memory()
+
+    print(f"\nValid_Row check -- 0s: {total_vr_0:,}  1s: {total_vr_1:,}")
+    print(f"Target check    -- 0s: {total_tgt_0:,}  1s: {total_tgt_1:,}")
+    overall_sr = total_valid_pos / max(1, total_vr_1)
+    print(f"   Overall spike rate on Valid_Row bars: {overall_sr:.1%}  "
+          f"(threshold: {SPIKE_THRESHOLD:.0%})")
+    print(f"   Date range: {date_min} -> {date_max}")
+    for ticker, n_valid, sr, n_val in per_ticker_diag:
+        print(f"   {ticker:<6}: valid_rows={n_valid:,}  spike_rate={sr:.1%}  val_rows={n_val:,}")
+
+    print(f"\nAsset Embedding Index:")
+    for t, idx in ASSET_INDEX.items():
+        print(f"   [{idx}] {t}")
+    print(f"   [{OTHER_IDX}] OTHER (out-of-training tickers)")
+
+    print(f"\nSample weight distribution (train positives only, cap={SAMPLE_WEIGHT_CAP}x):")
+    for ticker, n_pos, avg_w, max_w, pct_cap in sw_diag:
+        print(f"   {ticker:<6}: n_pos={n_pos:,}  avg_weight={avg_w:.2f}  "
+              f"max_weight={max_w:.2f}  pct_at_cap={pct_cap:.1%}")
+
+    return stats
+
+
+def _build_all_ticker_arrays(tickers, stats, market_df, cutoff,
+                              steps, balanced_tr, balanced_val, tmpdir):
+    """Load each ticker once, split train/val, save XA/XC as disk-backed memmap.
+    Peak memory: one ticker DF (~500MB) + tiny index arrays.
+    """
+    train_arrays = []
+    val_arrays = []
+
+    for ticker in tickers:
+        df = engineer_asset(ticker, market_df)
+        if df is None:
+            continue
+        df = df.loc[TRAIN_START_DATE:].copy()
+        apply_scaling(df, stats, inplace=True)
+
+        asset_id_val = np.int32(ASSET_INDEX.get(ticker, OTHER_IDX))
+
+        for split_name, start_dt, end_dt, balanced, arr_list in [
+            ('train', None, cutoff, balanced_tr, train_arrays),
+            ('val', cutoff, None, balanced_val, val_arrays),
+        ]:
+            mask = pd.Series(True, index=df.index)
+            if start_dt is not None:
+                mask &= df.index > start_dt
+            if end_dt is not None:
+                mask &= df.index <= end_dt
+            df_t = df[mask]
+
+            if len(df_t) < steps:
+                continue
+
+            XA = df_t[ASSET_COLS].values.astype('float32')
+            XC = df_t[CONTEXT_COLS].values.astype('float32')
+            Y  = df_t['Target'].values.astype('float32')
+            SW = df_t['Sample_Weight'].values.astype('float32') if 'Sample_Weight' in df_t.columns \
+                 else np.ones(len(df_t), dtype=np.float32)
+
+            vi = np.where(df_t['Valid_Row'].values)[0]
+            vi = vi[vi >= steps]
+            if len(vi) == 0:
+                del XA, XC, Y, SW
+                continue
+
+            xa_path = os.path.join(tmpdir, f'xa_{split_name}_{ticker}.npy')
+            xc_path = os.path.join(tmpdir, f'xc_{split_name}_{ticker}.npy')
+            np.save(xa_path, XA); del XA
+            np.save(xc_path, XC); del XC
+            XA_mm = np.load(xa_path, mmap_mode='r')
+            XC_mm = np.load(xc_path, mmap_mode='r')
+
+            if balanced:
+                i1 = vi[Y[vi] == 1]
+                i0 = vi[Y[vi] == 0]
+                if len(i1) == 0:
+                    idx = i0.copy()
+                else:
+                    n_pos = len(i1) * 3
+                    n_neg = n_pos * 3
+                    idx = np.concatenate([
+                        np.random.choice(i0, n_neg, replace=(len(i0) < n_neg)),
+                        np.random.choice(i1, n_pos, replace=True)
+                    ])
+            else:
+                idx = vi.copy()
+
+            arr_list.append((XA_mm, XC_mm, Y, SW, idx, asset_id_val))
+            spike_rate = float(Y[vi].mean())
+            print(f"   [{split_name}:{ticker}] valid_rows={len(vi)}  spike_rate={spike_rate:.1%}  "
+                  f"asset_id={asset_id_val}  "
+                  f"{'n_pos=' + str(int((Y[vi] == 1).sum())) if balanced else 'unbalanced'}")
+
+        del df
+        _release_memory()
+
+    return train_arrays, val_arrays
+
+
+def make_ds_from_arrays(ticker_arrays, steps, batch_size, augment=False, use_weights=True):
+    """Build tf.data.Dataset from pre-built ticker arrays (supports memmap)."""
+    if not ticker_arrays:
+        return None, 0
+
+    combined = np.array(
+        [(t, int(i)) for t, (_, _, _, _, idx, _) in enumerate(ticker_arrays) for i in idx],
+        dtype=np.int64)
+
+    n_features = len(ASSET_COLS)
+
+    def gen():
+        while True:
+            perm = np.random.permutation(len(combined))
+            for p in perm:
+                t_idx, i = combined[p]
+                XA, XC, Y, SW, _, asset_id_val = ticker_arrays[t_idx]
+                w = SW[i] if use_weights else np.float32(1.0)
+                xa_sample = np.array(XA[i - steps:i], dtype=np.float32)
+
+                if augment:
+                    scale = np.random.uniform(
+                        AUGMENT_SCALE[0], AUGMENT_SCALE[1],
+                        size=(1, n_features)).astype('float32')
+                    scale[0, BAR_IS_REAL_IDX] = 1.0
+                    xa_sample = xa_sample * scale
+
+                    bar_mask = (np.random.random(steps) > AUGMENT_BAR_MASK_RATE).astype('float32')
+                    xa_sample = xa_sample * bar_mask[:, np.newaxis]
+
+                yield (
+                    {'asset_in': xa_sample,
+                     'context_in': np.array(XC[i - 1], dtype=np.float32),
+                     'asset_id': np.array([asset_id_val], dtype=np.int32)},
+                    np.float32(Y[i]), w)
+
+    ds = (
+        tf.data.Dataset.from_generator(
+            gen,
+            output_signature=(
+                {'asset_in':   tf.TensorSpec((steps, len(ASSET_COLS)), tf.float32),
+                 'context_in': tf.TensorSpec((len(CONTEXT_COLS),),     tf.float32),
+                 'asset_id':   tf.TensorSpec((1,),                     tf.int32)},
+                tf.TensorSpec((), tf.float32),
+                tf.TensorSpec((), tf.float32)))
+        .repeat()
+        .batch(batch_size, drop_remainder=True)
+        .prefetch(tf.data.AUTOTUNE))
+    return ds, len(combined) // batch_size
+
+
+# ==============================================================================
 # EXECUTION
 # ==============================================================================
 
@@ -681,32 +903,8 @@ print(f"\nProceeding with data load and training/scoring...\n")
 market_df = build_market_context()
 
 
-def _load_all_teacher_data():
-    print("\nLoading all teacher data (unscaled)...")
-    stats_dfs = []
-    for ticker in STATS_POOL:
-        print(f"   Loading {ticker}...")
-        df_temp = engineer_asset(ticker, market_df)
-        if df_temp is not None:
-            print(f"      rows={len(df_temp)}  range: {df_temp.index.min()} to {df_temp.index.max()}")
-            df_temp = df_temp.loc[TRAIN_START_DATE:]
-            print(f"      after filter: rows={len(df_temp)}")
-            df_temp['Ticker'] = ticker
-            stats_dfs.append(df_temp)
-        _release_memory()
-
-    df_all = pd.concat(stats_dfs)
-    del stats_dfs
-    _release_memory()
-    df_all.sort_index(inplace=True)
-    _release_memory()
-    print(f"\nRaw data loaded: {len(df_all):,} rows, "
-          f"{df_all.index.min()} -> {df_all.index.max()}")
-    return df_all
-
-
 # ==============================================================================
-# WALKFORWARD FOLD LOOP — reload data fresh per fold to avoid memory bloat
+# WALKFORWARD FOLD LOOP — streaming per fold (T4-safe, memmap arrays)
 # ==============================================================================
 for fold_idx, fold_cfg in enumerate(FOLDS_TO_TRAIN):
     FOLD_EXP_ID = fold_cfg['exp_id']
@@ -748,165 +946,117 @@ for fold_idx, fold_cfg in enumerate(FOLDS_TO_TRAIN):
           f"{len(needs_scoring)} need scoring only: {remaining_seeds}")
 
     try:
-        # --- Load data fresh for this fold (avoids cross-fold memory bloat) ---
-        df_all_raw = _load_all_teacher_data()
-
-        # --- Compute scaling stats ---
-        print(f"\nCalculating Stats (cutoff={FOLD_CUTOFF})...")
-        stats_data_raw = df_all_raw[
-            df_all_raw['Ticker'].isin(TRAIN_TEACHERS) & (df_all_raw.index <= aware_cutoff)
-            & (df_all_raw['Valid_Row'] == 1)]
-        stats = {col: {'med': float(stats_data_raw[col].median()),
-                       'iqr': float(max(1e-6, stats_data_raw[col].quantile(0.75) -
-                                               stats_data_raw[col].quantile(0.25)))}
-                 for col in ALL_COLS if col != 'Time_Pos'}
+        # --- Compute stats by streaming (one ticker at a time, ~80MB peak) ---
+        stats = _compute_stats_streaming(market_df, aware_cutoff)
 
         blob = client.bucket(BUCKET_NAME).blob(
             f"{STATS_DIR}/scaling_stats_experiment_{FOLD_EXP_ID}.json")
         blob.upload_from_string(json.dumps(stats, indent=4), content_type='application/json')
         print(f"SAVED STATS TO: {STATS_DIR}/scaling_stats_experiment_{FOLD_EXP_ID}.json")
 
-        del stats_data_raw
-        _release_memory()
-
-        # --- Diagnostics (before scaling, using raw data) ---
-        _vr  = df_all_raw['Valid_Row']
-        _tgt = df_all_raw['Target']
-        print(f"\nValid_Row check -- 0s: {(_vr==0).sum():,}  1s: {(_vr==1).sum():,}")
-        print(f"Target check    -- 0s: {(_tgt==0).sum():,}  1s: {(_tgt==1).sum():,}")
-        print(f"   Overall spike rate on Valid_Row bars: {(_tgt[_vr==1]==1).mean():.1%}  "
-              f"(threshold: {SPIKE_THRESHOLD:.0%})")
-        print(f"   Date range: {df_all_raw.index.min()} -> {df_all_raw.index.max()}")
-        for t in TRAIN_TEACHERS:
-            mask_vr = (df_all_raw['Ticker'] == t) & (df_all_raw['Valid_Row'] == 1)
-            sr = df_all_raw.loc[mask_vr, 'Target'].mean()
-            n_val = (df_all_raw.loc[mask_vr].index > aware_cutoff).sum()
-            print(f"   {t:<6}: valid_rows={mask_vr.sum():,}  spike_rate={sr:.1%}  val_rows={n_val:,}")
-
-        print(f"\nAsset Embedding Index:")
-        for t, idx in ASSET_INDEX.items():
-            print(f"   [{idx}] {t}")
-        print(f"   [{OTHER_IDX}] OTHER (out-of-training tickers)")
-
-        print(f"\nSample weight distribution (train positives only, cap={SAMPLE_WEIGHT_CAP}x):")
-        for t in TRAIN_TEACHERS:
-            mask_pos = (df_all_raw['Ticker'] == t) & (df_all_raw['Valid_Row'] == 1) & \
-                       (df_all_raw['Target'] == 1) & (df_all_raw.index <= aware_cutoff)
-            if mask_pos.sum() > 0:
-                sw = df_all_raw.loc[mask_pos, 'Sample_Weight']
-                print(f"   {t:<6}: n_pos={mask_pos.sum():,}  avg_weight={sw.mean():.2f}  "
-                      f"max_weight={sw.max():.2f}  pct_at_cap={(sw >= SAMPLE_WEIGHT_CAP).mean():.1%}")
-        del _vr, _tgt
-
-        # --- Scale data for training ---
+        # ==================================================================
+        # PHASE 1: TRAINING — 15 seeds (streaming, memmap arrays)
+        # ==================================================================
         if needs_training:
-            print(f"\nScaling Data for fold {FOLD_EXP_ID} (augment=True during training)...")
-            df_scaled_all = apply_scaling(df_all_raw, stats, inplace=False)
+            tmpdir = tempfile.mkdtemp(prefix=f'exp200wf_{FOLD_EXP_ID}_')
+            print(f"\nBuilding train/val arrays (streaming, memmap → {tmpdir})...")
+            train_arrays, val_arrays = _build_all_ticker_arrays(
+                TRAIN_TEACHERS, stats, market_df, aware_cutoff,
+                steps=TIME_STEPS, balanced_tr=False, balanced_val=False,
+                tmpdir=tmpdir)
+
+            for seed in needs_training:
+                print(f"\n{'='*50}")
+                print(f"TRAINING SEED {seed} (Fold {FOLD_EXP_ID})")
+                print(f"{'='*50}")
+                tf.keras.backend.clear_session()
+                random.seed(seed); np.random.seed(seed); tf.random.set_seed(seed)
+
+                local_model_path = os.path.join(LOCAL_MODEL_DIR, f"UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5")
+                gcs_model_blob = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5"
+
+                print(f"   Building training dataset (augment=True, global_batch={GLOBAL_BATCH_SIZE})...")
+                ds_tr, st_tr = make_ds_from_arrays(
+                    train_arrays, TIME_STEPS, GLOBAL_BATCH_SIZE,
+                    augment=True, use_weights=True)
+                print(f"   Building validation dataset (post-cutoff, no augment)...")
+                ds_v, st_v = make_ds_from_arrays(
+                    val_arrays, TIME_STEPS, GLOBAL_BATCH_SIZE,
+                    augment=False, use_weights=False)
+
+                if ds_tr is None or st_tr == 0:
+                    print(f"   Seed {seed}: no valid training samples found. Skipping.")
+                    del ds_tr, ds_v; _release_memory()
+                    continue
+
+                print(f"   Steps/epoch: {st_tr}  Val steps: {st_v if st_v else 'N/A'}")
+
+                with strategy.scope():
+                    model = build_universal_model()
+
+                    if seed == needs_training[0] and fold_idx == 0:
+                        model.summary()
+
+                    try:
+                        optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4)
+                    except AttributeError:
+                        optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+
+                    model.compile(
+                        optimizer=optimizer,
+                        loss=asymmetric_loss(),
+                        metrics=[
+                            'accuracy',
+                            tf.keras.metrics.AUC(name='auc'),
+                            tf.keras.metrics.AUC(curve='PR', name='pr_auc'),
+                            PrecisionAtTopK(k=PREC_TOP_K, name='prec_top2pct'),
+                        ])
+
+                callbacks = [
+                    tf.keras.callbacks.ModelCheckpoint(
+                        local_model_path, monitor='val_loss', save_best_only=True, mode='min', verbose=1),
+                    tf.keras.callbacks.EarlyStopping(
+                        monitor='val_loss', patience=6, restore_best_weights=True, mode='min', verbose=1),
+                    tf.keras.callbacks.ReduceLROnPlateau(
+                        monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, mode='min', verbose=1),
+                ]
+
+                history = model.fit(
+                    ds_tr, validation_data=ds_v,
+                    epochs=50, steps_per_epoch=st_tr, validation_steps=st_v,
+                    callbacks=callbacks, verbose=1)
+
+                # --- Training summary ---
+                h = history.history
+                best_epoch = np.argmin(h['val_loss']) + 1
+                total_epochs = len(h['val_loss'])
+                print(f"\n   === SEED {seed} TRAINING SUMMARY ===")
+                print(f"   Best epoch: {best_epoch} / {total_epochs} trained")
+                print(f"   Best val_loss:     {h['val_loss'][best_epoch-1]:.4f}")
+                print(f"   Best val_auc:      {h.get('val_auc', [0])[best_epoch-1]:.4f}")
+                print(f"   Best val_prec@2%:  {h.get('val_prec_top2pct', [0])[best_epoch-1]:.4f}")
+                print(f"   Train loss @ best: {h['loss'][best_epoch-1]:.4f}")
+                print(f"   Train auc @ best:  {h.get('auc', [0])[best_epoch-1]:.4f}")
+                print(f"   Overfit gap (auc): {h.get('auc', [0])[best_epoch-1] - h.get('val_auc', [0])[best_epoch-1]:.4f}")
+                print(f"   ================================")
+
+                if os.path.exists(local_model_path):
+                    bucket.blob(gcs_model_blob).upload_from_filename(local_model_path)
+                    print(f"   UPLOADED MODEL TO: {gcs_model_blob}")
+                else:
+                    print("   Model file not found locally, upload skipped.")
+
+                del model, ds_tr, ds_v
+                tf.keras.backend.clear_session()
+                _release_memory()
+                print(f"   Seed {seed} training complete — memory released.")
+
+            # Cleanup memmap temp files
+            del train_arrays, val_arrays
             _release_memory()
-        else:
-            df_scaled_all = None
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
-        # Free raw data — no longer needed (stats computed, scaling done)
-        del df_all_raw
-        _release_memory()
-
-        # ==================================================================
-        # PHASE 1: TRAINING — 15 seeds
-        # ==================================================================
-        for seed in needs_training:
-            print(f"\n{'='*50}")
-            print(f"TRAINING SEED {seed} (Fold {FOLD_EXP_ID})")
-            print(f"{'='*50}")
-            tf.keras.backend.clear_session()
-            random.seed(seed); np.random.seed(seed); tf.random.set_seed(seed)
-
-            local_model_path = os.path.join(LOCAL_MODEL_DIR, f"UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5")
-            gcs_model_blob = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{FOLD_EXP_ID}.h5"
-
-            print(f"   Building training dataset (augment=True, global_batch={GLOBAL_BATCH_SIZE})...")
-            ds_tr, st_tr = make_per_ticker_ds(
-                df_scaled_all, TRAIN_TEACHERS,
-                start_dt=None, end_dt=aware_cutoff,
-                steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
-                balanced=False, use_weights=True, augment=True)
-            print(f"   Building validation dataset (post-cutoff, no augment)...")
-            ds_v, st_v = make_per_ticker_ds(
-                df_scaled_all, TRAIN_TEACHERS,
-                start_dt=aware_cutoff, end_dt=None,
-                steps=TIME_STEPS, batch_size=GLOBAL_BATCH_SIZE,
-                balanced=False, use_weights=False, augment=False)
-
-            if ds_tr is None or st_tr == 0:
-                print(f"   Seed {seed}: no valid training samples found. Skipping.")
-                del ds_tr, ds_v; _release_memory()
-                continue
-
-            print(f"   Steps/epoch: {st_tr}  Val steps: {st_v if st_v else 'N/A'}")
-
-            with strategy.scope():
-                model = build_universal_model()
-
-                if seed == needs_training[0] and fold_idx == 0:
-                    model.summary()
-
-                try:
-                    optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4)
-                except AttributeError:
-                    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
-
-                model.compile(
-                    optimizer=optimizer,
-                    loss=asymmetric_loss(),
-                    metrics=[
-                        'accuracy',
-                        tf.keras.metrics.AUC(name='auc'),
-                        tf.keras.metrics.AUC(curve='PR', name='pr_auc'),
-                        PrecisionAtTopK(k=PREC_TOP_K, name='prec_top2pct'),
-                    ])
-
-            callbacks = [
-                tf.keras.callbacks.ModelCheckpoint(
-                    local_model_path, monitor='val_loss', save_best_only=True, mode='min', verbose=1),
-                tf.keras.callbacks.EarlyStopping(
-                    monitor='val_loss', patience=6, restore_best_weights=True, mode='min', verbose=1),
-                tf.keras.callbacks.ReduceLROnPlateau(
-                    monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6, mode='min', verbose=1),
-            ]
-
-            history = model.fit(
-                ds_tr, validation_data=ds_v,
-                epochs=50, steps_per_epoch=st_tr, validation_steps=st_v,
-                callbacks=callbacks, verbose=1)
-
-            # --- Training summary ---
-            h = history.history
-            best_epoch = np.argmin(h['val_loss']) + 1
-            total_epochs = len(h['val_loss'])
-            print(f"\n   === SEED {seed} TRAINING SUMMARY ===")
-            print(f"   Best epoch: {best_epoch} / {total_epochs} trained")
-            print(f"   Best val_loss:     {h['val_loss'][best_epoch-1]:.4f}")
-            print(f"   Best val_auc:      {h.get('val_auc', [0])[best_epoch-1]:.4f}")
-            print(f"   Best val_prec@2%:  {h.get('val_prec_top2pct', [0])[best_epoch-1]:.4f}")
-            print(f"   Train loss @ best: {h['loss'][best_epoch-1]:.4f}")
-            print(f"   Train auc @ best:  {h.get('auc', [0])[best_epoch-1]:.4f}")
-            print(f"   Overfit gap (auc): {h.get('auc', [0])[best_epoch-1] - h.get('val_auc', [0])[best_epoch-1]:.4f}")
-            print(f"   ================================")
-
-            if os.path.exists(local_model_path):
-                bucket.blob(gcs_model_blob).upload_from_filename(local_model_path)
-                print(f"   UPLOADED MODEL TO: {gcs_model_blob}")
-            else:
-                print("   Model file not found locally, upload skipped.")
-
-            del model, ds_tr, ds_v
-            tf.keras.backend.clear_session()
-            _release_memory()
-            print(f"   Seed {seed} training complete — memory released.")
-
-        # Free the scaled training data before scoring phase
-        del df_scaled_all
-        _release_memory()
-        print(f"\n   Training phase done. Freed df_scaled_all for scoring phase.")
+        print(f"\n   Training phase done.")
 
         # ==================================================================
         # PHASE 2: SCORING — load each ticker ONCE, score all seeds
