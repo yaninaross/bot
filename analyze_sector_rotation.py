@@ -65,7 +65,7 @@ POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
 CACHE_FILE = '/tmp/sector_etf_daily.pkl'
 
 DATA_START = '2024-07-01'
-DATA_END   = '2026-07-05'
+DATA_END   = '2026-07-17'
 
 SECTOR_ETFS = {
     'WGMI': 'Crypto Mining',
@@ -95,12 +95,14 @@ QUARTERS = [
     ('Q4-25', '2025-10-01', '2025-12-31'),
     ('Q1-26', '2026-01-01', '2026-03-31'),
     ('Q2-26', '2026-04-01', '2026-06-30'),
+    ('Jul26', '2026-07-01', '2026-07-16'),
 ]
 
 MONTHS_ZOOM = [
     ('Apr', '2026-04-01', '2026-04-30'),
     ('May', '2026-05-01', '2026-05-31'),
     ('Jun', '2026-06-01', '2026-06-30'),
+    ('Jul', '2026-07-01', '2026-07-16'),
 ]
 
 W = 100
@@ -370,36 +372,46 @@ print(f"{'═' * W}")
 if 'WGMI' in daily_rets.columns:
     apr_may_rets = daily_rets[(daily_rets.index >= '2026-04-01') & (daily_rets.index <= '2026-05-31')]
     jun_rets = daily_rets[(daily_rets.index >= '2026-06-01') & (daily_rets.index <= '2026-06-30')]
+    jul_rets = daily_rets[(daily_rets.index >= '2026-07-01') & (daily_rets.index <= '2026-07-16')]
     h2_24_rets = daily_rets[(daily_rets.index >= '2024-07-01') & (daily_rets.index <= '2024-12-31')]
 
-    print(f"\n  {'ETF':<6} {'Sector':<16}  {'H2-24':>6}  {'AprMay26':>8}  {'Jun26':>6}  {'Δ Jun-AM':>8}  {'Interpretation':>16}")
-    print(f"  {'─'*6} {'─'*16}  {'─'*6}  {'─'*8}  {'─'*6}  {'─'*8}  {'─'*16}")
+    print(f"\n  {'ETF':<6} {'Sector':<16}  {'AprMay':>6}  {'Jun26':>6}  {'Jul26':>6}  {'Δ Jul-Jun':>9}  {'Δ Jul-AM':>8}  {'Trend':>16}")
+    print(f"  {'─'*6} {'─'*16}  {'─'*6}  {'─'*6}  {'─'*6}  {'─'*9}  {'─'*8}  {'─'*16}")
 
     for etf in available_etfs:
         if etf == 'WGMI':
             continue
         label = SECTOR_ETFS[etf][:16]
-        c_h2 = h2_24_rets[etf].corr(h2_24_rets['WGMI']) if etf in h2_24_rets.columns else np.nan
         c_am = apr_may_rets[etf].corr(apr_may_rets['WGMI']) if etf in apr_may_rets.columns else np.nan
         c_jun = jun_rets[etf].corr(jun_rets['WGMI']) if etf in jun_rets.columns else np.nan
-        delta = c_jun - c_am if not (np.isnan(c_am) or np.isnan(c_jun)) else np.nan
+        c_jul = jul_rets[etf].corr(jul_rets['WGMI']) if etf in jul_rets.columns and len(jul_rets) > 2 else np.nan
+        d_jul_jun = c_jul - c_jun if not (np.isnan(c_jul) or np.isnan(c_jun)) else np.nan
+        d_jul_am = c_jul - c_am if not (np.isnan(c_jul) or np.isnan(c_am)) else np.nan
 
-        if not np.isnan(delta):
-            interp = "Converging" if delta > 0.15 else "Diverging" if delta < -0.15 else "Stable"
+        if not np.isnan(d_jul_jun):
+            if d_jul_jun > 0.15: trend = "Re-coupling"
+            elif d_jul_jun < -0.15: trend = "De-coupling"
+            else: trend = "Stable"
         else:
-            interp = "—"
+            trend = "—"
 
-        c_h2_s = f"{c_h2:>+5.2f}" if not np.isnan(c_h2) else f"{'—':>6}"
-        c_am_s = f"{c_am:>+5.2f}" if not np.isnan(c_am) else f"{'—':>8}"
+        c_am_s = f"{c_am:>+5.2f}" if not np.isnan(c_am) else f"{'—':>6}"
         c_jun_s = f"{c_jun:>+5.2f}" if not np.isnan(c_jun) else f"{'—':>6}"
-        delta_s = f"{delta:>+7.2f}" if not np.isnan(delta) else f"{'—':>8}"
-        print(f"  {etf:<6} {label:<16}  {c_h2_s}  {c_am_s:>8}  {c_jun_s}  {delta_s}  {interp:>16}")
+        c_jul_s = f"{c_jul:>+5.2f}" if not np.isnan(c_jul) else f"{'—':>6}"
+        d_jj_s = f"{d_jul_jun:>+8.2f}" if not np.isnan(d_jul_jun) else f"{'—':>9}"
+        d_ja_s = f"{d_jul_am:>+7.2f}" if not np.isnan(d_jul_am) else f"{'—':>8}"
+        print(f"  {etf:<6} {label:<16}  {c_am_s}  {c_jun_s}  {c_jul_s}  {d_jj_s}  {d_ja_s}  {trend:>16}")
 
     spy_am = apr_may_rets[BENCHMARK].corr(apr_may_rets['WGMI'])
     spy_jun = jun_rets[BENCHMARK].corr(jun_rets['WGMI'])
-    spy_d = spy_jun - spy_am
-    interp = "Converging" if spy_d > 0.15 else "Diverging" if spy_d < -0.15 else "Stable"
-    print(f"  {'SPY':<6} {'Benchmark':<16}  {'':>6}  {spy_am:>+8.2f}  {spy_jun:>+5.2f}  {spy_d:>+7.2f}  {interp:>16}")
+    spy_jul = jul_rets[BENCHMARK].corr(jul_rets['WGMI']) if len(jul_rets) > 2 else np.nan
+    d_jj = spy_jul - spy_jun if not np.isnan(spy_jul) else np.nan
+    d_ja = spy_jul - spy_am if not np.isnan(spy_jul) else np.nan
+    trend = "Re-coupling" if (not np.isnan(d_jj) and d_jj > 0.15) else "De-coupling" if (not np.isnan(d_jj) and d_jj < -0.15) else "Stable" if not np.isnan(d_jj) else "—"
+    spy_jul_s = f"{spy_jul:>+5.2f}" if not np.isnan(spy_jul) else f"{'—':>6}"
+    d_jj_s = f"{d_jj:>+8.2f}" if not np.isnan(d_jj) else f"{'—':>9}"
+    d_ja_s = f"{d_ja:>+7.2f}" if not np.isnan(d_ja) else f"{'—':>8}"
+    print(f"  {'SPY':<6} {'Benchmark':<16}  {spy_am:>+5.2f}  {spy_jun:>+5.2f}  {spy_jul_s}  {d_jj_s}  {d_ja_s}  {trend:>16}")
 else:
     print("  WGMI not available — skipping correlation table")
 
@@ -411,44 +423,50 @@ print(f"\n{'═' * W}")
 print(f"  TABLE F: ROTATION SCORECARD — Ranked by June RS shift")
 print(f"{'═' * W}")
 
+print(f"  TABLE F: ROTATION SCORECARD — June vs July RS comparison (ranked by July)")
+
 scored = []
 for etf in available_etfs:
     jun_rs = period_return(rs_ratios[etf], '2026-06-01', '2026-06-30')
+    jul_rs = period_return(rs_ratios[etf], '2026-07-01', '2026-07-16')
     h1_26_rs = period_return(rs_ratios[etf], '2026-01-01', '2026-05-31')
-    full_2yr_rs = period_return(rs_ratios[etf], DATA_START, '2026-05-31')
     jun_abs = period_return(closes[etf], '2026-06-01', '2026-06-30')
+    jul_abs = period_return(closes[etf], '2026-07-01', '2026-07-16')
 
-    r10 = rs_10d[etf][(rs_10d[etf].index >= '2026-06-01') & (rs_10d[etf].index <= '2026-06-30')]
+    r10 = rs_10d[etf][(rs_10d[etf].index >= '2026-07-01') & (rs_10d[etf].index <= '2026-07-16')]
     avg_rs10 = r10.mean() if len(r10) > 0 else 0
 
     scored.append({
         'etf': etf, 'sector': SECTOR_ETFS[etf],
         'jun_rs': jun_rs if not np.isnan(jun_rs) else 0,
+        'jul_rs': jul_rs if not np.isnan(jul_rs) else 0,
         'h1_26_rs': h1_26_rs if not np.isnan(h1_26_rs) else 0,
-        'full_2yr_rs': full_2yr_rs if not np.isnan(full_2yr_rs) else 0,
         'jun_abs': jun_abs if not np.isnan(jun_abs) else 0,
+        'jul_abs': jul_abs if not np.isnan(jul_abs) else 0,
         'rs_momentum': avg_rs10,
     })
 
-scored.sort(key=lambda x: x['jun_rs'], reverse=True)
+scored.sort(key=lambda x: x['jul_rs'], reverse=True)
 
-print(f"\n  {'Rank':>4}  {'ETF':<6} {'Sector':<16}  {'Jun RS':>7}  {'H1-26 RS':>8}  "
-      f"{'2yr RS':>7}  {'Jun Abs':>7}  {'Verdict':>18}")
-print(f"  {'─'*4}  {'─'*6} {'─'*16}  {'─'*7}  {'─'*8}  {'─'*7}  {'─'*7}  {'─'*18}")
+print(f"\n  {'Rank':>4}  {'ETF':<6} {'Sector':<16}  {'Jun RS':>7}  {'Jul RS':>7}  {'Δ':>6}  "
+      f"{'Jun Abs':>7}  {'Jul Abs':>7}  {'Jul Verdict':>18}")
+print(f"  {'─'*4}  {'─'*6} {'─'*16}  {'─'*7}  {'─'*7}  {'─'*6}  "
+      f"{'─'*7}  {'─'*7}  {'─'*18}")
 
 for i, s in enumerate(scored):
-    if s['jun_rs'] > 0.02:
+    delta_rs = s['jul_rs'] - s['jun_rs']
+    if s['jul_rs'] > 0.02:
         verdict = "ROTATION INTO"
-    elif s['jun_rs'] > 0:
+    elif s['jul_rs'] > 0:
         verdict = "~ mild inflow"
-    elif s['jun_rs'] > -0.02:
+    elif s['jul_rs'] > -0.02:
         verdict = "~ mild outflow"
     else:
         verdict = "ROTATION OUT"
 
     print(f"  {i+1:>4}  {s['etf']:<6} {s['sector']:<16}  {s['jun_rs']:>+6.1%}  "
-          f"{s['h1_26_rs']:>+7.1%}  {s['full_2yr_rs']:>+6.1%}  "
-          f"{s['jun_abs']:>+6.1%}  {verdict:>18}")
+          f"{s['jul_rs']:>+6.1%}  {delta_rs:>+5.1%}  "
+          f"{s['jun_abs']:>+6.1%}  {s['jul_abs']:>+6.1%}  {verdict:>18}")
 
 
 # ==============================================================================
@@ -467,7 +485,7 @@ print(f"      (When did crypto RS momentum turn negative?)\n")
 
 wgmi_rs10 = rs_10d.get('WGMI')
 if wgmi_rs10 is not None:
-    snapshot_range = wgmi_rs10[(wgmi_rs10.index >= '2026-05-01') & (wgmi_rs10.index <= '2026-06-30')]
+    snapshot_range = wgmi_rs10[(wgmi_rs10.index >= '2026-05-01') & (wgmi_rs10.index <= '2026-07-16')]
     fridays = snapshot_range[snapshot_range.index.dayofweek == 4]
     if len(fridays) == 0:
         fridays = snapshot_range.iloc[::5]
@@ -519,7 +537,7 @@ jun_1 = pd.Timestamp('2026-06-01')
 for etf in DETECT_ETFS:
     label = SECTOR_ETFS[etf][:16]
     r10 = rs_10d[etf]
-    may_jun = r10[(r10.index >= '2026-05-01') & (r10.index <= '2026-06-30')].dropna()
+    may_jun = r10[(r10.index >= '2026-05-01') & (r10.index <= '2026-07-16')].dropna()
 
     if etf == 'WGMI':
         # For WGMI: when did RS go negative (outflow starts)
@@ -562,8 +580,8 @@ for etf in DETECT_ETFS:
 print(f"\n  G3: SNAPSHOT — What was visible on key dates?")
 print(f"      (Could you have acted on June 1? June 5? June 10?)\n")
 
-snapshot_dates = ['2026-05-30', '2026-06-02', '2026-06-05', '2026-06-10',
-                  '2026-06-15', '2026-06-20', '2026-06-25']
+snapshot_dates = ['2026-05-30', '2026-06-02', '2026-06-10', '2026-06-20',
+                  '2026-06-30', '2026-07-07', '2026-07-14', '2026-07-16']
 
 print(f"      {'Date':<12}", end="")
 for etf in DETECT_ETFS:
@@ -603,105 +621,104 @@ print(f"  DIAGNOSIS")
 print(f"{'═' * W}")
 
 wgmi = next((s for s in scored if s['etf'] == 'WGMI'), None)
-gainers = [s for s in scored if s['jun_rs'] > 0.02]
-losers = [s for s in scored if s['jun_rs'] < -0.02]
+jul_gainers = [s for s in scored if s['jul_rs'] > 0.02]
+jul_losers = [s for s in scored if s['jul_rs'] < -0.02]
+jun_gainers = [s for s in scored if s['jun_rs'] > 0.02]
+jun_losers = [s for s in scored if s['jun_rs'] < -0.02]
 
-print(f"\n  1. CRYPTO MINING (WGMI):")
+print(f"\n  1. CRYPTO MINING (WGMI) — JUNE vs JULY:")
 if wgmi:
+    delta_rs = wgmi['jul_rs'] - wgmi['jun_rs']
     print(f"     June RS vs SPY:     {wgmi['jun_rs']:>+.1%}")
-    print(f"     H1-2026 RS vs SPY:  {wgmi['h1_26_rs']:>+.1%}")
-    print(f"     2-year RS vs SPY:   {wgmi['full_2yr_rs']:>+.1%}")
+    print(f"     July RS vs SPY:     {wgmi['jul_rs']:>+.1%}  (Δ {delta_rs:>+.1%})")
     print(f"     June absolute:      {wgmi['jun_abs']:>+.1%}")
+    print(f"     July absolute:      {wgmi['jul_abs']:>+.1%}")
     print(f"     RS momentum (10d):  {wgmi['rs_momentum']:>+.2%}")
 
-    if wgmi['jun_rs'] < -0.05:
-        print(f"     → STRONG UNDERPERFORMANCE: Crypto mining significantly lagged SPY in June")
-    elif wgmi['jun_rs'] < -0.02:
-        print(f"     → UNDERPERFORMANCE: Crypto mining lagged SPY in June")
-    elif wgmi['jun_rs'] < 0:
-        print(f"     → MILD: Slight underperformance, not dramatic")
+    if wgmi['jul_rs'] < -0.05:
+        print(f"     → STRONG UNDERPERFORMANCE in July")
+    elif wgmi['jul_rs'] < -0.02:
+        print(f"     → UNDERPERFORMANCE continues in July")
+    elif wgmi['jul_rs'] < 0:
+        print(f"     → MILD weakness in July")
     else:
-        print(f"     → NO CRYPTO WEAKNESS: WGMI kept pace with or beat SPY")
+        print(f"     → RECOVERY: WGMI kept pace with or beat SPY in July")
 
-    if wgmi['full_2yr_rs'] < -0.10:
-        print(f"     → STRUCTURAL DECLINE: 2-year RS trend is negative — June is a continuation")
-    elif wgmi['h1_26_rs'] < -0.05 and wgmi['full_2yr_rs'] > -0.05:
-        print(f"     → RECENT SHIFT: H1-2026 weakness is new vs the longer trend")
+    if delta_rs > 0.03:
+        print(f"     → IMPROVING: July RS is better than June by {delta_rs:+.1%}")
+    elif delta_rs < -0.03:
+        print(f"     → WORSENING: July RS is worse than June by {delta_rs:+.1%}")
+    else:
+        print(f"     → SAME REGIME: July RS similar to June")
 else:
     print(f"     WGMI data not available")
 
-print(f"\n  2. SECTORS GAINING IN JUNE (RS > +2%):")
-if gainers:
-    for g in gainers:
-        ctx = ""
-        if g['h1_26_rs'] > 0.02:
-            ctx = " (sustained H1 trend)"
-        elif g['h1_26_rs'] < -0.02:
-            ctx = " (reversal from H1 weakness)"
-        print(f"     {g['etf']:<6} {g['sector']:<16} Jun RS: {g['jun_rs']:>+.1%}{ctx}")
+print(f"\n  2. SECTORS GAINING IN JULY (RS > +2%):")
+if jul_gainers:
+    for g in jul_gainers:
+        jun_ctx = f" (Jun: {g['jun_rs']:+.1%})"
+        print(f"     {g['etf']:<6} {g['sector']:<16} Jul RS: {g['jul_rs']:>+.1%}{jun_ctx}")
 else:
-    print(f"     None — no sector significantly outperformed SPY in June")
+    print(f"     None — no sector significantly outperformed SPY in July")
 
-print(f"\n  3. SECTORS LOSING IN JUNE (RS < -2%):")
-if losers:
-    for l in losers:
-        print(f"     {l['etf']:<6} {l['sector']:<16} Jun RS: {l['jun_rs']:>+.1%}")
+print(f"\n  3. SECTORS LOSING IN JULY (RS < -2%):")
+if jul_losers:
+    for l in jul_losers:
+        jun_ctx = f" (Jun: {l['jun_rs']:+.1%})"
+        print(f"     {l['etf']:<6} {l['sector']:<16} Jul RS: {l['jul_rs']:>+.1%}{jun_ctx}")
 else:
-    print(f"     None — no sector significantly underperformed SPY in June")
+    print(f"     None — no sector significantly underperformed SPY in July")
 
-print(f"\n  4. ROTATION VERDICT:")
-crypto_out = wgmi is not None and wgmi['jun_rs'] < -0.02
-xlv_in = any(s['etf'] == 'XLV' and s['jun_rs'] > 0.02 for s in scored)
-xlf_in = any(s['etf'] == 'XLF' and s['jun_rs'] > 0.02 for s in scored)
-health_fin_in = xlv_in or xlf_in
+print(f"\n  4. ROTATION VERDICT — JULY vs JUNE:")
+crypto_out_jul = wgmi is not None and wgmi['jul_rs'] < -0.02
+crypto_out_jun = wgmi is not None and wgmi['jun_rs'] < -0.02
 
-if crypto_out and health_fin_in:
-    targets = []
-    if xlv_in: targets.append("Healthcare (XLV)")
-    if xlf_in: targets.append("Financials (XLF)")
-    print(f"     CLASSIC ROTATION: Capital moved FROM crypto mining INTO {', '.join(targets)}")
-    print(f"     → Your 7/9 crypto-miner portfolio caught the worst of this shift")
-    print(f"     → June degradation is partly sector-specific, not just model decay")
-elif crypto_out and gainers:
-    target_names = [f"{g['sector']} ({g['etf']})" for g in gainers[:3]]
-    print(f"     ROTATION CONFIRMED: Crypto mining outflow, inflow into {', '.join(target_names)}")
-    print(f"     → Not the health/finance rotation you hypothesized, but rotation nonetheless")
-elif crypto_out and not gainers:
-    print(f"     RISK-OFF: Crypto mining lost relative strength but no sector gained")
-    print(f"     → Likely broad de-risking or flight to cash/bonds, not sector rotation")
-elif not crypto_out and gainers:
-    target_names = [f"{g['etf']}" for g in gainers[:3]]
-    print(f"     SELECTIVE RALLY: {', '.join(target_names)} outperformed, but crypto held up")
-    print(f"     → Your portfolio isn't being hurt by rotation — look elsewhere for June losses")
+if crypto_out_jul and crypto_out_jun:
+    print(f"     CONTINUED ROTATION: Crypto mining underperformed in BOTH June and July")
+    print(f"     → This is NOT a one-month blip — it's a sustained sector headwind")
+elif crypto_out_jul and not crypto_out_jun:
+    print(f"     NEW ROTATION: Crypto mining was ok in June but weakened in July")
+    print(f"     → Fresh sector headwind — may need to reassess sector exposure")
+elif not crypto_out_jul and crypto_out_jun:
+    print(f"     RECOVERY: Crypto mining underperformed June but recovering in July")
+    print(f"     → If model losses continue despite sector recovery, model decay is more likely")
 else:
-    print(f"     NO CLEAR ROTATION: No sector significantly over/under-performed SPY in June")
-    print(f"     → June degradation is likely universal (vol regime, macro), not sector-specific")
-    print(f"     → Concentration in crypto miners is NOT the primary driver")
+    print(f"     NO ROTATION: Crypto mining held up in both months")
+    print(f"     → Losses are NOT sector-driven — look at model/vol calibration")
 
 spy_jun = period_return(spy, '2026-06-01', '2026-06-30')
+spy_jul = period_return(spy, '2026-07-01', '2026-07-16')
+print(f"\n  5. MARKET CONTEXT:")
 if not np.isnan(spy_jun):
-    print(f"\n  5. MARKET CONTEXT:")
-    print(f"     SPY June return: {spy_jun:+.1%}")
-    if spy_jun < -0.03:
-        print(f"     → Broad market selloff — portfolio beta exposure matters more than alpha")
-    elif spy_jun > 0.03:
-        print(f"     → Market rally but your portfolio lagging = alpha/rotation problem")
+    print(f"     SPY June return:  {spy_jun:+.1%}")
+if not np.isnan(spy_jul):
+    print(f"     SPY July return:  {spy_jul:+.1%}")
+    if spy_jul > 0.03 and wgmi and wgmi['jul_abs'] < 0:
+        print(f"     → Market rallying but crypto lagging = alpha/rotation problem")
+    elif spy_jul > 0.03 and wgmi and wgmi['jul_abs'] > 0:
+        print(f"     → Both market and crypto up — losses are model-specific")
+    elif spy_jul < -0.03:
+        print(f"     → Broad market selloff — beta exposure explains losses")
     else:
-        print(f"     → Market roughly flat — your June losses are sector/model-specific")
+        print(f"     → Market roughly flat — losses are sector/model-specific")
 
-n_losers = len(losers)
-n_gainers = len(gainers)
-n_neutral = len(available_etfs) - n_losers - n_gainers
-print(f"\n  6. BREADTH:")
-print(f"     Sectors gaining (RS > +2%):  {n_gainers}/{len(available_etfs)}")
+n_jul_losers = len(jul_losers)
+n_jul_gainers = len(jul_gainers)
+n_neutral = len(available_etfs) - n_jul_losers - n_jul_gainers
+print(f"\n  6. BREADTH (JULY):")
+print(f"     Sectors gaining (RS > +2%):  {n_jul_gainers}/{len(available_etfs)}")
 print(f"     Sectors neutral:             {n_neutral}/{len(available_etfs)}")
-print(f"     Sectors losing  (RS < -2%):  {n_losers}/{len(available_etfs)}")
-if n_losers > len(available_etfs) * 0.5:
-    print(f"     → Majority of sectors underperforming = macro risk-off, not rotation")
-elif n_gainers > 0 and n_losers > 0:
-    print(f"     → Mixed: some sectors gaining, some losing = active rotation")
-else:
-    print(f"     → Narrow dispersion — no clear rotation signal")
+print(f"     Sectors losing  (RS < -2%):  {n_jul_losers}/{len(available_etfs)}")
+
+print(f"\n  7. JUNE → JULY CHANGE SUMMARY:")
+print(f"     {'Sector':<20} {'Jun RS':>7} → {'Jul RS':>7}  {'Direction':>12}")
+print(f"     {'─'*20} {'─'*7}   {'─'*7}  {'─'*12}")
+for s in scored:
+    delta = s['jul_rs'] - s['jun_rs']
+    if delta > 0.02: direction = "Improving ↑"
+    elif delta < -0.02: direction = "Worsening ↓"
+    else: direction = "Stable →"
+    print(f"     {s['sector']:<20} {s['jun_rs']:>+6.1%} → {s['jul_rs']:>+6.1%}  {direction:>12}")
 
 
 # ==============================================================================
@@ -727,7 +744,8 @@ if HAS_MPL:
         spy_rb = spy_rb / spy_rb.iloc[0] * 100
         ax.plot(spy_rb.index, spy_rb.values, label='SPY', color='black',
                 linewidth=2, linestyle='--', alpha=0.8)
-    ax.axvline(x=pd.Timestamp('2026-06-01'), color='red', linestyle=':', alpha=0.5)
+    ax.axvline(x=pd.Timestamp('2026-06-01'), color='red', linestyle=':', alpha=0.5, label='Jun 1')
+    ax.axvline(x=pd.Timestamp('2026-07-01'), color='blue', linestyle=':', alpha=0.5, label='Jul 1')
     ax.set_title('Sector ETFs — 2-Year Normalized Price (base=100)', fontweight='bold')
     ax.legend(fontsize=6, ncol=3, loc='upper left')
     ax.grid(True, alpha=0.3)
@@ -744,6 +762,7 @@ if HAS_MPL:
                 alpha=1.0 if etf == 'WGMI' else 0.6)
     ax.axhline(y=100, color='gray', linestyle='--', alpha=0.4)
     ax.axvline(x=pd.Timestamp('2026-06-01'), color='red', linestyle=':', alpha=0.5)
+    ax.axvline(x=pd.Timestamp('2026-07-01'), color='blue', linestyle=':', alpha=0.5)
     ax.set_title('Relative Strength vs SPY — 2-Year (base=100)', fontweight='bold')
     ax.legend(fontsize=6, ncol=3, loc='upper left')
     ax.grid(True, alpha=0.3)
@@ -780,6 +799,7 @@ if HAS_MPL:
                         where=wgmi_rs.values > 0, color='#27ae60', alpha=0.15)
     ax.axhline(y=0, color='black', linewidth=0.5)
     ax.axvline(x=pd.Timestamp('2026-06-01'), color='red', linestyle=':', alpha=0.5)
+    ax.axvline(x=pd.Timestamp('2026-07-01'), color='blue', linestyle=':', alpha=0.5)
     ax.set_title('WGMI/SPY — 20-day RS Rate of Change (%)', fontweight='bold')
     ax.set_ylabel('RS RoC (%)')
     ax.legend(fontsize=9)

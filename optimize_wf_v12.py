@@ -304,6 +304,19 @@ EXP_FAMILIES = {
         'stitch': True,
         'fallback_tickers': _FULL_TICKERS,
     },
+    'walkforward_220': {
+        'label': 'Walk-Forward 220 v12 (6 folds, 47 teachers + augmentation, cutoffs Aug25-Jan26)',
+        'experiments': {'220_XSECTOR', '221_XSECTOR', '222_XSECTOR',
+                        '223_XSECTOR', '224_XSECTOR', '225_XSECTOR'},
+        'wf_rounds': [
+            {'name': 'R1', 'opt': ('2025-08-01', '2026-01-31'),
+                           'val': ('2026-02-01', '2026-03-31'), 'min_trades': 5},
+        ],
+        'test_start': '2026-04-01',
+        'test_end':   '2026-07-07',
+        'stitch': True,
+        'fallback_tickers': _FULL_TICKERS,
+    },
     'v12_160_152': {
         'label': 'v12 — 160 + 152 combined',
         'experiments': {'160_XSECTOR', '152_XSECTOR'},
@@ -317,7 +330,7 @@ EXP_FAMILIES = {
     },
 }
 
-ACTIVE_FAMILY = 'walkforward_200'  # change per run: 'late_cutoff', 'early_cutoff', 'walkforward', 'single_175', 'single_185', 'v12_160_152', 'single_200', 'walkforward_200'
+ACTIVE_FAMILY = 'walkforward_220'  # change per run: 'late_cutoff', 'early_cutoff', 'walkforward', 'single_175', 'single_185', 'v12_160_152', 'single_200', 'walkforward_200', 'walkforward_220'
 
 _family = EXP_FAMILIES[ACTIVE_FAMILY]
 CLEAN_EXPERIMENTS = _family['experiments']

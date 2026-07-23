@@ -92,8 +92,7 @@ for _t in CONTEXT_ASSETS:
 CONTEXT_COLS += ['Time_Pos']
 ALL_FEATURE_COLS = ASSET_COLS + CONTEXT_COLS
 
-ALL_TICKERS = ['AMD', 'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'KEEL',
-               'PLUG', 'RCAT', 'RIOT', 'WULF']
+ALL_TICKERS = []  # populated dynamically from BQ after sa_limit is built
 
 MIN_SEEDS = 3
 MIN_TRADES_BQ = 3
@@ -326,7 +325,7 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
        val_b_avg_pnl, opt_avg_pnl, is_ensemble
 FROM `ys-time-series.scoring_logs.wf_optimization_results`
-WHERE model_version = 'robust_wf_v12'
+WHERE model_version IN ('robust_wf_v12', 'robust_wf_v12_stitched')
   AND survived_a = TRUE
   AND val_a_count >= 3
   AND val_a_avg_pnl > 0
@@ -389,6 +388,11 @@ for tk in best_per_fam['ticker'].unique():
 s3_tickers = sorted([tk for tk, ag in agreement.items() if ag['majority_pos']])
 print(f"    Family agreement: {len(s3_tickers)} tickers pass S3 gate")
 print(f"    S3 tickers: {', '.join(s3_tickers)}")
+
+# Derive ALL_TICKERS dynamically: any ticker with a qualifying limit_entry config
+_qualifying = sa_limit[sa_limit['mean_va_pnl'] >= DEPLOY_THRESHOLD]['ticker'].unique()
+ALL_TICKERS = sorted(set(_qualifying) | set(s3_tickers))
+print(f"    Dynamic ALL_TICKERS: {len(ALL_TICKERS)} tickers")
 
 # Best config per ticker (from S3-passing tickers) — for S3 experiment selection + trade sim
 sa_s3 = sa_limit[sa_limit['ticker'].isin(s3_tickers)].copy()

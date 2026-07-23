@@ -44,8 +44,8 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # S3 deploy tickers (10)
-    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'PL', 'RCAT', 'RIOT',
+    # S3 deploy tickers (11)
+    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'MARA', 'PL', 'RCAT', 'RIOT',
     # Train teachers needed for model inference (not already above)
     'ASTS', 'BBAI', 'LUNR', 'MVIS', 'WULF',
     # Additional tickers for broader WF coverage

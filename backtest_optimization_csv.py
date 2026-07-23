@@ -14,8 +14,8 @@ Composite methods (3):
   Adapt Wt>50%:    Same as weighted but with adaptive prob_thresh
 
 Output:
-  Tables A-D: Strategy × Composite matrix, June, per-ticker, monthly
-  Charts: Cumulative total PnL and rolling avg PnL over time
+  Tables A-D: Strategy × Composite matrix, June+July, per-ticker, monthly
+  Charts: Cumulative PnL (top 5) and monthly avg PnL bar chart
 
 CSV scores from GCS. Limit_entry trade sim. Grid search for DECAY/HYBRID.
 Colab-ready (no if __name__).
@@ -61,7 +61,7 @@ INFERENCE_DIR = "Data/Inference_v2"
 
 DATA_START = '2025-12-01'
 TEST_START = '2026-04-01'
-TEST_END   = '2026-07-03'
+TEST_END   = '2026-07-19'
 ENTRY_TIME = '06:15'
 ENTRY_MIN  = 375
 EXIT_TIME_MIN = 780
@@ -79,8 +79,7 @@ PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 LN2 = math.log(2)
 
-ALL_TICKERS = ['AMD', 'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'KEEL',
-               'PLUG', 'RCAT', 'RIOT', 'WULF']
+ALL_TICKERS = []  # populated dynamically from BQ after sa_limit is built
 
 MIN_SEEDS = 3
 MAX_VA_OPT_RATIO = 3.0
@@ -252,7 +251,7 @@ def assign_family(exp):
     if num == 160: return '160'
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
-    if num == 200: return '200'
+    if 200 <= num <= 205: return '200'
     return 'other'
 
 
@@ -378,13 +377,16 @@ def optimize_configs(opt_dates, ticker, config_list,
 def summarize(trades_list, label):
     if not trades_list:
         return {'label': label, 'n': 0, 'total': 0, 'avg': 0, 'wr': 0,
-                'dd': 0, 'j_n': 0, 'j_total': 0, 'j_avg': 0, 'j_wr': 0,
+                'dd': 0,
+                'j_n': 0, 'j_total': 0, 'j_avg': 0, 'j_wr': 0,
+                'jul_n': 0, 'jul_total': 0, 'jul_avg': 0, 'jul_wr': 0,
                 'monthly': {}, 'trades_df': pd.DataFrame()}
     df = pd.DataFrame(trades_list)
     df['month'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m')
     cum = df.sort_values('date')['pnl'].cumsum()
     max_dd = (cum - cum.cummax()).min()
     june = df[df['month'] == '2026-06']
+    july = df[df['month'] == '2026-07']
     return {
         'label': label,
         'n': len(df), 'total': df['pnl'].sum(), 'avg': df['pnl'].mean(),
@@ -392,6 +394,9 @@ def summarize(trades_list, label):
         'j_n': len(june), 'j_total': june['pnl'].sum() if len(june) else 0,
         'j_avg': june['pnl'].mean() if len(june) else 0,
         'j_wr': (june['pnl'] > 0).mean() if len(june) else 0,
+        'jul_n': len(july), 'jul_total': july['pnl'].sum() if len(july) else 0,
+        'jul_avg': july['pnl'].mean() if len(july) else 0,
+        'jul_wr': (july['pnl'] > 0).mean() if len(july) else 0,
         'monthly': df.groupby('month').agg(
             n=('pnl', 'count'), total=('pnl', 'sum'),
             avg=('pnl', 'mean'), wr=('pnl', lambda x: (x > 0).mean())
@@ -418,7 +423,7 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
        val_b_avg_pnl, opt_avg_pnl, is_ensemble
 FROM `ys-time-series.scoring_logs.wf_optimization_results`
-WHERE model_version = 'robust_wf_v12'
+WHERE model_version IN ('robust_wf_v12', 'robust_wf_v12_stitched')
   AND survived_a = TRUE
   AND val_a_count >= 3
   AND val_a_avg_pnl > 0
@@ -470,6 +475,11 @@ for tk in best_per_fam['ticker'].unique():
 s3_tickers = sorted([tk for tk, ag in agreement.items() if ag['majority_pos']])
 print(f"    S3 family agreement: {len(s3_tickers)} tickers pass gate")
 print(f"    S3 tickers: {', '.join(s3_tickers)}")
+
+# Derive ALL_TICKERS dynamically: any ticker with a qualifying limit_entry config
+_qualifying = sa_limit[sa_limit['mean_va_pnl'] >= DEPLOY_THRESHOLD]['ticker'].unique()
+ALL_TICKERS = sorted(set(_qualifying) | set(s3_tickers))
+print(f"    Dynamic ALL_TICKERS: {len(ALL_TICKERS)} tickers")
 
 # Best config per ticker
 bq_configs = {}
@@ -1085,6 +1095,33 @@ if best_june_key:
     print(f"\n  ★ Best June avg: {best_june_key[0]} ({best_june_key[1]}) = {best_june:+.2%}")
 
 
+# ── TABLE B2: July-only matrix ──
+print(f"\n  TABLE B2: JULY-ONLY MATRIX (1st–19th)")
+print(f"\n  {'Strategy':<22} │ {'S3 Deployed':^{jcol_w}} │ {'Weighted>50%':^{jcol_w}} │ {'Adapt Wt>50%':^{jcol_w}}")
+print(f"  {'':<22} │ {'Trd':>4} {'Avg':>7} {'Tot':>8} {'WR':>4}"
+      f" │ {'Trd':>4} {'Avg':>7} {'Tot':>8} {'WR':>4}"
+      f" │ {'Trd':>4} {'Avg':>7} {'Tot':>8} {'WR':>4}")
+print(f"  {'─'*22} │ {'─'*jcol_w} │ {'─'*jcol_w} │ {'─'*jcol_w}")
+
+best_july = -999
+best_july_key = None
+for strat in STRATEGY_ORDER:
+    print(f"  {strat:<22}", end="")
+    for comp in COMPOSITE_METHODS:
+        st = stats.get((strat, comp), {'jul_n': 0, 'jul_avg': 0, 'jul_total': 0, 'jul_wr': 0})
+        if st['jul_n'] == 0:
+            print(f" │ {'—':>{jcol_w}}", end="")
+        else:
+            print(f" │ {st['jul_n']:>4} {st['jul_avg']:>+6.2%} {st['jul_total']:>+7.1%} {st['jul_wr']:>3.0%}", end="")
+            if st['jul_avg'] > best_july:
+                best_july = st['jul_avg']
+                best_july_key = (strat, comp)
+    print()
+
+if best_july_key:
+    print(f"\n  ★ Best July avg: {best_july_key[0]} ({best_july_key[1]}) = {best_july:+.2%}")
+
+
 # ── TABLE C: Per-ticker breakdown for top 5 combos ──
 ranked = sorted(
     [(k, s) for k, s in stats.items() if s['n'] > 0],
@@ -1101,25 +1138,28 @@ if ranked:
         df = st['trades_df']
         df['month'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m')
         june = df[df['month'] == '2026-06']
+        july = df[df['month'] == '2026-07']
         print(f"  {'Ticker':<7} {'Trades':>6} {'AvgPnL':>8} {'TotPnL':>9} {'WR':>6}"
-              f" │ {'JunT':>5} {'JunAvg':>8}")
-        print(f"  {'─'*7} {'─'*6} {'─'*8} {'─'*9} {'─'*6} │ {'─'*5} {'─'*8}")
+              f" │ {'JunT':>5} {'JunAvg':>8}"
+              f" │ {'JulT':>5} {'JulAvg':>8}")
+        print(f"  {'─'*7} {'─'*6} {'─'*8} {'─'*9} {'─'*6}"
+              f" │ {'─'*5} {'─'*8}"
+              f" │ {'─'*5} {'─'*8}")
         for ticker in sorted(df['ticker'].unique()):
             tt = df[df['ticker'] == ticker]
             jt = june[june['ticker'] == ticker]
-            if len(jt) > 0:
-                print(f"  {ticker:<7} {len(tt):>6} {tt['pnl'].mean():>+7.2%} "
-                      f"{tt['pnl'].sum():>+8.1%} {(tt['pnl']>0).mean():>5.0%}"
-                      f" │ {len(jt):>5} {jt['pnl'].mean():>+7.2%}")
-            else:
-                print(f"  {ticker:<7} {len(tt):>6} {tt['pnl'].mean():>+7.2%} "
-                      f"{tt['pnl'].sum():>+8.1%} {(tt['pnl']>0).mean():>5.0%}"
-                      f" │ {'0':>5} {'—':>8}")
+            jlt = july[july['ticker'] == ticker]
+            jun_s = f"{jt['pnl'].mean():>+7.2%}" if len(jt) > 0 else f"{'—':>8}"
+            jul_s = f"{jlt['pnl'].mean():>+7.2%}" if len(jlt) > 0 else f"{'—':>8}"
+            print(f"  {ticker:<7} {len(tt):>6} {tt['pnl'].mean():>+7.2%} "
+                  f"{tt['pnl'].sum():>+8.1%} {(tt['pnl']>0).mean():>5.0%}"
+                  f" │ {len(jt):>5} {jun_s}"
+                  f" │ {len(jlt):>5} {jul_s}")
 
 
 # ── TABLE D: Monthly breakdown for top 5 ──
-months = ['2026-04', '2026-05', '2026-06']
-mlabels = ['Apr', 'May', 'Jun']
+months = ['2026-04', '2026-05', '2026-06', '2026-07']
+mlabels = ['Apr', 'May', 'Jun', 'Jul']
 
 if ranked:
     print(f"\n  TABLE D: MONTHLY BREAKDOWN — Top 5 combos")
@@ -1145,136 +1185,55 @@ if ranked:
 
 
 # ==============================================================================
-# STEP 7: CHARTS — Cumulative PnL + Rolling Avg PnL
+# STEP 7: CHARTS — Simplified (2 charts instead of 3)
 # ==============================================================================
 print(f"\n  STEP 7: Generating charts...")
 
-# Best combo per composite
-best_per_comp = {}
-for comp in COMPOSITE_METHODS:
-    comp_stats = [(k, s) for k, s in stats.items() if k[1] == comp and s['n'] > 0]
-    if comp_stats:
-        bk, bs = max(comp_stats, key=lambda x: x[1]['avg'])
-        best_per_comp[comp] = (bk, bs)
+# ── CHART 1: Cumulative PnL — Top 5 combos only ──
+# Clean single-panel chart showing just the best-performing combos
+fig1, ax1 = plt.subplots(figsize=(14, 7))
 
-# Chart 1: Cumulative Total PnL — best strategy per composite + overall top 5
-fig, axes = plt.subplots(2, 1, figsize=(16, 12))
+line_styles = ['-', '-', '-', '--', '--']
+line_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 
-# Top subplot: cumulative PnL for best per composite + benchmark
-ax1 = axes[0]
-
-# Benchmark: STATIC S3 Deployed (the production strategy)
-bench = stats.get(('STATIC (BQ)', 'S3 Deployed'))
-if bench and bench['n'] > 0 and not bench['trades_df'].empty:
-    bdf = bench['trades_df'].sort_values('date')
-    bcum = bdf['pnl'].cumsum() * 100
-    ax1.plot(pd.to_datetime(bdf['date']), bcum.values,
-             label=f"★ STATIC S3 Deployed (benchmark) [{bench['n']}t, {bench['avg']:+.2%}]",
-             color='black', linewidth=2.5, linestyle='-', alpha=0.9)
-
-colors_comp = {'S3 Deployed': '#1f77b4', 'Weighted>50%': '#ff7f0e', 'Adapt Wt>50%': '#2ca02c'}
-for comp in COMPOSITE_METHODS:
-    if comp not in best_per_comp:
-        continue
-    (strat, _), st = best_per_comp[comp]
+for i, ((strat, comp), st) in enumerate(ranked[:5]):
     if st['trades_df'].empty:
-        continue
-    if strat == 'STATIC (BQ)' and comp == 'S3 Deployed':
         continue
     df = st['trades_df'].sort_values('date')
     cum = df['pnl'].cumsum() * 100
+    lbl = f"{strat} ({comp})"
+    if len(lbl) > 35:
+        lbl = lbl[:32] + "..."
     ax1.plot(pd.to_datetime(df['date']), cum.values,
-             label=f"{strat} ({comp}) [{st['n']}t, {st['avg']:+.2%}]",
-             color=colors_comp[comp], linewidth=2)
+             label=f"{lbl}  [{st['n']}t, {st['avg']:+.2%}]",
+             color=line_colors[i], linewidth=2 if i < 3 else 1.5,
+             linestyle=line_styles[i], alpha=0.9)
 
 ax1.axhline(y=0, color='gray', linewidth=0.5, linestyle='--')
-ax1.axvline(x=pd.Timestamp('2026-06-01'), color='red', linewidth=0.8,
-            linestyle=':', alpha=0.7, label='June start')
-ax1.set_title('Cumulative Total PnL — Benchmark vs Best per Composite', fontsize=14, fontweight='bold')
+for mo_start, mo_label in [('2026-06-01', 'Jun'), ('2026-07-01', 'Jul')]:
+    ax1.axvline(x=pd.Timestamp(mo_start), color='red', linewidth=0.8,
+                linestyle=':', alpha=0.5)
+    ax1.text(pd.Timestamp(mo_start), ax1.get_ylim()[1] * 0.95 if ax1.get_ylim()[1] > 0 else 0,
+             f' {mo_label}', fontsize=9, color='red', alpha=0.7)
+ax1.set_title('Cumulative PnL — Top 5 Strategy Combos', fontsize=14, fontweight='bold')
 ax1.set_ylabel('Cumulative PnL (%)')
-ax1.legend(fontsize=9, loc='upper left')
+ax1.set_xlabel('Date')
+ax1.legend(fontsize=9, loc='best')
 ax1.grid(True, alpha=0.3)
 
-# Bottom subplot: rolling avg PnL (10-trade window) for same combos
-ax2 = axes[1]
-
-if bench and bench['n'] > 0 and not bench['trades_df'].empty:
-    bdf = bench['trades_df'].sort_values('date')
-    broll = bdf['pnl'].rolling(window=10, min_periods=3).mean() * 100
-    ax2.plot(pd.to_datetime(bdf['date']), broll.values,
-             label='★ STATIC S3 (benchmark)',
-             color='black', linewidth=2.5, alpha=0.9)
-
-for comp in COMPOSITE_METHODS:
-    if comp not in best_per_comp:
-        continue
-    (strat, _), st = best_per_comp[comp]
-    if st['trades_df'].empty:
-        continue
-    if strat == 'STATIC (BQ)' and comp == 'S3 Deployed':
-        continue
-    df = st['trades_df'].sort_values('date')
-    roll_avg = df['pnl'].rolling(window=10, min_periods=3).mean() * 100
-    ax2.plot(pd.to_datetime(df['date']), roll_avg.values,
-             label=f"{strat} ({comp})",
-             color=colors_comp[comp], linewidth=2, alpha=0.8)
-
-ax2.axhline(y=DEPLOY_THRESHOLD * 100, color='green', linewidth=1,
-            linestyle='--', alpha=0.6, label=f'Deploy threshold ({DEPLOY_THRESHOLD:.1%})')
-ax2.axhline(y=0, color='gray', linewidth=0.5, linestyle='--')
-ax2.axvline(x=pd.Timestamp('2026-06-01'), color='red', linewidth=0.8,
-            linestyle=':', alpha=0.7)
-ax2.set_title('Rolling 10-Trade Avg PnL', fontsize=14, fontweight='bold')
-ax2.set_ylabel('Avg PnL (%)')
-ax2.set_xlabel('Date')
-ax2.legend(fontsize=9, loc='upper left')
-ax2.grid(True, alpha=0.3)
-
 plt.tight_layout()
-plt.savefig('/tmp/optimization_pnl_timeseries.png', dpi=150, bbox_inches='tight')
-print(f"    Chart 1 saved: /tmp/optimization_pnl_timeseries.png")
+plt.savefig('/tmp/optimization_cumulative_top5.png', dpi=150, bbox_inches='tight')
+print(f"    Chart 1 saved: /tmp/optimization_cumulative_top5.png")
 plt.show()
 
-# Chart 2: All 11 strategies comparison — one subplot per composite
-fig2, axes2 = plt.subplots(1, 3, figsize=(24, 8), sharey=True)
-strat_colors = plt.cm.tab10(np.linspace(0, 1, len(STRATEGY_ORDER)))
-
-for ci, comp in enumerate(COMPOSITE_METHODS):
-    ax = axes2[ci]
-    for si, strat in enumerate(STRATEGY_ORDER):
-        st = stats.get((strat, comp))
-        if st is None or st['n'] == 0 or st['trades_df'].empty:
-            continue
-        df = st['trades_df'].sort_values('date')
-        cum = df['pnl'].cumsum() * 100
-        ax.plot(pd.to_datetime(df['date']), cum.values,
-                label=f"{strat} ({st['avg']:+.1%})",
-                color=strat_colors[si], linewidth=1.5, alpha=0.8)
-    ax.axhline(y=0, color='gray', linewidth=0.5, linestyle='--')
-    ax.axvline(x=pd.Timestamp('2026-06-01'), color='red', linewidth=0.8,
-               linestyle=':', alpha=0.5)
-    ax.set_title(f'{comp}', fontsize=13, fontweight='bold')
-    ax.set_xlabel('Date')
-    if ci == 0:
-        ax.set_ylabel('Cumulative PnL (%)')
-    ax.legend(fontsize=7, loc='upper left')
-    ax.grid(True, alpha=0.3)
-
-fig2.suptitle('All 11 Strategies — Cumulative PnL by Composite Method', fontsize=15, fontweight='bold')
-plt.tight_layout()
-plt.savefig('/tmp/optimization_all_strategies.png', dpi=150, bbox_inches='tight')
-print(f"    Chart 2 saved: /tmp/optimization_all_strategies.png")
-plt.show()
-
-# Chart 3: Monthly avg PnL bar chart for top 5 combos
+# ── CHART 2: Monthly avg PnL bar chart — Top 5 combos, Apr-Jul ──
 if ranked:
-    fig3, ax3 = plt.subplots(figsize=(14, 7))
-    n_combos = len(ranked)
+    fig2, ax2 = plt.subplots(figsize=(12, 6))
+    n_combos = min(5, len(ranked))
     bar_width = 0.15
     x = np.arange(len(months))
-    bar_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
 
-    for i, ((strat, comp), st) in enumerate(ranked):
+    for i, ((strat, comp), st) in enumerate(ranked[:n_combos]):
         monthly_avgs = []
         for m in months:
             ms = st.get('monthly', {}).get(m)
@@ -1282,22 +1241,22 @@ if ranked:
         label = f"{strat} ({comp})"
         if len(label) > 30:
             label = label[:27] + "..."
-        ax3.bar(x + i * bar_width, monthly_avgs, bar_width,
-                label=label, color=bar_colors[i % len(bar_colors)], alpha=0.85)
+        ax2.bar(x + i * bar_width, monthly_avgs, bar_width,
+                label=label, color=line_colors[i], alpha=0.85)
 
-    ax3.axhline(y=DEPLOY_THRESHOLD * 100, color='green', linewidth=1,
+    ax2.axhline(y=DEPLOY_THRESHOLD * 100, color='green', linewidth=1,
                 linestyle='--', alpha=0.6, label=f'Deploy threshold ({DEPLOY_THRESHOLD:.1%})')
-    ax3.axhline(y=0, color='gray', linewidth=0.5)
-    ax3.set_title('Monthly Avg PnL — Top 5 Combos', fontsize=14, fontweight='bold')
-    ax3.set_ylabel('Avg PnL (%)')
-    ax3.set_xticks(x + bar_width * (n_combos - 1) / 2)
-    ax3.set_xticklabels(mlabels, fontsize=12)
-    ax3.legend(fontsize=8, loc='upper left')
-    ax3.grid(True, alpha=0.3, axis='y')
+    ax2.axhline(y=0, color='gray', linewidth=0.5)
+    ax2.set_title('Monthly Avg PnL — Top 5 Combos', fontsize=14, fontweight='bold')
+    ax2.set_ylabel('Avg PnL (%)')
+    ax2.set_xticks(x + bar_width * (n_combos - 1) / 2)
+    ax2.set_xticklabels(mlabels, fontsize=12)
+    ax2.legend(fontsize=8, loc='best')
+    ax2.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
     plt.savefig('/tmp/optimization_monthly_comparison.png', dpi=150, bbox_inches='tight')
-    print(f"    Chart 3 saved: /tmp/optimization_monthly_comparison.png")
+    print(f"    Chart 2 saved: /tmp/optimization_monthly_comparison.png")
     plt.show()
 
 
@@ -1326,6 +1285,13 @@ if ranked:
         print(f"\n  BEST JUNE: {best_j[0][0]} ({best_j[0][1]})")
         print(f"    June avg={best_j[1]['j_avg']:+.2%}, {best_j[1]['j_n']} trades")
 
+    best_jul = max(
+        [(k, s) for k, s in stats.items() if s['jul_n'] > 0],
+        key=lambda x: x[1]['jul_avg'], default=None)
+    if best_jul:
+        print(f"\n  BEST JULY: {best_jul[0][0]} ({best_jul[0][1]})")
+        print(f"    July avg={best_jul[1]['jul_avg']:+.2%}, {best_jul[1]['jul_n']} trades")
+
     # Best per composite
     print(f"\n  BEST PER COMPOSITE:")
     for comp in COMPOSITE_METHODS:
@@ -1334,9 +1300,10 @@ if ranked:
             key=lambda x: x[1]['avg'], reverse=True)
         if comp_ranked:
             (strat, _), st = comp_ranked[0]
+            jul_s = f", July={st['jul_avg']:+.2%}" if st['jul_n'] > 0 else ""
             print(f"    {comp}: {strat} — avg={st['avg']:+.2%}, "
                   f"total={st['total']:+.1%}, {st['n']} trades, "
-                  f"June={st['j_avg']:+.2%}")
+                  f"June={st['j_avg']:+.2%}{jul_s}")
 
 print()
 print("=" * W)

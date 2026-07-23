@@ -94,6 +94,8 @@ WALKFORWARD_FOLDS = {
                      '173_XSECTOR', '174_XSECTOR', '175_XSECTOR'],
     '185_XSECTOR': ['180_XSECTOR', '181_XSECTOR', '182_XSECTOR',
                      '183_XSECTOR', '184_XSECTOR', '185_XSECTOR'],
+    '200_XSECTOR': ['200_XSECTOR', '201_XSECTOR', '202_XSECTOR',
+                     '203_XSECTOR', '204_XSECTOR', '205_XSECTOR'],
 }
 WALKFORWARD_BASE = set(WALKFORWARD_FOLDS.keys())
 
@@ -195,6 +197,19 @@ EXP_CONFIGS = {
         'embed_dim': 32,
     },
 }
+
+for _fold_num in range(201, 206):
+    _fold_id = f'{_fold_num}_XSECTOR'
+    EXP_CONFIGS[_fold_id] = {
+        'train_teachers': TEACHERS_31,
+        'n_assets': len(TEACHERS_31) + 1,
+        'stats_id': '200_XSECTOR',
+        'model_id_override': '200_XSECTOR',
+        'seed_base': 200,
+        'model_builder': 'cnn_transformer',
+        'embed_dim': 32,
+    }
+
 for _eid, _ecfg in EXP_CONFIGS.items():
     _idx = {t: i for i, t in enumerate(_ecfg['train_teachers'])}
     if 'BITF' in _idx: _idx['KEEL'] = _idx['BITF']
@@ -228,7 +243,7 @@ def assign_family(exp):
     if num == 160: return '160'
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
-    if num == 200: return '200'
+    if 200 <= num <= 205: return '200'
     return 'other'
 
 

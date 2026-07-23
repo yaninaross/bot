@@ -58,7 +58,7 @@ RESULTS_FALLBACK = "Algos/Results_all_v2"
 INFERENCE_DIR = "Data/Inference_v2"
 
 TEST_START = '2026-04-01'
-TEST_END   = '2026-07-03'
+TEST_END   = '2026-07-11'
 ENTRY_MIN  = 375
 EXIT_TIME_MIN = 780
 SLIPPAGE_PCT = 0.0015
@@ -69,8 +69,7 @@ REOPT_FREQ = 5
 PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
-ALL_TICKERS = ['AMD', 'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'KEEL',
-               'PLUG', 'RCAT', 'RIOT', 'WULF']
+ALL_TICKERS = []  # populated dynamically from BQ after sa_limit is built
 
 MIN_SEEDS = 3
 MIN_TRADES_BQ = 3
@@ -88,6 +87,9 @@ TEACHERS_31 = ['CIFR','IREN','KEEL','HUT','APLD','WULF','RIOT','CLSK',
                'BTBT','ALAB','MARA','RCAT','ASTS','LUNR','BBAI','RKLB',
                'SPIR','BKSY','MNTS','PLUG','BE','FCEL','FLNC','OKLO',
                'SMR','MVIS','BGDE','RDW','PL','VOYG','SMLR']
+TEACHERS_47 = TEACHERS_31 + [
+    'AMD','NVDA','TSLA','PLTR','SOUN','HOOD','SMCI','VRT','NBIS',
+    'KTOS','AVAV','ACHR','JOBY','NNDM','CCJ','CEG']
 
 gcs_client = gcs_storage.Client()
 bq_client = bigquery.Client()
@@ -250,6 +252,7 @@ def assign_family(exp):
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
     if 200 <= num <= 205: return '200'
+    if 220 <= num <= 225: return '220'
     return 'other'
 
 
@@ -266,6 +269,8 @@ def get_teacher_set(exp_name):
         return set(TEACHERS_31)
     if 200 <= num <= 205:
         return set(TEACHERS_31)
+    if 220 <= num <= 225:
+        return set(TEACHERS_47)
     return set()
 
 
@@ -549,7 +554,7 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
        val_b_avg_pnl, opt_avg_pnl, is_ensemble
 FROM `ys-time-series.scoring_logs.wf_optimization_results`
-WHERE model_version = 'robust_wf_v12'
+WHERE model_version IN ('robust_wf_v12', 'robust_wf_v12_stitched')
   AND survived_a = TRUE
   AND val_a_count >= 3
   AND val_a_avg_pnl > 0
@@ -620,6 +625,11 @@ for tk in best_per_fam_no200['ticker'].unique():
 
 s3_tickers_no200 = sorted([tk for tk, ag in agreement_no200.items() if ag['majority_pos']])
 print(f"    S3 without 200: {len(s3_tickers_no200)} tickers: {', '.join(s3_tickers_no200)}")
+
+# Derive ALL_TICKERS dynamically: any ticker with a qualifying limit_entry config
+_qualifying = sa_limit[sa_limit['mean_va_pnl'] >= DEPLOY_THRESHOLD]['ticker'].unique()
+ALL_TICKERS = sorted(set(_qualifying) | set(s3_tickers) | set(s3_tickers_no200))
+print(f"    Dynamic ALL_TICKERS: {len(ALL_TICKERS)} tickers")
 
 # Best config per ticker (for trade sim params)
 bq_configs = {}

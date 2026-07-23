@@ -50,6 +50,7 @@ from tensorflow.keras.layers import (
     Input, Dense, Dropout, GlobalAveragePooling1D,
     LayerNormalization, MultiHeadAttention, Add,
     Concatenate, Embedding, Flatten,
+    Conv1D, MaxPool1D, SpatialDropout1D,
 )
 from tensorflow.keras.regularizers import l2
 from google.cloud import storage as gcs_storage
@@ -150,7 +151,9 @@ WF_DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
                          '180_XSECTOR', '181_XSECTOR', '182_XSECTOR',
                          '183_XSECTOR', '184_XSECTOR', '185_XSECTOR',
                          '200_XSECTOR', '201_XSECTOR', '202_XSECTOR',
-                         '203_XSECTOR', '204_XSECTOR', '205_XSECTOR'}
+                         '203_XSECTOR', '204_XSECTOR', '205_XSECTOR',
+                         '220_XSECTOR', '221_XSECTOR', '222_XSECTOR',
+                         '223_XSECTOR', '224_XSECTOR', '225_XSECTOR'}
 WF_EXCLUDE_TICKERS = {'LUNR'}
 WF_TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 WF_MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
@@ -182,6 +185,7 @@ def _assign_family(exp_name):
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
     if 200 <= num <= 205: return '200'
+    if 220 <= num <= 225: return '220'
     return 'other'
 
 def load_deploy_configs_from_bq():
@@ -197,7 +201,7 @@ def load_deploy_configs_from_bq():
            opt_avg_pnl, is_ensemble,
            grace_minutes, dip_pct, max_wait_minutes
     FROM `{WF_BQ_TABLE}`
-    WHERE model_version = '{WF_MODEL_VERSION}'
+    WHERE model_version IN ('{WF_MODEL_VERSION}', '{WF_MODEL_VERSION}_stitched')
       AND survived_a = TRUE
       AND val_a_count >= {WF_MIN_TRADES}
       AND val_a_avg_pnl > 0
@@ -428,20 +432,35 @@ EXP_185 = {
     'asset_cols': ASSET_COLS,
 }
 
-# ── EXP-200 family (same teachers as 185, per-fold models) ──
-_EXP_200_FOLDS = {}
-for _fold_id in ['200', '201', '202', '203', '204', '205']:
-    _EXP_200_FOLDS[_fold_id] = {
-        'model_id': f'{_fold_id}_XSECTOR',
-        'label': f'EXP-{_fold_id} XSECTOR (200 family)',
-        'train_teachers': TEACHERS_31,
-        'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
-        'has_smh_rsi': False,
-        'asset_configs': {},
-        'asset_cols': ASSET_COLS,
-    }
+# ── EXP-200 family (CNN-Transformer, embed_dim=32, all folds share base 200 model) ──
+EXP_200 = {
+    'model_id': '200_XSECTOR',
+    'label': 'EXP-200 XSECTOR (CNN-Transformer)',
+    'train_teachers': TEACHERS_31,
+    'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
+    'has_smh_rsi': False,
+    'model_builder': 'cnn_transformer',
+    'embed_dim': 32,
+    'asset_configs': {},
+    'asset_cols': ASSET_COLS,
+}
 
-_ALL_EXPS = [EXP_152, EXP_160, EXP_170, EXP_185] + list(_EXP_200_FOLDS.values())
+TEACHERS_47 = TEACHERS_31 + [
+    'AMD', 'NVDA', 'TSLA', 'PLTR', 'SOUN', 'HOOD', 'SMCI', 'VRT', 'NBIS',
+    'KTOS', 'AVAV', 'ACHR', 'JOBY', 'NNDM', 'CCJ', 'CEG',
+]
+
+EXP_220 = {
+    'model_id': '220_XSECTOR',
+    'label': 'EXP-220 XSECTOR (47 teachers, stitched)',
+    'train_teachers': TEACHERS_47,
+    'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
+    'has_smh_rsi': False,
+    'asset_configs': {},
+    'asset_cols': ASSET_COLS,
+}
+
+_ALL_EXPS = [EXP_152, EXP_160, EXP_170, EXP_185, EXP_200, EXP_220]
 
 for _exp in _ALL_EXPS:
     _acols = _exp.get('asset_cols', ASSET_COLS)
@@ -462,13 +481,15 @@ for _exp in _ALL_EXPS:
 _EXP_MAP = {
     '152_XSECTOR': EXP_152,
     '160_XSECTOR': EXP_160,
-    '170_XSECTOR': EXP_170,
-    '175_XSECTOR': EXP_170,
-    '180_XSECTOR': EXP_185,
-    '185_XSECTOR': EXP_185,
 }
-for _fold_id, _fold_exp in _EXP_200_FOLDS.items():
-    _EXP_MAP[f'{_fold_id}_XSECTOR'] = _fold_exp
+for _n in range(170, 176):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_170
+for _n in range(180, 186):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_185
+for _n in range(200, 206):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_200
+for _n in range(220, 226):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_220
 
 # ── Clear hardcoded configs — fully BQ-driven ──
 for _exp in _ALL_EXPS:
@@ -672,6 +693,40 @@ def build_model(n_context_cols, n_assets, n_asset_cols=None):
     return Model(inputs=[in_a, in_c, in_id], outputs=out)
 
 
+def build_cnn_transformer_model(n_context_cols, n_assets, n_asset_cols=None, embed_dim=32):
+    CNN_FILTERS = 64
+    CNN_KERNELS = [3, 7, 15]
+    CNN_POOL_1 = 4
+    CNN_POOL_2 = 4
+    n_ac = n_asset_cols or len(ASSET_COLS)
+    in_a  = Input(shape=(TIME_STEPS, n_ac), name='asset_in')
+    in_c  = Input(shape=(n_context_cols,),  name='context_in')
+    in_id = Input(shape=(1,), dtype=tf.int32, name='asset_id')
+    x = Dense(CNN_FILTERS)(in_a)
+    x = SpatialDropout1D(0.2)(x)
+    conv_branches = []
+    for k in CNN_KERNELS:
+        c = Conv1D(CNN_FILTERS, kernel_size=k, padding='same', activation='relu')(x)
+        conv_branches.append(c)
+    x = Concatenate(axis=-1)(conv_branches)
+    x = LayerNormalization()(x)
+    x = MaxPool1D(pool_size=CNN_POOL_1)(x)
+    x = SpatialDropout1D(0.1)(x)
+    x = Conv1D(128, kernel_size=3, padding='same', activation='relu')(x)
+    x = MaxPool1D(pool_size=CNN_POOL_2)(x)
+    x = transformer_encoder(x, 128, 4, 128)
+    x = transformer_encoder(x, 128, 4, 128)
+    x = GlobalAveragePooling1D()(x)
+    y = Dense(128, activation='relu')(LayerNormalization()(in_c))
+    e = Embedding(n_assets, embed_dim, name='asset_embed')(in_id)
+    e = Flatten()(e)
+    e = Dense(32, activation='relu')(e)
+    z = Concatenate()([x, Dropout(0.5)(y), e])
+    z = Dense(128, activation='relu', kernel_regularizer=l2(5e-3))(z)
+    out = Dense(1, activation='sigmoid', dtype='float32')(Dropout(0.5)(z))
+    return Model(inputs=[in_a, in_c, in_id], outputs=out)
+
+
 # ==============================================================================
 # MODEL LOADER (keyed by model_id + seed)
 # ==============================================================================
@@ -687,8 +742,15 @@ def get_model(exp, seed):
     local_path = f"/tmp/UNIVERSAL_S{seed}_M{model_id}.h5"
     if not os.path.exists(local_path):
         gcs_client.bucket(BUCKET_NAME).blob(blob_path).download_to_filename(local_path)
-    model = build_model(len(exp['context_cols']), exp['n_assets'],
-                        n_asset_cols=len(exp['asset_cols']))
+    builder = exp.get('model_builder', 'standard')
+    embed_dim = exp.get('embed_dim', EMBED_DIM)
+    if builder == 'cnn_transformer':
+        model = build_cnn_transformer_model(len(exp['context_cols']), exp['n_assets'],
+                                            n_asset_cols=len(exp['asset_cols']),
+                                            embed_dim=embed_dim)
+    else:
+        model = build_model(len(exp['context_cols']), exp['n_assets'],
+                            n_asset_cols=len(exp['asset_cols']))
     model.load_weights(local_path)
     _model_cache[key] = model
     return model

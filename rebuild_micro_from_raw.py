@@ -69,16 +69,14 @@ ALL_TICKERS = [
     'SMCI', 'TSLA', 'VRT', 'AMD', 'NVDA',
     # --- Commodities / industrial ---
     'BHP', 'CAT', 'COP', 'CVX', 'EQIX', 'ETN', 'FCX', 'LIN', 'MU', 'XOM',
+    # --- Exp 230 new teachers (no micro yet) ---
+    'AEHR', 'CRDO', 'MXL', 'WOLF', 'NEOV', 'NNE', 'ONDS', 'SLS', 'UCTT',
 ]
 # Context assets (SMH, BTCUSD, VIX, TLT, IWM, SPY) are OHLCV-only — no micro needed
 
-# Skip tickers already rebuilt recently — remove this block once all 75 are done
-ALREADY_REBUILT = {
-    'ACHR', 'ALAB', 'APLD', 'ASTS', 'BE', 'BTBT', 'CIFR', 'CLSK', 'FCEL', 'IREN',
-    'JOBY', 'KEEL', 'LUNR', 'OKLO', 'PL', 'PLUG', 'RCAT', 'RDW', 'RIOT', 'RKLB',
-    'SMCI', 'WULF',
-}
-ALL_TICKERS = [t for t in ALL_TICKERS if t not in ALREADY_REBUILT]
+# Only rebuild the 9 Exp 230 teachers that now have full 2022+ raw T&Q
+ONLY_TICKERS = ['AEHR', 'CRDO', 'MXL', 'WOLF', 'NEOV', 'NNE', 'ONDS', 'SLS', 'UCTT']
+ALL_TICKERS = ONLY_TICKERS
 
 DATA_START = "2022-01-01"
 

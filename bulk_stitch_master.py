@@ -55,20 +55,23 @@ GCS_MASTER_DIR = "Data/Inference_v2"
 
 # All tickers that need master_inference files
 TARGET_TICKERS = [
-    'ACHR', 'ALAB', 'AMD', 'APLD', 'ASTS', 'AVAV', 'BBAI',
-    'BE', 'BGDE', 'BHP', 'BKSY', 'BTBT',
-    'CAT', 'CCJ', 'CEG', 'CIFR', 'CLSK', 'COIN', 'COP', 'CORZ', 'CVX',
+    'ACHR', 'ACMR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV',
+    'BBAI', 'BE', 'BEAM', 'BGDE', 'BHP', 'BKSY', 'BTBT',
+    'CAT', 'CCJ', 'CEG', 'CIFR', 'CLSK', 'COIN', 'COP', 'CORZ', 'CRDO', 'CVX',
     'DUK', 'EQIX', 'ETN', 'FCEL', 'FCX', 'FLNC',
     'GD', 'GE', 'GEV', 'HOOD', 'HUT', 'IREN',
     'JOBY', 'KEEL', 'KTOS',
     'LHX', 'LIN', 'LMT', 'LUNR',
-    'MARA', 'MNTS', 'MOD', 'MP', 'MSTR', 'MU', 'MVIS',
-    'NBIS', 'NEE', 'NNDM', 'NOC', 'NVDA',
-    'OKLO', 'PL', 'PLTR', 'PLUG', 'POWL',
+    'MARA', 'MNTS', 'MOD', 'MP', 'MRNA', 'MSTR', 'MU', 'MVIS', 'MXL',
+    'NBIS', 'NEE', 'NEOV', 'NNE', 'NNDM', 'NOC', 'NTLA', 'NVDA',
+    'OKLO', 'ONDS', 'PL', 'PLTR', 'PLUG', 'POWL',
     'RCAT', 'RDW', 'RIOT', 'RKLB', 'RTX',
-    'SMCI', 'SMR', 'SOUN', 'SPIR',
-    'TSLA', 'VOYG', 'VRT', 'VST', 'WULF', 'XOM',
+    'SLS', 'SMCI', 'SMR', 'SOUN', 'SPIR',
+    'TSLA', 'TWST', 'UCTT', 'VOYG', 'VRT', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
+
+# Override: only rebuild these 3 (have micro+OHLCV but no master)
+TARGET_TICKERS = ['MRNA', 'NTLA', 'TWST']
 
 CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY']
 

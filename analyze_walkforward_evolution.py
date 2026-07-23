@@ -61,13 +61,14 @@ MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
                'regime_adaptive': '_REGADP', 'atr_sl': '_ATRSL',
                'grace': '_GRACE', 'limit_entry': '_LIMIT'}
 
-FAM_ORDER = ['152', '160', '170', '180', '200']
+FAM_ORDER = ['152', '160', '170', '180', '200', '220']
 FAM_LABELS = {
     '152': '152 Late',
     '160': '160 Early',
     '170': '170-175 WF',
     '180': '180-185 WF',
     '200': '200 CNN-TX',
+    '220': '220-225 XS',
 }
 FAM_CUTOFFS = {
     '152': 'Jul 2025',
@@ -75,6 +76,7 @@ FAM_CUTOFFS = {
     '170': 'Apr-Jan 2026 (6 folds)',
     '180': 'Aug-Jan 2026 (6 folds)',
     '200': 'Jan 2026 (CNN-TX)',
+    '220': 'Aug-Jan 2026 (6f, 47 teachers)',
 }
 
 TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
@@ -103,7 +105,7 @@ SELECT experiment, ticker, seed, tpsl_mode, is_ensemble, n_seeds_avg,
        grace_minutes, dip_pct, max_wait_minutes,
        opt_start, opt_end, run_timestamp
 FROM `{BQ_TABLE}`
-WHERE model_version = '{MODEL_VERSION}'
+WHERE model_version IN ('{MODEL_VERSION}', '{MODEL_VERSION}_stitched')
   AND (experiment LIKE '152_%' OR experiment LIKE '160_%'
        OR experiment LIKE '170_%' OR experiment LIKE '171_%'
        OR experiment LIKE '172_%' OR experiment LIKE '173_%'
@@ -111,7 +113,10 @@ WHERE model_version = '{MODEL_VERSION}'
        OR experiment LIKE '180_%' OR experiment LIKE '181_%'
        OR experiment LIKE '182_%' OR experiment LIKE '183_%'
        OR experiment LIKE '184_%' OR experiment LIKE '185_%'
-       OR experiment LIKE '200_%')
+       OR experiment LIKE '200_%'
+       OR experiment LIKE '220_%' OR experiment LIKE '221_%'
+       OR experiment LIKE '222_%' OR experiment LIKE '223_%'
+       OR experiment LIKE '224_%' OR experiment LIKE '225_%')
 """
 
 df_all = client.query(query).to_dataframe()
@@ -142,6 +147,7 @@ def assign_family(exp):
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
     if num == 200: return '200'
+    if 220 <= num <= 225: return '220'
     return 'other'
 
 
@@ -232,12 +238,12 @@ for fam in FAM_ORDER:
 # SECTION 3: 170 vs 180 DIRECT COMPARISON
 # ==============================================================================
 print(f"\n\n{'='*W}")
-print(f"  SECTION 3: 170-175 WF vs 180-185 WF — DIRECT COMPARISON")
-print(f"  Same architecture, different training cutoffs")
+print(f"  SECTION 3: PAIRWISE WF COMPARISONS (170 vs 180 vs 220)")
+print(f"  Same test window, different teacher sets / cutoffs")
 print(f"{'='*W}")
 
 # Per-mode summary
-mode_summary = ens[ens['family'].isin(['170', '180'])].groupby(['family', 'tpsl_mode']).agg(
+mode_summary = ens[ens['family'].isin(['170', '180', '220'])].groupby(['family', 'tpsl_mode']).agg(
     tickers=('ticker', 'nunique'),
     avg_test_pnl=('val_b_avg_pnl', 'mean'),
     avg_test_wr=('val_b_win_rate', 'mean'),
@@ -245,70 +251,70 @@ mode_summary = ens[ens['family'].isin(['170', '180'])].groupby(['family', 'tpsl_
     avg_test_n=('val_b_count', 'mean'),
 ).reset_index()
 
-print(f"\n  {'Mode':<18}  | {'170-175 WF':^30}  | {'180-185 WF':^30}  | {'Delta':>7}")
-print(f"  {'':─<18}──|{'':─^30}──|{'':─^30}──|{'':─^7}")
-print(f"  {'':18}  | {'Tix':>4} {'PnL':>7} {'WR':>6} {'Pass%':>6}  | "
-      f"{'Tix':>4} {'PnL':>7} {'WR':>6} {'Pass%':>6}  |")
-print(f"  {'':─<18}──|{'':─^30}──|{'':─^30}──|{'':─^7}")
+cmp_fams = [f for f in ['170', '180', '220'] if f in mode_summary['family'].unique()]
+cmp_labels = {f: FAM_LABELS[f] for f in cmp_fams}
+
+header_parts = '  | '.join(f"{cmp_labels[f]:^24}" for f in cmp_fams)
+print(f"\n  {'Mode':<18}  | {header_parts}")
+sub_parts = '  | '.join(f"{'Tix':>4} {'PnL':>7} {'WR':>6} {'Pass%':>6}" for _ in cmp_fams)
+print(f"  {'':18}  | {sub_parts}")
+print(f"  {'─'*18}──|" + '──|'.join(['─'*26] * len(cmp_fams)))
 
 for mode in ALL_MODES:
     print(f"  {mode:<18}", end='')
-    pnl_170 = None
-    pnl_180 = None
-    for fam in ['170', '180']:
+    pnl_vals = {}
+    for fam in cmp_fams:
         row = mode_summary[(mode_summary['family'] == fam) & (mode_summary['tpsl_mode'] == mode)]
         if len(row) == 0:
             print(f"  | {'—':>4} {'—':>7} {'—':>6} {'—':>6}", end='')
         else:
             r = row.iloc[0]
-            pnl_val = r['avg_test_pnl']
-            if fam == '170': pnl_170 = pnl_val
-            else: pnl_180 = pnl_val
-            print(f"  | {int(r['tickers']):>4} {pnl_val:>+6.2%} {r['avg_test_wr']:>5.1%} "
+            pnl_vals[fam] = r['avg_test_pnl']
+            print(f"  | {int(r['tickers']):>4} {r['avg_test_pnl']:>+6.2%} {r['avg_test_wr']:>5.1%} "
                   f"{r['pct_pass']:>5.0%}", end='')
-    if pnl_170 is not None and pnl_180 is not None:
-        delta = pnl_180 - pnl_170
-        print(f"  | {delta:>+6.2%}")
-    else:
-        print(f"  | {'—':>7}")
+    print()
 
-print(f"  {'':─<18}──|{'':─^30}──|{'':─^30}──|{'':─^7}")
+print(f"  {'─'*18}──|" + '──|'.join(['─'*26] * len(cmp_fams)))
 
-# Head-to-head per ticker
-best_170 = ens[ens['family'] == '170'].copy()
-best_180 = ens[ens['family'] == '180'].copy()
+# Head-to-head per ticker — all WF pairs
+h2h_pairs = [('170', '180'), ('180', '220'), ('170', '220')]
 
-if len(best_170) > 0 and len(best_180) > 0:
-    best_170_tk = best_170.loc[best_170.groupby('ticker')['val_b_avg_pnl'].idxmax()]
-    best_180_tk = best_180.loc[best_180.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+for fam_a, fam_b in h2h_pairs:
+    ens_a = ens[ens['family'] == fam_a].copy()
+    ens_b = ens[ens['family'] == fam_b].copy()
+    if len(ens_a) == 0 or len(ens_b) == 0:
+        continue
 
-    p170 = best_170_tk.set_index('ticker')['val_b_avg_pnl']
-    p180 = best_180_tk.set_index('ticker')['val_b_avg_pnl']
-    m170 = best_170_tk.set_index('ticker')['tpsl_mode']
-    m180 = best_180_tk.set_index('ticker')['tpsl_mode']
+    best_a = ens_a.loc[ens_a.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+    best_b = ens_b.loc[ens_b.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+    pa = best_a.set_index('ticker')['val_b_avg_pnl']
+    pb = best_b.set_index('ticker')['val_b_avg_pnl']
+    ma = best_a.set_index('ticker')['tpsl_mode']
+    mb = best_b.set_index('ticker')['tpsl_mode']
 
-    common_wf = sorted(set(p170.index) & set(p180.index))
-    print(f"\n  Head-to-head: {len(common_wf)} common tickers")
+    common_wf = sorted(set(pa.index) & set(pb.index))
+    la = FAM_LABELS[fam_a]; lb = FAM_LABELS[fam_b]
+    print(f"\n  Head-to-head: {la} vs {lb} — {len(common_wf)} common tickers")
 
     if common_wf:
-        print(f"\n  {'Ticker':<7}  {'170-175 WF':>20}  {'180-185 WF':>20}  {'Delta':>8} {'Winner':>10}")
+        print(f"\n  {'Ticker':<7}  {la:>20}  {lb:>20}  {'Delta':>8} {'Winner':>10}")
         print(f"  {'':7}   {'Mode':>12} {'PnL':>7}  {'Mode':>12} {'PnL':>7}")
         print(f"  {'─'*75}")
 
-        wins_wf = {'170': 0, '180': 0, 'tie': 0}
+        wins = {fam_a: 0, fam_b: 0, 'tie': 0}
         for t in common_wf:
-            v170 = p170[t]; v180 = p180[t]
-            delta = v180 - v170
-            winner = '180' if delta > 0.001 else ('170' if delta < -0.001 else 'tie')
-            wins_wf[winner] += 1
-            w_label = FAM_LABELS.get(winner, 'Tie')[:8]
-            print(f"  {t:<7}  {m170[t]:>12} {v170:>+6.2%}  {m180[t]:>12} {v180:>+6.2%}"
+            va = pa[t]; vb = pb[t]
+            delta = vb - va
+            winner = fam_b if delta > 0.001 else (fam_a if delta < -0.001 else 'tie')
+            wins[winner] += 1
+            w_label = FAM_LABELS.get(winner, 'Tie')[:10]
+            print(f"  {t:<7}  {ma[t]:>12} {va:>+6.2%}  {mb[t]:>12} {vb:>+6.2%}"
                   f"  {delta:>+7.2%} {w_label:>10}")
 
         print(f"  {'─'*75}")
-        d_series = pd.Series({t: p180[t] - p170[t] for t in common_wf})
-        print(f"\n  WINS: 180 WF={wins_wf['180']}  170 WF={wins_wf['170']}  Tie={wins_wf['tie']}")
-        print(f"  Avg delta (180-170): {d_series.mean():>+.3%}  Med: {d_series.median():>+.3%}")
+        d_series = pd.Series({t: pb[t] - pa[t] for t in common_wf})
+        print(f"\n  WINS: {lb}={wins[fam_b]}  {la}={wins[fam_a]}  Tie={wins['tie']}")
+        print(f"  Avg delta ({fam_b}-{fam_a}): {d_series.mean():>+.3%}  Med: {d_series.median():>+.3%}")
 
 
 # ==============================================================================
@@ -324,6 +330,10 @@ comparisons = [
     ('170', '160', '170-175 WF vs 160 Early'),
     ('180', '152', '180-185 WF vs 152 Late'),
     ('180', '160', '180-185 WF vs 160 Early'),
+    ('220', '152', '220-225 XS vs 152 Late'),
+    ('220', '160', '220-225 XS vs 160 Early'),
+    ('220', '180', '220-225 XS vs 180-185 WF'),
+    ('220', '170', '220-225 XS vs 170-175 WF'),
 ]
 
 for wf_fam, sf_fam, label in comparisons:
@@ -360,7 +370,7 @@ for wf_fam, sf_fam, label in comparisons:
 # ==============================================================================
 print(f"\n\n{'='*W}")
 print(f"  SECTION 5: PER-TICKER PROGRESSION — Report Card")
-print(f"  Best-mode test PnL across all 4 families")
+print(f"  Best-mode test PnL across all {len(FAM_ORDER)} families")
 print(f"{'='*W}")
 
 best_per_fam_tk = ens.loc[ens.groupby(['family', 'ticker'])['val_b_avg_pnl'].idxmax()].copy()
@@ -598,7 +608,7 @@ for fam in FAM_ORDER:
 # ==============================================================================
 if RUN_BACKTEST:
     print(f"\n\n{'='*W}")
-    print(f"  SECTION 9: BACKTEST — Top 180-185 WF configs with CSV predictions")
+    print(f"  SECTION 9: BACKTEST — Top WF configs with CSV predictions (170/180/220)")
     print(f"{'='*W}")
 
     try:
@@ -621,6 +631,7 @@ if RUN_BACKTEST:
                                   '183_XSECTOR', '184_XSECTOR', '185_XSECTOR']
         WALKFORWARD_FOLDS_170 = ['170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
                                   '173_XSECTOR', '174_XSECTOR', '175_XSECTOR']
+        WALKFORWARD_FOLDS_220 = ['220_XSECTOR']
 
         gcs_client = gcs_storage.Client()
 
@@ -726,7 +737,8 @@ if RUN_BACKTEST:
 
         # Backtest both 170 and 180 walkforward for comparison
         for wf_name, wf_folds, wf_fam in [('180-185 WF', WALKFORWARD_FOLDS_180, '180'),
-                                            ('170-175 WF', WALKFORWARD_FOLDS_170, '170')]:
+                                            ('170-175 WF', WALKFORWARD_FOLDS_170, '170'),
+                                            ('220-225 XS', WALKFORWARD_FOLDS_220, '220')]:
             fam_deploy = ens[(ens['family'] == wf_fam) &
                               (ens['val_b_avg_pnl'] >= DEPLOY_THRESHOLD) &
                               (ens['tpsl_mode'] == 'limit_entry')]

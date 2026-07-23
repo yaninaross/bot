@@ -1,18 +1,13 @@
 """
-Daily Scoring — Strategy S3 + S18
-==================================
-Self-contained. Scores tickers under two strategies and prints both dashboards.
+Daily Scoring — Strategy S3
+============================
+Self-contained. Scores tickers under Strategy S3 and prints dashboard.
 
 Strategy S3 (limit_entry + family agreement):
   Gate: majority of families positive val_b, n_fams >= 2. Mode: limit_entry only.
   Deploy: best limit_entry config per ticker by score_pnl2.
-
-Strategy S18 (AllMode + ModeConsist):
-  Gate: per (ticker, mode) pair, majority of families positive val_b, n_fams >= 2.
-  Deploy: best config per ticker from passing (ticker, mode) pool (any mode).
-
-Both: score_pnl2 = mean_va_pnl^2 * agree_18.
-170 uses fold-175 models; 180 uses fold-185 models.
+  score_pnl2 = mean_va_pnl^2 * agree_18.
+  170 uses fold-175 models; 180 uses fold-185 models.
 
 Confidence tiers:
   HIGH  — N>=7 seeds    MED — N=4-6 seeds    LOW — N<=3 seeds
@@ -24,7 +19,6 @@ import os
 import sys
 import json
 import gc
-import copy
 import subprocess
 
 os.environ['TF_USE_LEGACY_KERAS'] = '1'
@@ -53,6 +47,7 @@ from tensorflow.keras.layers import (
     Input, Dense, Dropout, GlobalAveragePooling1D,
     LayerNormalization, MultiHeadAttention, Add,
     Concatenate, Embedding, Flatten,
+    Conv1D, MaxPool1D, SpatialDropout1D,
 )
 from tensorflow.keras.regularizers import l2
 from google.cloud import storage as gcs_storage
@@ -150,7 +145,9 @@ WF_DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
                          '180_XSECTOR', '181_XSECTOR', '182_XSECTOR',
                          '183_XSECTOR', '184_XSECTOR', '185_XSECTOR',
                          '200_XSECTOR', '201_XSECTOR', '202_XSECTOR',
-                         '203_XSECTOR', '204_XSECTOR', '205_XSECTOR'}
+                         '203_XSECTOR', '204_XSECTOR', '205_XSECTOR',
+                         '220_XSECTOR', '221_XSECTOR', '222_XSECTOR',
+                         '223_XSECTOR', '224_XSECTOR', '225_XSECTOR'}
 WF_EXCLUDE_TICKERS = {'LUNR'}
 WF_TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 WF_MODE_SUFFIX = {'static': '', 'atr': '_ATR', 'atr_adaptive': '_ATRADP',
@@ -182,6 +179,7 @@ def _assign_family(exp_name):
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
     if 200 <= num <= 205: return '200'
+    if 220 <= num <= 225: return '220'
     return 'other'
 
 def load_deploy_configs_from_bq():
@@ -197,7 +195,7 @@ def load_deploy_configs_from_bq():
            opt_avg_pnl, is_ensemble,
            grace_minutes, dip_pct, max_wait_minutes
     FROM `{WF_BQ_TABLE}`
-    WHERE model_version = '{WF_MODEL_VERSION}'
+    WHERE model_version IN ('{WF_MODEL_VERSION}', '{WF_MODEL_VERSION}_stitched')
       AND survived_a = TRUE
       AND val_a_count >= {WF_MIN_TRADES}
       AND val_a_avg_pnl > 0
@@ -331,138 +329,6 @@ def load_deploy_configs_from_bq():
     return n_selected
 
 
-def load_deploy_configs_s18_from_bq():
-    """Strategy S18: AllMode + ModeConsist — per (ticker, mode) family agreement, best per ticker."""
-    bq_client = bigquery.Client()
-    query = f"""
-    SELECT ticker, experiment, seed, tpsl_mode, entry_minute, prob_thresh,
-           tp_pct, sl_pct, tp_mult, sl_mult,
-           trail_start_mult, trail_end_mult,
-           vix_threshold, tlt_crash, spy_ignore, vol_filter_pct,
-           val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
-           val_b_avg_pnl,
-           opt_avg_pnl, is_ensemble,
-           grace_minutes, dip_pct, max_wait_minutes
-    FROM `{WF_BQ_TABLE}`
-    WHERE model_version = '{WF_MODEL_VERSION}'
-      AND survived_a = TRUE
-      AND val_a_count >= {WF_MIN_TRADES}
-      AND val_a_avg_pnl > 0
-    """
-    df = bq_client.query(query).to_dataframe()
-
-    df['ticker'] = df['ticker'].replace(WF_TICKER_RENAME)
-    df['base_experiment'] = df['experiment'].apply(_wf_base_exp)
-    df = df[df['base_experiment'].isin(WF_DEPLOY_EXPERIMENTS)]
-    df = df[~df['ticker'].isin(WF_EXCLUDE_TICKERS)]
-
-    for col in ['grace_minutes', 'max_wait_minutes', 'vol_filter_pct']:
-        if col not in df.columns:
-            df[col] = 0
-        df[col] = df[col].fillna(0).astype(int)
-    for col in ['dip_pct', 'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult']:
-        if col not in df.columns:
-            df[col] = 0.0
-        df[col] = df[col].fillna(0.0)
-
-    df = df[df['opt_avg_pnl'] > 0].copy()
-    df = df[df['val_a_avg_pnl'] / df['opt_avg_pnl'] <= WF_MAX_VA_OPT_RATIO]
-
-    indiv = df[df['is_ensemble'] == False].copy()
-
-    extra_agg = {}
-    _regime_agg = {'vix_threshold': 'max', 'tlt_crash': 'min', 'spy_ignore': 'max'}
-    for c in ['vix_threshold', 'tlt_crash', 'spy_ignore']:
-        if c in indiv.columns:
-            extra_agg[c] = (c, _regime_agg[c])
-
-    sa = indiv.groupby(WF_GRP_KEYS).agg(
-        n_seeds=('seed', 'nunique'),
-        n_pos_seeds_18=('val_a_avg_pnl', lambda x: (x >= 0.018).sum()),
-        mean_va_pnl=('val_a_avg_pnl', 'mean'),
-        mean_va_wr=('val_a_win_rate', 'mean'),
-        mean_va_count=('val_a_count', 'mean'),
-        mean_va_freq=('val_a_freq', 'mean'),
-        vb_pnl=('val_b_avg_pnl', 'mean'),
-        **extra_agg,
-    ).reset_index()
-    sa['agree_18'] = (sa['n_pos_seeds_18'] / sa['n_seeds']).clip(upper=1.0)
-
-    # ── S18: all modes allowed, per (ticker, mode) family agreement ──
-    sa_all = sa[sa['n_seeds'] >= WF_MIN_SEEDS].copy()
-
-    d = sa_all.copy()
-    d['score'] = (d['mean_va_pnl'] ** 2) * d['agree_18']
-    d = d[np.isfinite(d['score'])]
-    d['exp_fam'] = d['experiment'].apply(_assign_family)
-    d = d[d['exp_fam'] != 'other']
-
-    best_per_fam_mode = d.loc[d.groupby(['ticker', 'tpsl_mode', 'exp_fam'])['score'].idxmax()]
-    best_per_fam_mode = best_per_fam_mode[best_per_fam_mode['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD]
-
-    passing = []
-    for (tk, mode), grp in best_per_fam_mode.groupby(['ticker', 'tpsl_mode']):
-        n_fams = len(grp)
-        n_pos = int((grp['vb_pnl'] > 0).sum())
-        if n_fams >= 2 and n_pos > n_fams / 2:
-            passing.append(grp)
-
-    if not passing:
-        return 0
-    pool = pd.concat(passing)
-
-    scorable_exps = set(_EXP_MAP_S18.keys())
-    pool_scorable = pool[pool['experiment'].apply(_wf_base_exp).isin(scorable_exps)].copy()
-    if pool_scorable.empty:
-        return 0
-
-    best = pool_scorable.loc[pool_scorable.groupby('ticker')['score'].idxmax()]
-    best = best[best['mean_va_pnl'] >= WF_DEPLOY_THRESHOLD].copy()
-
-    n_selected = 0
-    for _, row in best.sort_values(['ticker', 'experiment']).iterrows():
-        base_exp = _wf_base_exp(row['experiment'])
-        exp_dict = _EXP_MAP_S18.get(base_exp)
-        if exp_dict is None:
-            continue
-        ticker = row['ticker']
-        tpsl_mode = row['tpsl_mode']
-        n_seeds = int(row['n_seeds'])
-        cfg = {
-            'seed': -1, 'is_ensemble': True,
-            'prob_threshold': float(row['prob_thresh']),
-            'entry_minute': int(row['entry_minute']),
-            'tpsl_mode': tpsl_mode,
-            'tp_pct': float(row['tp_pct']),
-            'sl_pct': float(row['sl_pct']),
-            'vix_threshold': float(row.get('vix_threshold', 999)),
-            'tlt_crash': float(row.get('tlt_crash', -999)),
-            'spy_ignore': float(row.get('spy_ignore', 999)),
-            'vol_filter_pct': int(row.get('vol_filter_pct', 0)),
-            'confidence': 'HIGH' if n_seeds >= 7 else ('MED' if n_seeds >= 4 else 'LOW'),
-            'confidence_note': f'{n_seeds} seeds, agree={row["agree_18"]:.0%}',
-            'stats': {
-                'win_rate': f'{row["mean_va_wr"]:.0%}',
-                'avg_pnl': f'{row["mean_va_pnl"]:.1%}',
-                'freq': f'{row["mean_va_freq"]:.1f}',
-            },
-        }
-        if tpsl_mode == 'limit_entry':
-            cfg['dip_pct'] = float(row.get('dip_pct', 0))
-            cfg['max_wait_minutes'] = int(row.get('max_wait_minutes', 0))
-        if tpsl_mode == 'grace':
-            cfg['grace_minutes'] = int(row.get('grace_minutes', 0))
-        if tpsl_mode in ('atr', 'atr_adaptive', 'trailing_decay', 'atr_sl'):
-            cfg['tp_mult'] = float(row.get('tp_mult', 0))
-            cfg['sl_mult'] = float(row.get('sl_mult', 0))
-        if tpsl_mode == 'trailing_decay':
-            cfg['trail_start_mult'] = float(row.get('trail_start_mult', 0))
-            cfg['trail_end_mult'] = float(row.get('trail_end_mult', 0))
-        exp_dict['asset_configs'][ticker] = cfg
-        n_selected += 1
-
-    return n_selected
-
 
 EXP_170 = {
     'model_id': '175_XSECTOR',
@@ -561,20 +427,35 @@ EXP_185 = {
     'asset_cols': ASSET_COLS,
 }
 
-# ── EXP-200 family (same teachers as 185, per-fold models) ──
-_EXP_200_FOLDS = {}
-for _fold_id in ['200', '201', '202', '203', '204', '205']:
-    _EXP_200_FOLDS[_fold_id] = {
-        'model_id': f'{_fold_id}_XSECTOR',
-        'label': f'EXP-{_fold_id} XSECTOR (200 family)',
-        'train_teachers': TEACHERS_31,
-        'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
-        'has_smh_rsi': False,
-        'asset_configs': {},
-        'asset_cols': ASSET_COLS,
-    }
+# ── EXP-200 family (CNN-Transformer, embed_dim=32, all folds share base 200 model) ──
+EXP_200 = {
+    'model_id': '200_XSECTOR',
+    'label': 'EXP-200 XSECTOR (CNN-Transformer)',
+    'train_teachers': TEACHERS_31,
+    'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
+    'has_smh_rsi': False,
+    'model_builder': 'cnn_transformer',
+    'embed_dim': 32,
+    'asset_configs': {},
+    'asset_cols': ASSET_COLS,
+}
 
-_ALL_EXPS = [EXP_152, EXP_160, EXP_170, EXP_185] + list(_EXP_200_FOLDS.values())
+TEACHERS_47 = TEACHERS_31 + [
+    'AMD', 'NVDA', 'TSLA', 'PLTR', 'SOUN', 'HOOD', 'SMCI', 'VRT', 'NBIS',
+    'KTOS', 'AVAV', 'ACHR', 'JOBY', 'NNDM', 'CCJ', 'CEG',
+]
+
+EXP_220 = {
+    'model_id': '220_XSECTOR',
+    'label': 'EXP-220 XSECTOR (47 teachers, stitched)',
+    'train_teachers': TEACHERS_47,
+    'context_assets': ['SPY', 'VIX', 'TLT', 'IWM'],
+    'has_smh_rsi': False,
+    'asset_configs': {},
+    'asset_cols': ASSET_COLS,
+}
+
+_ALL_EXPS = [EXP_152, EXP_160, EXP_170, EXP_185, EXP_200, EXP_220]
 
 for _exp in _ALL_EXPS:
     _acols = _exp.get('asset_cols', ASSET_COLS)
@@ -595,36 +476,18 @@ for _exp in _ALL_EXPS:
 _EXP_MAP = {
     '152_XSECTOR': EXP_152,
     '160_XSECTOR': EXP_160,
-    '170_XSECTOR': EXP_170,
-    '175_XSECTOR': EXP_170,
-    '180_XSECTOR': EXP_185,
-    '185_XSECTOR': EXP_185,
 }
-for _fold_id, _fold_exp in _EXP_200_FOLDS.items():
-    _EXP_MAP[f'{_fold_id}_XSECTOR'] = _fold_exp
+for _n in range(170, 176):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_170
+for _n in range(180, 186):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_185
+for _n in range(200, 206):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_200
+for _n in range(220, 226):
+    _EXP_MAP[f'{_n}_XSECTOR'] = EXP_220
 
-# ── S18 deep copies (independent experiment dicts for AllMode + ModeConsist) ──
-EXP_152_S18 = copy.deepcopy(EXP_152)
-EXP_160_S18 = copy.deepcopy(EXP_160)
-EXP_170_S18 = copy.deepcopy(EXP_170)
-EXP_185_S18 = copy.deepcopy(EXP_185)
-_EXP_200_FOLDS_S18 = {k: copy.deepcopy(v) for k, v in _EXP_200_FOLDS.items()}
-
-_EXP_MAP_S18 = {
-    '152_XSECTOR': EXP_152_S18,
-    '160_XSECTOR': EXP_160_S18,
-    '170_XSECTOR': EXP_170_S18,
-    '175_XSECTOR': EXP_170_S18,
-    '180_XSECTOR': EXP_185_S18,
-    '185_XSECTOR': EXP_185_S18,
-}
-for _fold_id, _fold_exp in _EXP_200_FOLDS_S18.items():
-    _EXP_MAP_S18[f'{_fold_id}_XSECTOR'] = _fold_exp
-
-# Clear hardcoded configs — both S3 and S18 are fully BQ-driven
+# Clear hardcoded configs — S3 is fully BQ-driven
 for _exp in _ALL_EXPS:
-    _exp['asset_configs'] = {}
-for _exp in list(_EXP_200_FOLDS_S18.values()) + [EXP_152_S18, EXP_160_S18, EXP_170_S18, EXP_185_S18]:
     _exp['asset_configs'] = {}
 
 try:
@@ -635,15 +498,7 @@ except Exception as _e:
     print(f"  ERROR loading S3 BQ configs: {_e}")
     print(f"  S3 scoring will have 0 tickers — check BQ access and WF table")
 
-try:
-    _n_s18 = load_deploy_configs_s18_from_bq()
-    if _n_s18 == 0:
-        print("  WARNING: No S18 configs selected from BQ")
-except Exception as _e:
-    print(f"  ERROR loading S18 BQ configs: {_e}")
-
 EXPERIMENTS = [e for e in _ALL_EXPS if e['asset_configs']]
-EXPERIMENTS_S18 = [e for e in list(_EXP_200_FOLDS_S18.values()) + [EXP_152_S18, EXP_160_S18, EXP_170_S18, EXP_185_S18] if e['asset_configs']]
 
 # ==============================================================================
 # GCS CLIENT
@@ -833,6 +688,40 @@ def build_model(n_context_cols, n_assets, n_asset_cols=None):
     return Model(inputs=[in_a, in_c, in_id], outputs=out)
 
 
+def build_cnn_transformer_model(n_context_cols, n_assets, n_asset_cols=None, embed_dim=32):
+    CNN_FILTERS = 64
+    CNN_KERNELS = [3, 7, 15]
+    CNN_POOL_1 = 4
+    CNN_POOL_2 = 4
+    n_ac = n_asset_cols or len(ASSET_COLS)
+    in_a  = Input(shape=(TIME_STEPS, n_ac), name='asset_in')
+    in_c  = Input(shape=(n_context_cols,),  name='context_in')
+    in_id = Input(shape=(1,), dtype=tf.int32, name='asset_id')
+    x = Dense(CNN_FILTERS)(in_a)
+    x = SpatialDropout1D(0.2)(x)
+    conv_branches = []
+    for k in CNN_KERNELS:
+        c = Conv1D(CNN_FILTERS, kernel_size=k, padding='same', activation='relu')(x)
+        conv_branches.append(c)
+    x = Concatenate(axis=-1)(conv_branches)
+    x = LayerNormalization()(x)
+    x = MaxPool1D(pool_size=CNN_POOL_1)(x)
+    x = SpatialDropout1D(0.1)(x)
+    x = Conv1D(128, kernel_size=3, padding='same', activation='relu')(x)
+    x = MaxPool1D(pool_size=CNN_POOL_2)(x)
+    x = transformer_encoder(x, 128, 4, 128)
+    x = transformer_encoder(x, 128, 4, 128)
+    x = GlobalAveragePooling1D()(x)
+    y = Dense(128, activation='relu')(LayerNormalization()(in_c))
+    e = Embedding(n_assets, embed_dim, name='asset_embed')(in_id)
+    e = Flatten()(e)
+    e = Dense(32, activation='relu')(e)
+    z = Concatenate()([x, Dropout(0.5)(y), e])
+    z = Dense(128, activation='relu', kernel_regularizer=l2(5e-3))(z)
+    out = Dense(1, activation='sigmoid', dtype='float32')(Dropout(0.5)(z))
+    return Model(inputs=[in_a, in_c, in_id], outputs=out)
+
+
 # ==============================================================================
 # MODEL LOADER (keyed by model_id + seed)
 # ==============================================================================
@@ -846,10 +735,22 @@ def get_model(exp, seed):
     model_id = exp['model_id']
     blob_path  = f"{GCS_MODEL_PATH}/UNIVERSAL_S{seed}_M{model_id}.h5"
     local_path = f"/tmp/UNIVERSAL_S{seed}_M{model_id}.h5"
+    blob = gcs_client.bucket(BUCKET_NAME).blob(blob_path)
+    if os.path.exists(local_path):
+        blob.reload()
+        if os.path.getsize(local_path) != blob.size:
+            os.remove(local_path)
     if not os.path.exists(local_path):
-        gcs_client.bucket(BUCKET_NAME).blob(blob_path).download_to_filename(local_path)
-    model = build_model(len(exp['context_cols']), exp['n_assets'],
-                        n_asset_cols=len(exp['asset_cols']))
+        blob.download_to_filename(local_path)
+    builder = exp.get('model_builder', 'standard')
+    embed_dim = exp.get('embed_dim', EMBED_DIM)
+    if builder == 'cnn_transformer':
+        model = build_cnn_transformer_model(len(exp['context_cols']), exp['n_assets'],
+                                            n_asset_cols=len(exp['asset_cols']),
+                                            embed_dim=embed_dim)
+    else:
+        model = build_model(len(exp['context_cols']), exp['n_assets'],
+                            n_asset_cols=len(exp['asset_cols']))
     model.load_weights(local_path)
     _model_cache[key] = model
     return model
@@ -1706,40 +1607,8 @@ def main():
     _check_stitch_freshness()
 
     s3_results = _run_strategy(EXPERIMENTS, run_ts, 'S3')
-    s18_results = _run_strategy(EXPERIMENTS_S18, run_ts, 'S18')
-
     print_dashboard(s3_results, run_ts, strategy='S3')
-    print_dashboard(s18_results, run_ts, strategy='S18')
-
-    # ── S18 vs S3 diff ──
-    s3_tickers = {r['ticker'] for _, results in s3_results for r in results}
-    s18_tickers = {r['ticker'] for _, results in s18_results for r in results}
-    new_in_s18 = sorted(s18_tickers - s3_tickers)
-    removed_in_s18 = sorted(s3_tickers - s18_tickers)
-    shared = sorted(s3_tickers & s18_tickers)
-    s3_modes = {r['ticker']: r.get('tpsl_mode', 'static')
-                for _, results in s3_results for r in results}
-    s18_modes = {r['ticker']: r.get('tpsl_mode', 'static')
-                 for _, results in s18_results for r in results}
-    mode_changes = [(tk, s3_modes[tk], s18_modes[tk])
-                    for tk in shared if s3_modes.get(tk) != s18_modes.get(tk)]
-
-    print(f"\n  {'='*80}")
-    print(f"  S18 vs S3 DIFF")
-    print(f"  {'─'*80}")
-    if new_in_s18:
-        print(f"  NEW in S18:     {', '.join(new_in_s18)}")
-    if removed_in_s18:
-        print(f"  DROPPED in S18: {', '.join(removed_in_s18)}")
-    if mode_changes:
-        for tk, s3m, s18m in mode_changes:
-            print(f"  MODE CHANGE:    {tk}: {s3m} → {s18m}")
-    if not new_in_s18 and not removed_in_s18 and not mode_changes:
-        print(f"  No differences — S3 and S18 selected identical configs")
-    print(f"  {'='*80}")
-
     log_to_bigquery(s3_results, run_ts, strategy='S3')
-    log_to_bigquery(s18_results, run_ts, strategy='S18')
 
 
 main()

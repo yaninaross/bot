@@ -23,6 +23,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from polygon import RESTClient
 from google.cloud import storage as gcs_storage
+import gc
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -37,16 +38,26 @@ BUCKET_NAME = "time-series-bucket-ys"
 # Full history from 2022-01-01 needed for training
 START_DATE = '2022-01-01'
 
-# Number of parallel download threads per ticker
-MAX_WORKERS = 10
+# Number of parallel download threads per ticker (keep low to avoid OOM on 16GB VMs)
+MAX_WORKERS = 4
 
-gcs_client = gcs_storage.Client()
-bucket     = gcs_client.bucket(BUCKET_NAME)
+# Process this many days per batch to limit memory (avoids submitting 1000+ futures at once)
+BATCH_SIZE = 50
+
+def _fresh_bucket():
+    """Create a fresh GCS client+bucket to avoid stale auth tokens on long runs."""
+    return gcs_storage.Client().bucket(BUCKET_NAME)
+
+_bucket = [_fresh_bucket()]
+def _get_bucket():
+    return _bucket[0]
+def _refresh_bucket():
+    _bucket[0] = _fresh_bucket()
 
 def list_existing_dates(clean_ticker):
     """List all dates that have BOTH trades + quotes in GCS (via API, not FUSE cache)."""
     prefix = f"Data/TradesQuotes/{clean_ticker}/{clean_ticker}_"
-    blobs = set(b.name for b in bucket.list_blobs(prefix=prefix))
+    blobs = set(b.name for b in _get_bucket().list_blobs(prefix=prefix))
     trade_dates = set()
     quote_dates = set()
     for name in blobs:
@@ -81,6 +92,10 @@ ALL_TQ_TICKERS = [
     'CAT', 'FCX', 'BHP', 'ETN', 'LIN',
     # --- EXP-151/152 additions (energy expansion + cross-sector spikers) ---
     'OKLO', 'SMR', 'FCEL', 'FLNC', 'PLUG', 'MP', 'POWL', 'MOD', 'ALAB',
+    # --- Exp 230 new teachers ---
+    'AEHR', 'CRDO', 'MXL', 'WOLF', 'NEOV', 'NNE', 'ONDS', 'SLS', 'UCTT',
+    # --- Additional scoring pool ---
+    'NBIS', 'SOUN', 'GD', 'LHX', 'GE', 'EQIX', 'MU', 'MRNA', 'NTLA', 'TWST', 'BEAM',
 ]
 
 # Thread-local Polygon clients (RESTClient is not thread-safe)
@@ -126,7 +141,7 @@ def _upload_df_to_gcs(df, gcs_path, compression='snappy'):
     else:
         df.to_parquet(buf, engine='pyarrow', compression=compression)
     buf.seek(0)
-    blob = bucket.blob(gcs_path)
+    blob = _get_bucket().blob(gcs_path)
     blob.upload_from_file(buf, content_type='application/octet-stream')
 
 def download_one_day(clean, ticker_dir_unused, gap_date):
@@ -159,6 +174,8 @@ def download_one_day(clean, ticker_dir_unused, gap_date):
 # ==============================================================================
 # MAIN
 # ==============================================================================
+ONLY_TICKERS = ['GD', 'LHX', 'GE', 'EQIX', 'MU', 'MRNA', 'NTLA']
+
 if __name__ == '__main__':
     end_date = datetime.now().strftime('%Y-%m-%d')
 
@@ -170,6 +187,8 @@ if __name__ == '__main__':
         invalid = [t for t in tickers if t not in ALL_TQ_TICKERS]
         if invalid:
             print(f"   Warning: {invalid} not in standard ticker list, downloading anyway")
+    elif ONLY_TICKERS:
+        tickers = ONLY_TICKERS
     else:
         tickers = list(dict.fromkeys(ALL_TQ_TICKERS))
 
@@ -188,6 +207,8 @@ if __name__ == '__main__':
     total_errors     = 0
 
     for i, ticker in enumerate(tickers, 1):
+        _refresh_bucket()
+
         clean = ticker.replace("I:", "").replace("X:", "")
 
         t_start = time.time()
@@ -216,8 +237,8 @@ if __name__ == '__main__':
                 test_date = dates_to_download[0]
                 test_ds = test_date.strftime('%Y-%m-%d')
                 download_one_day(clean, None, test_date)
-                t_blob = bucket.blob(f"Data/TradesQuotes/{clean}/{clean}_trades_{test_ds}.parquet")
-                q_blob = bucket.blob(f"Data/TradesQuotes/{clean}/{clean}_quotes_{test_ds}.parquet")
+                t_blob = _get_bucket().blob(f"Data/TradesQuotes/{clean}/{clean}_trades_{test_ds}.parquet")
+                q_blob = _get_bucket().blob(f"Data/TradesQuotes/{clean}/{clean}_quotes_{test_ds}.parquet")
                 if t_blob.exists() and q_blob.exists():
                     t_blob.reload()
                     q_blob.reload()
@@ -233,23 +254,30 @@ if __name__ == '__main__':
                 done_count = 0
                 total_to_do = len(dates_to_download)
 
-                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    futures = {
-                        executor.submit(download_one_day, clean, None, d): d
-                        for d in dates_to_download
-                    }
+                for batch_start in range(0, total_to_do, BATCH_SIZE):
+                    batch = dates_to_download[batch_start:batch_start + BATCH_SIZE]
+                    _refresh_bucket()
 
-                    for future in as_completed(futures):
-                        status, date_str, info = future.result()
-                        done_count += 1
-                        if status == 'holiday':
-                            ticker_downloaded += 1
-                        elif status == 'ok':
-                            ticker_downloaded += 1
-                            print(f"      [{done_count}/{total_to_do}] {date_str}  {info}")
-                        elif status == 'error':
-                            ticker_errors += 1
-                            print(f"      [{done_count}/{total_to_do}] {date_str}  ERROR: {info}")
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = {
+                            executor.submit(download_one_day, clean, None, d): d
+                            for d in batch
+                        }
+
+                        for future in as_completed(futures):
+                            status, date_str, info = future.result()
+                            done_count += 1
+                            if status == 'holiday':
+                                ticker_downloaded += 1
+                            elif status == 'ok':
+                                ticker_downloaded += 1
+                                if done_count % 10 == 0 or done_count == total_to_do:
+                                    print(f"      [{done_count}/{total_to_do}] {date_str}  {info}")
+                            elif status == 'error':
+                                ticker_errors += 1
+                                print(f"      [{done_count}/{total_to_do}] {date_str}  ERROR: {info}")
+
+                    gc.collect()
 
         elapsed = time.time() - t_start
         print(f"      Done: {ticker_downloaded} downloaded, {ticker_skipped} cached, "

@@ -45,21 +45,22 @@ GCS_OHLCV_DIR   = f"gs://{BUCKET_NAME}/Data/Inference"
 # All tickers from daily_ohlcv_1 + daily_ohlcv_2
 TARGET_TICKERS = [
     # Batch 1 (A-K)
-    'ACHR', 'ALAB', 'AMD', 'APLD', 'ASTS', 'AVAV', 'BBAI',
-    'BE', 'BGDE', 'BHP', 'BITF', 'BKSY', 'BTBT',
-    'CAT', 'CCJ', 'CEG', 'CIFR', 'CLSK', 'COIN', 'COP', 'CORZ', 'CVX',
+    'ACHR', 'ACMR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV',
+    'BBAI', 'BE', 'BEAM', 'BGDE', 'BHP', 'BITF', 'BKSY', 'BTBT',
+    'CAT', 'CCJ', 'CEG', 'CIFR', 'CLSK', 'COIN', 'COP', 'CORZ', 'CRDO', 'CVX',
     'DUK', 'EQIX', 'ETN', 'FCEL', 'FCX', 'FLNC',
     'GD', 'GE', 'GEV', 'HOOD', 'HUT', 'IREN', 'JOBY', 'KEEL', 'KTOS',
     # Batch 2 (L-X)
     'LHX', 'LIN', 'LMT', 'LUNR', 'MARA', 'MIGI', 'MNTS',
-    'MOD', 'MP', 'MSTR', 'MU', 'MVIS', 'NBIS', 'NEE', 'NNDM', 'NOC', 'NVDA',
-    'OKLO', 'PL', 'PLTR', 'PLUG', 'POWL',
+    'MOD', 'MP', 'MRNA', 'MSTR', 'MU', 'MVIS', 'MXL',
+    'NBIS', 'NEE', 'NEOV', 'NNE', 'NNDM', 'NOC', 'NTLA', 'NVDA',
+    'OKLO', 'ONDS', 'PL', 'PLTR', 'PLUG', 'POWL',
     'RCAT', 'RDW', 'RIOT', 'RKLB', 'RTX',
-    'SMCI', 'SMR', 'SOUN', 'SPIR',
-    'TSLA', 'VOYG', 'VRT', 'VST', 'WULF', 'XOM',
+    'SLS', 'SMCI', 'SMR', 'SOUN', 'SPIR',
+    'TSLA', 'TWST', 'UCTT', 'VOYG', 'VRT', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
-CONTEXT_ASSETS = ['I:VIX', 'TLT', 'IWM', 'SPY']
+CONTEXT_ASSETS = ['I:VIX', 'TLT', 'IWM', 'SPY', 'WGMI', 'X:BTCUSD']
 
 poly_client = RESTClient(POLYGON_API_KEY)
 gcs_client  = gcs_storage.Client()

@@ -24,8 +24,8 @@ warnings.filterwarnings('ignore')
 # ⚙️  CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # S3 deploy tickers (10)
-    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'PL', 'RCAT', 'RIOT',
+    # S3 deploy tickers (11)
+    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'MARA', 'PL', 'RCAT', 'RIOT',
     # Train teachers needed for model inference (not already above)
     'ASTS', 'BBAI', 'LUNR', 'MVIS', 'WULF',
     # Additional tickers for broader WF coverage
@@ -78,9 +78,9 @@ def _is_complete_trading_day(gcs_uri, kind):
         else:
             col = pd.to_datetime(col, utc=True)
         last_ts = col.max()
-        # Market closes ~20:00 UTC; if last timestamp is before 17:00 UTC,
-        # the file is almost certainly incomplete (pre-market or early session)
-        return last_ts.hour >= 17
+        # Market closes ~20:00 UTC (1:00 PM PT); require last trade >= 20:00
+        # to confirm full session coverage (not mid-day truncation)
+        return last_ts.hour >= 20
     except Exception:
         return False
 
