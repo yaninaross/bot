@@ -1,14 +1,18 @@
 """
-compare_400_vs_410.py — Head-to-head: Exp 400 (alpha=2.0) vs Exp 410 (alpha=1.0)
-=================================================================================
-Both are SHORT/dump models trained with the same architecture but different
-ASL alpha_pos values. Compares WF optimization results from BQ:
-  A. Overall viability — side-by-side mode summary
-  B. Per-ticker head-to-head (best config from per-seed + ensemble)
-  C. OPT → VAL → TEST degradation cascade
-  D. Mode comparison — which modes benefit from alpha change
-  E. Seed stability comparison
-  F. Charts (scatter, delta bar, degradation, mode boxplot)
+compare_400_vs_410.py — Exp 400 vs 401 vs 410 — SHORT/Dump Fold Robustness & Alpha Comparison
+===============================================================================================
+Queries BQ for WF optimization results and splits by EXPERIMENT (not just model_version):
+  - 400 (alpha=2.0, cutoff Aug 2025) — model_version='robust_wf_v12_short'
+  - 401 (alpha=2.0, cutoff Sep 2025) — model_version='robust_wf_v12_short_a1'
+  - 410 (alpha=1.0, cutoff Aug 2025) — model_version='robust_wf_v12_short_a1'
+
+Sections:
+  A. Overall viability — side-by-side mode summary (3 experiments)
+  B. Fold robustness — 400 vs 401 per-ticker consistency (main analysis)
+  C. Alpha comparison — 400 vs 410 head-to-head (if enough 410 data)
+  D. Degradation cascade — OPT → VAL → TEST retention
+  E. Mode comparison — which modes work best per experiment
+  F. Charts (fold scatter, delta bar, deploy candidates, degradation, boxplot, agreement)
 
 Works with partial results. Colab-ready (no if __name__).
 """
@@ -48,11 +52,11 @@ MIN_TEST_TRADES = 3
 
 
 # ==============================================================================
-# LOAD — single query, split by model_version
+# LOAD — single query, split by experiment prefix
 # ==============================================================================
-print(f"{'═'*W}")
-print(f"  EXP 400 (alpha=2.0) vs EXP 410 (alpha=1.0) — SHORT/DUMP HEAD-TO-HEAD")
-print(f"{'═'*W}")
+print(f"{'='*W}")
+print(f"  EXP 400 vs 401 vs 410 — SHORT/DUMP FOLD ROBUSTNESS & ALPHA COMPARISON")
+print(f"{'='*W}")
 
 q = f"""
 SELECT
@@ -69,67 +73,54 @@ SELECT
     run_timestamp
 FROM `{BQ_TABLE}`
 WHERE model_version IN ('{MV_400}', '{MV_410}')
-ORDER BY model_version, ticker, tpsl_mode, seed
+ORDER BY experiment, ticker, tpsl_mode, seed
 """
 df_all = bq.query(q).to_dataframe()
 
-df_400 = df_all[df_all['model_version'] == MV_400].copy()
-df_410 = df_all[df_all['model_version'] == MV_410].copy()
+df_400 = df_all[df_all['experiment'].str.startswith('400')].copy()
+df_401 = df_all[df_all['experiment'].str.startswith('401')].copy()
+df_410 = df_all[df_all['experiment'].str.startswith('410')].copy()
 
-ps_400 = df_400[df_400['is_ensemble'] != True].copy()
-en_400 = df_400[df_400['is_ensemble'] == True].copy()
-ps_410 = df_410[df_410['is_ensemble'] != True].copy()
-en_410 = df_410[df_410['is_ensemble'] == True].copy()
+EXPS = {'400': df_400, '401': df_401, '410': df_410}
+EXP_LABELS = {'400': '400 (a=2.0, Aug)', '401': '401 (a=2.0, Sep)', '410': '410 (a=1.0, Aug)'}
 
-t400 = set(ps_400['ticker'].unique())
-t410 = set(ps_410['ticker'].unique())
-overlap = sorted(t400 & t410)
-only_400 = sorted(t400 - t410)
-only_410 = sorted(t410 - t400)
+ps, en = {}, {}
+for eid, df in EXPS.items():
+    ps[eid] = df[df['is_ensemble'] != True].copy()
+    en[eid] = df[df['is_ensemble'] == True].copy()
 
-print(f"\n  Exp 400 (alpha=2.0): {len(ps_400)} per-seed, {len(en_400)} ensemble, "
-      f"{len(t400)} tickers")
-print(f"  Exp 410 (alpha=1.0): {len(ps_410)} per-seed, {len(en_410)} ensemble, "
-      f"{len(t410)} tickers")
-print(f"  Overlap: {len(overlap)}  |  400-only: {len(only_400)}  |  410-only: {len(only_410)}")
-if only_400:
-    print(f"  400-only: {', '.join(only_400[:20])}{'...' if len(only_400) > 20 else ''}")
-if only_410:
-    print(f"  410-only: {', '.join(only_410[:20])}{'...' if len(only_410) > 20 else ''}")
+tsets = {eid: set(ps[eid]['ticker'].unique()) for eid in EXPS}
+overlap_400_401 = sorted(tsets['400'] & tsets['401'])
+overlap_400_410 = sorted(tsets['400'] & tsets['410'])
+overlap_all = sorted(tsets['400'] & tsets['401'] & tsets['410'])
 
-print(f"\n  Scored by BOTH ({len(overlap)}): {', '.join(overlap) if overlap else 'none yet'}")
+print(f"\n  Loaded {len(df_all)} total rows from BQ")
+for eid in EXPS:
+    print(f"  Exp {EXP_LABELS[eid]}: {len(ps[eid])} per-seed, {len(en[eid])} ensemble, "
+          f"{len(tsets[eid])} tickers")
+print(f"\n  Overlap 400∩401: {len(overlap_400_401)}  |  400∩410: {len(overlap_400_410)}  |  "
+      f"All three: {len(overlap_all)}")
 
-if not overlap:
-    print(f"\n  ⚠ NO OVERLAPPING TICKERS — cannot compare. Wait for more 410 results.")
+if not overlap_400_401 and not overlap_400_410:
+    print(f"\n  No overlapping tickers — cannot compare. Wait for more results.")
     raise SystemExit
 
-print(f"\n  ★ All comparisons below use ONLY the {len(overlap)} overlapping tickers.")
-
-ps_400 = ps_400[ps_400['ticker'].isin(overlap)].copy()
-en_400 = en_400[en_400['ticker'].isin(overlap)].copy()
-ps_410 = ps_410[ps_410['ticker'].isin(overlap)].copy()
-en_410 = en_410[en_410['ticker'].isin(overlap)].copy()
-
 
 # ==============================================================================
-# HELPER: best per ticker (merge per-seed + ensemble, same as analyze scripts)
+# HELPER: best per ticker
 # ==============================================================================
 def best_per_ticker(per_seed, ensemble):
-    """Returns dict {ticker: (test_pnl, mode, source_label, opt_pnl, val_pnl, test_wr, test_n)}"""
     result = {}
-
     if len(per_seed) > 0:
         for (ticker, mode), grp in per_seed.groupby(['ticker', 'tpsl_mode']):
-            best_seed = grp.loc[grp['opt_avg_pnl'].idxmax()]
-            pnl = best_seed['val_b_avg_pnl']
-            src = f"S{int(best_seed['seed'])}"
+            best = grp.loc[grp['opt_avg_pnl'].idxmax()]
+            pnl = best['val_b_avg_pnl']
+            src = f"S{int(best['seed'])}"
             if ticker not in result or pnl > result[ticker][0]:
                 result[ticker] = (pnl, mode, src,
-                                  best_seed['opt_avg_pnl'],
-                                  best_seed['val_a_avg_pnl'],
-                                  best_seed['val_b_win_rate'],
-                                  int(best_seed['val_b_count']) if pd.notna(best_seed['val_b_count']) else 0)
-
+                                  best['opt_avg_pnl'], best['val_a_avg_pnl'],
+                                  best['val_b_win_rate'],
+                                  int(best['val_b_count']) if pd.notna(best['val_b_count']) else 0)
     if len(ensemble) > 0:
         for _, r in ensemble.iterrows():
             ticker = r['ticker']
@@ -137,296 +128,280 @@ def best_per_ticker(per_seed, ensemble):
             mode = r['tpsl_mode'] or 'static'
             if ticker not in result or pnl > result[ticker][0]:
                 result[ticker] = (pnl, mode, 'ENS',
-                                  r['opt_avg_pnl'],
-                                  r['val_a_avg_pnl'],
+                                  r['opt_avg_pnl'], r['val_a_avg_pnl'],
                                   r['val_b_win_rate'],
                                   int(r['val_b_count']) if pd.notna(r['val_b_count']) else 0)
     return result
 
 
-best_400 = best_per_ticker(ps_400, en_400)
-best_410 = best_per_ticker(ps_410, en_410)
+best = {eid: best_per_ticker(ps[eid], en[eid]) for eid in EXPS}
 
 
 # ==============================================================================
-# A. OVERALL VIABILITY — side-by-side mode summary
+# A. OVERALL VIABILITY — three-way mode summary
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  A. OVERALL VIABILITY — SIDE-BY-SIDE MODE SUMMARY")
-print(f"{'═'*W}")
+print(f"\n\n{'='*W}")
+print(f"  A. OVERALL VIABILITY — THREE-WAY MODE SUMMARY")
+print(f"{'='*W}")
 
-all_modes = sorted(set(ps_400['tpsl_mode'].dropna().unique()) |
-                   set(ps_410['tpsl_mode'].dropna().unique()))
+all_modes = sorted(set().union(*(ps[e]['tpsl_mode'].dropna().unique() for e in EXPS if len(ps[e]) > 0)))
 
-print(f"\n  {'Mode':<15} │ {'── EXP 400 (alpha=2.0) ──────────────':} │ "
-      f"{'── EXP 410 (alpha=1.0) ──────────────':} │ {'Winner':}")
-print(f"  {'':15} │ {'OPT':>7} {'VAL':>7} {'TEST':>8} {'T+':>4} {'Deg':>5} │ "
-      f"{'OPT':>7} {'VAL':>7} {'TEST':>8} {'T+':>4} {'Deg':>5} │")
-print(f"  {'─'*15} │ {'─'*7} {'─'*7} {'─'*8} {'─'*4} {'─'*5} │ "
-      f"{'─'*7} {'─'*7} {'─'*8} {'─'*4} {'─'*5} │ {'─'*8}")
+hdr_parts = []
+for eid in EXPS:
+    hdr_parts.append(f"{'── ' + eid + ' ──────────────────':}")
+sep_parts = []
+for _ in EXPS:
+    sep_parts.append(f"{'─'*7} {'─'*7} {'─'*8} {'─'*4} {'─'*5}")
+
+print(f"\n  {'Mode':<15} │ " + " │ ".join(hdr_parts))
+print(f"  {'':15} │ " + " │ ".join(
+    f"{'OPT':>7} {'VAL':>7} {'TEST':>8} {'T+':>4} {'Deg':>5}" for _ in EXPS))
+print(f"  {'─'*15} │ " + " │ ".join(sep_parts))
 
 for mode in all_modes:
-    md4 = ps_400[ps_400['tpsl_mode'] == mode]
-    md1 = ps_410[ps_410['tpsl_mode'] == mode]
+    parts = []
+    test_vals = {}
+    for eid in EXPS:
+        md = ps[eid][ps[eid]['tpsl_mode'] == mode]
+        if len(md) >= 3:
+            o = md['opt_avg_pnl'].mean()
+            v = md['val_a_avg_pnl'].mean()
+            t = md['val_b_avg_pnl'].mean()
+            tp = (md['val_b_avg_pnl'] > 0).sum()
+            d = 1 - t / o if o > 0 else 0
+            parts.append(f"{o:>+6.2%} {v:>+6.2%} {t:>+7.2%} {tp:>4} {d:>+4.0%}")
+            test_vals[eid] = t
+        else:
+            parts.append(f"{'—':>7} {'—':>7} {'—':>8} {'—':>4} {'—':>5}")
+    print(f"  {mode:<15} │ " + " │ ".join(parts))
 
-    if len(md4) > 0:
-        o4 = md4['opt_avg_pnl'].mean()
-        v4 = md4['val_a_avg_pnl'].mean()
-        t4 = md4['val_b_avg_pnl'].mean()
-        tp4 = (md4['val_b_avg_pnl'] > 0).sum()
-        d4 = 1 - t4 / o4 if o4 > 0 else 0
-        s4 = f"{o4:>+6.2%} {v4:>+6.2%} {t4:>+7.2%} {tp4:>4} {d4:>+4.0%}"
-    else:
-        t4 = None
-        s4 = f"{'—':>7} {'—':>7} {'—':>8} {'—':>4} {'—':>5}"
-
-    if len(md1) > 0:
-        o1 = md1['opt_avg_pnl'].mean()
-        v1 = md1['val_a_avg_pnl'].mean()
-        t1 = md1['val_b_avg_pnl'].mean()
-        tp1 = (md1['val_b_avg_pnl'] > 0).sum()
-        d1 = 1 - t1 / o1 if o1 > 0 else 0
-        s1 = f"{o1:>+6.2%} {v1:>+6.2%} {t1:>+7.2%} {tp1:>4} {d1:>+4.0%}"
-    else:
-        t1 = None
-        s1 = f"{'—':>7} {'—':>7} {'—':>8} {'—':>4} {'—':>5}"
-
-    if t4 is not None and t1 is not None:
-        winner = '400' if t4 > t1 else '410' if t1 > t4 else 'TIE'
-    elif t4 is not None:
-        winner = '400'
-    elif t1 is not None:
-        winner = '410'
-    else:
-        winner = '—'
-    print(f"  {mode:<15} │ {s4} │ {s1} │ {winner:>8}")
-
-# Grand totals
-print(f"  {'─'*15} │ {'─'*7} {'─'*7} {'─'*8} {'─'*4} {'─'*5} │ "
-      f"{'─'*7} {'─'*7} {'─'*8} {'─'*4} {'─'*5} │ {'─'*8}")
-for label, ps in [('400', ps_400), ('410', ps_410)]:
-    if len(ps) > 0:
-        o = ps['opt_avg_pnl'].mean()
-        v = ps['val_a_avg_pnl'].mean()
-        t = ps['val_b_avg_pnl'].mean()
+print(f"  {'─'*15} │ " + " │ ".join(sep_parts))
+for eid in EXPS:
+    p = ps[eid]
+    if len(p) > 0:
+        o = p['opt_avg_pnl'].mean()
+        v = p['val_a_avg_pnl'].mean()
+        t = p['val_b_avg_pnl'].mean()
         d = 1 - t / o if o > 0 else 0
-        tp = (ps['val_b_avg_pnl'] > 0).sum()
-        print(f"  {'ALL ('+label+')':<15} │ {o:>+6.2%} {v:>+6.2%} {t:>+7.2%} {tp:>4} {d:>+4.0%} │")
+        tp = (p['val_b_avg_pnl'] > 0).sum()
+        print(f"  {'ALL ('+eid+')':<15} │ {o:>+6.2%} {v:>+6.2%} {t:>+7.2%} {tp:>4} {d:>+4.0%} │")
 
-grand_400 = ps_400['val_b_avg_pnl'].mean() if len(ps_400) > 0 else None
-grand_410 = ps_410['val_b_avg_pnl'].mean() if len(ps_410) > 0 else None
-if grand_400 is not None and grand_410 is not None:
-    delta = grand_410 - grand_400
-    pct = delta / abs(grand_400) * 100 if grand_400 != 0 else 0
-    print(f"\n  ★ Grand mean TEST:  400={grand_400:+.3%}  410={grand_410:+.3%}  "
-          f"Δ={delta:+.3%} ({pct:+.0f}%)")
-
-
-# ==============================================================================
-# B. PER-TICKER HEAD-TO-HEAD
-# ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  B. PER-TICKER HEAD-TO-HEAD — Best TEST PnL (per-seed or ensemble)")
-print(f"{'═'*W}")
-
-print(f"\n  {'Ticker':<7} │ {'── 400 (alpha=2.0) ──────────────────':} │ "
-      f"{'── 410 (alpha=1.0) ──────────────────':} │ {'Winner':>6} {'Δ':>8}")
-print(f"  {'':7} │ {'Mode':<14} {'Src':>3} {'TEST':>7} {'WR':>4} {'N':>3} │ "
-      f"{'Mode':<14} {'Src':>3} {'TEST':>7} {'WR':>4} {'N':>3} │")
-print(f"  {'─'*7} │ {'─'*14} {'─'*3} {'─'*7} {'─'*4} {'─'*3} │ "
-      f"{'─'*14} {'─'*3} {'─'*7} {'─'*4} {'─'*3} │ {'─'*6} {'─'*8}")
-
-wins_400 = 0
-wins_410 = 0
-ties = 0
-
-for tk in overlap:
-    b4 = best_400.get(tk)
-    b1 = best_410.get(tk)
-
-    s4 = f"{b4[1]:<14} {b4[2]:>3} {b4[0]:>+6.2%} {b4[5]:>3.0%} {b4[6]:>3}" if b4 else f"{'—':<14} {'':>3} {'—':>7} {'—':>4} {'—':>3}"
-    s1 = f"{b1[1]:<14} {b1[2]:>3} {b1[0]:>+6.2%} {b1[5]:>3.0%} {b1[6]:>3}" if b1 else f"{'—':<14} {'':>3} {'—':>7} {'—':>4} {'—':>3}"
-    v4 = b4[0] if b4 else -999
-    v1 = b1[0] if b1 else -999
-
-    if v4 > v1:
-        winner = '400'
-        wins_400 += 1
-    elif v1 > v4:
-        winner = '410'
-        wins_410 += 1
-    else:
-        winner = 'TIE'
-        ties += 1
-    delta_str = f"{v1 - v4:+.2%}" if v4 != -999 and v1 != -999 else '—'
-
-    print(f"  {tk:<7} │ {s4} │ {s1} │ {winner:>6} {delta_str:>8}")
-
-print(f"\n  Score: 400 wins {wins_400} — 410 wins {wins_410} — TIE/N/A {ties}")
-
-# Deployability comparison
-dep_400 = sum(1 for t, v in best_400.items() if t in overlap and v[0] >= DEPLOY_PNL_THRESHOLD and v[6] >= MIN_TEST_TRADES)
-dep_410 = sum(1 for t, v in best_410.items() if t in overlap and v[0] >= DEPLOY_PNL_THRESHOLD and v[6] >= MIN_TEST_TRADES)
-print(f"  Deployable (≥{DEPLOY_PNL_THRESHOLD:.1%} + ≥{MIN_TEST_TRADES} trades):  "
-      f"400={dep_400}  410={dep_410}")
+grand = {}
+for eid in EXPS:
+    if len(ps[eid]) > 0:
+        grand[eid] = ps[eid]['val_b_avg_pnl'].mean()
+parts = [f"{eid}={v:+.3%}" for eid, v in grand.items()]
+print(f"\n  Grand mean TEST:  " + "  ".join(parts))
 
 
 # ==============================================================================
-# C. DEGRADATION CASCADE — OPT → VAL → TEST
+# B. FOLD ROBUSTNESS — 400 vs 401
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  C. DEGRADATION — OPT → VAL → TEST RETENTION")
-print(f"{'═'*W}")
+print(f"\n\n{'='*W}")
+print(f"  B. FOLD ROBUSTNESS — 400 vs 401 (same model, different cutoffs)")
+print(f"{'='*W}")
 
-def cascade_stats(per_seed, label):
-    if len(per_seed) == 0:
-        print(f"\n  {label}: no data")
-        return None
-    pos = per_seed[per_seed['opt_avg_pnl'] > 0].copy()
+if not overlap_400_401:
+    print(f"\n  No overlapping tickers between 400 and 401.")
+else:
+    print(f"\n  {len(overlap_400_401)} tickers scored by BOTH folds.")
+
+    print(f"\n  {'Ticker':<7} │ {'400 TEST':>8} {'WR':>4} {'N':>3} │ "
+          f"{'401 TEST':>8} {'WR':>4} {'N':>3} │ "
+          f"{'Avg TEST':>8} │ {'Both+':>5} {'Deploy':>6}")
+    print(f"  {'─'*7} │ {'─'*8} {'─'*4} {'─'*3} │ "
+          f"{'─'*8} {'─'*4} {'─'*3} │ "
+          f"{'─'*8} │ {'─'*5} {'─'*6}")
+
+    robustness_rows = []
+    for tk in overlap_400_401:
+        b4 = best['400'].get(tk)
+        b1 = best['401'].get(tk)
+        if not b4 or not b1:
+            continue
+
+        t4, wr4, n4 = b4[0], b4[5], b4[6]
+        t1, wr1, n1 = b1[0], b1[5], b1[6]
+        avg_test = (t4 + t1) / 2
+        both_pos = t4 > 0 and t1 > 0
+        deployable = (both_pos and avg_test >= DEPLOY_PNL_THRESHOLD
+                      and n4 >= MIN_TEST_TRADES and n1 >= MIN_TEST_TRADES)
+
+        robustness_rows.append({
+            'ticker': tk, 't400': t4, 'wr400': wr4, 'n400': n4,
+            't401': t1, 'wr401': wr1, 'n401': n1,
+            'avg_test': avg_test, 'both_pos': both_pos, 'deployable': deployable,
+        })
+
+    robustness_rows.sort(key=lambda x: x['avg_test'], reverse=True)
+
+    for r in robustness_rows:
+        bp_tag = "YES" if r['both_pos'] else "—"
+        dep_tag = "YES" if r['deployable'] else "—"
+        print(f"  {r['ticker']:<7} │ {r['t400']:>+7.2%} {r['wr400']:>3.0%} {r['n400']:>3} │ "
+              f"{r['t401']:>+7.2%} {r['wr401']:>3.0%} {r['n401']:>3} │ "
+              f"{r['avg_test']:>+7.2%} │ {bp_tag:>5} {dep_tag:>6}")
+
+    n_both_pos = sum(1 for r in robustness_rows if r['both_pos'])
+    n_one_pos = sum(1 for r in robustness_rows if (r['t400'] > 0) != (r['t401'] > 0))
+    n_both_neg = sum(1 for r in robustness_rows if r['t400'] <= 0 and r['t401'] <= 0)
+    n_deploy = sum(1 for r in robustness_rows if r['deployable'])
+
+    print(f"\n  {'─'*80}")
+    print(f"  Both folds positive:  {n_both_pos}/{len(robustness_rows)}  (high confidence)")
+    print(f"  One fold only:        {n_one_pos}/{len(robustness_rows)}  (unstable)")
+    print(f"  Both folds negative:  {n_both_neg}/{len(robustness_rows)}  (reject)")
+    print(f"  Deployable:           {n_deploy}/{len(robustness_rows)}  "
+          f"(both+ AND avg>={DEPLOY_PNL_THRESHOLD:.1%} AND >={MIN_TEST_TRADES} trades)")
+
+    if n_both_pos > 0:
+        bp_rows = [r for r in robustness_rows if r['both_pos']]
+        bp_avg = np.mean([r['avg_test'] for r in bp_rows])
+        bp_med = np.median([r['avg_test'] for r in bp_rows])
+        print(f"\n  Both-positive tickers:  mean avg TEST = {bp_avg:+.2%}  |  "
+              f"median = {bp_med:+.2%}")
+
+    vals_400 = [r['t400'] for r in robustness_rows]
+    vals_401 = [r['t401'] for r in robustness_rows]
+    if len(vals_400) >= 3:
+        corr = np.corrcoef(vals_400, vals_401)[0, 1]
+        print(f"  Cross-fold correlation: r = {corr:.2f}")
+
+    if n_deploy > 0:
+        print(f"\n  DEPLOY CANDIDATES (both folds positive, avg >= {DEPLOY_PNL_THRESHOLD:.1%}):")
+        for r in robustness_rows:
+            if r['deployable']:
+                print(f"    {r['ticker']:<7}  avg TEST={r['avg_test']:+.2%}  "
+                      f"(400={r['t400']:+.2%}, 401={r['t401']:+.2%})")
+
+
+# ==============================================================================
+# C. ALPHA COMPARISON — 400 vs 410
+# ==============================================================================
+print(f"\n\n{'='*W}")
+print(f"  C. ALPHA COMPARISON — 400 (alpha=2.0) vs 410 (alpha=1.0)")
+print(f"{'='*W}")
+
+if len(overlap_400_410) < 3:
+    print(f"\n  Only {len(overlap_400_410)} overlapping tickers — not enough data for comparison.")
+    print(f"  410 has {len(tsets['410'])} tickers total. Wait for more 410 WF results.")
+    if overlap_400_410:
+        print(f"  Available: {', '.join(overlap_400_410)}")
+        for tk in overlap_400_410:
+            b4 = best['400'].get(tk)
+            b1 = best['410'].get(tk)
+            if b4 and b1:
+                print(f"    {tk}: 400={b4[0]:+.2%}  410={b1[0]:+.2%}  Δ={b1[0]-b4[0]:+.2%}")
+else:
+    print(f"\n  {'Ticker':<7} │ {'── 400 (alpha=2.0) ─────────────':} │ "
+          f"{'── 410 (alpha=1.0) ─────────────':} │ {'Winner':>6} {'Δ':>8}")
+    print(f"  {'':7} │ {'Mode':<14} {'Src':>3} {'TEST':>7} {'WR':>4} {'N':>3} │ "
+          f"{'Mode':<14} {'Src':>3} {'TEST':>7} {'WR':>4} {'N':>3} │")
+    print(f"  {'─'*7} │ {'─'*14} {'─'*3} {'─'*7} {'─'*4} {'─'*3} │ "
+          f"{'─'*14} {'─'*3} {'─'*7} {'─'*4} {'─'*3} │ {'─'*6} {'─'*8}")
+
+    wins_400 = 0
+    wins_410 = 0
+    for tk in overlap_400_410:
+        b4 = best['400'].get(tk)
+        b1 = best['410'].get(tk)
+        s4 = f"{b4[1]:<14} {b4[2]:>3} {b4[0]:>+6.2%} {b4[5]:>3.0%} {b4[6]:>3}" if b4 else f"{'—':<14} {'':>3} {'—':>7} {'—':>4} {'—':>3}"
+        s1 = f"{b1[1]:<14} {b1[2]:>3} {b1[0]:>+6.2%} {b1[5]:>3.0%} {b1[6]:>3}" if b1 else f"{'—':<14} {'':>3} {'—':>7} {'—':>4} {'—':>3}"
+        v4 = b4[0] if b4 else -999
+        v1 = b1[0] if b1 else -999
+        if v4 > v1:
+            winner = '400'; wins_400 += 1
+        elif v1 > v4:
+            winner = '410'; wins_410 += 1
+        else:
+            winner = 'TIE'
+        delta_str = f"{v1 - v4:+.2%}" if v4 != -999 and v1 != -999 else '—'
+        print(f"  {tk:<7} │ {s4} │ {s1} │ {winner:>6} {delta_str:>8}")
+
+    print(f"\n  Score: 400 wins {wins_400} — 410 wins {wins_410}")
+
+
+# ==============================================================================
+# D. DEGRADATION CASCADE — OPT → VAL → TEST
+# ==============================================================================
+print(f"\n\n{'='*W}")
+print(f"  D. DEGRADATION — OPT → VAL → TEST RETENTION")
+print(f"{'='*W}")
+
+cascade = {}
+for eid in EXPS:
+    p = ps[eid]
+    if len(p) == 0:
+        print(f"\n  ── {EXP_LABELS[eid]}: no data ──")
+        continue
+    pos = p[p['opt_avg_pnl'] > 0].copy()
     if len(pos) == 0:
-        print(f"\n  {label}: no positive OPT rows")
-        return None
-
-    pos['val_ratio'] = pos['val_a_avg_pnl'] / pos['opt_avg_pnl']
-    pos['test_ratio'] = pos['val_b_avg_pnl'] / pos['opt_avg_pnl']
+        print(f"\n  ── {EXP_LABELS[eid]}: no positive OPT rows ──")
+        continue
 
     o = pos['opt_avg_pnl'].mean()
     v = pos['val_a_avg_pnl'].mean()
     t = pos['val_b_avg_pnl'].mean()
     val_ret = v / o if o != 0 else 0
     test_ret = t / o if o != 0 else 0
-
     n_val_pos = (pos['val_a_avg_pnl'] > 0).sum()
     n_test_pos = (pos['val_b_avg_pnl'] > 0).sum()
     n_flipped = ((pos['val_a_avg_pnl'] > 0) & (pos['val_b_avg_pnl'] <= 0)).sum()
     flip_rate = n_flipped / n_val_pos if n_val_pos > 0 else 0
+    med_ratio = (pos['val_b_avg_pnl'] / pos['opt_avg_pnl']).clip(-2, 3).median()
 
-    med_test_ratio = pos['test_ratio'].clip(-2, 3).median()
+    cascade[eid] = {'test_ret': test_ret, 'flip_rate': flip_rate, 'med_ratio': med_ratio}
 
-    print(f"\n  ── {label} ──")
+    print(f"\n  ── {EXP_LABELS[eid]} ──")
     print(f"  OPT mean:   {o:>+.3%}")
     print(f"  VAL mean:   {v:>+.3%}  (retention: {val_ret:.0%})")
     print(f"  TEST mean:  {t:>+.3%}  (retention: {test_ret:.0%})")
-    print(f"  Median TEST/OPT ratio: {med_test_ratio:.2f}")
+    print(f"  Median TEST/OPT ratio: {med_ratio:.2f}")
     print(f"  VAL>0: {n_val_pos}  TEST>0: {n_test_pos}  "
           f"Flipped (VAL>0→TEST≤0): {n_flipped} ({flip_rate:.0%})")
 
-    return {'opt': o, 'val': v, 'test': t, 'val_ret': val_ret, 'test_ret': test_ret,
-            'med_ratio': med_test_ratio, 'flip_rate': flip_rate}
-
-c400 = cascade_stats(ps_400, "EXP 400 (alpha=2.0)")
-c410 = cascade_stats(ps_410, "EXP 410 (alpha=1.0)")
-
-if c400 and c410:
-    print(f"\n  ★ Retention comparison:")
-    print(f"    OPT→TEST retention:  400={c400['test_ret']:.0%}  410={c410['test_ret']:.0%}  "
-          f"→ {'410 retains more' if c410['test_ret'] > c400['test_ret'] else '400 retains more'}")
-    print(f"    Flip rate:           400={c400['flip_rate']:.0%}  410={c410['flip_rate']:.0%}  "
-          f"→ {'410 flips less' if c410['flip_rate'] < c400['flip_rate'] else '400 flips less'}")
+if '400' in cascade and '401' in cascade:
+    print(f"\n  Fold comparison:")
+    print(f"    OPT→TEST retention:  400={cascade['400']['test_ret']:.0%}  "
+          f"401={cascade['401']['test_ret']:.0%}")
+    print(f"    Flip rate:           400={cascade['400']['flip_rate']:.0%}  "
+          f"401={cascade['401']['flip_rate']:.0%}")
 
 
 # ==============================================================================
-# D. MODE COMPARISON — which modes benefit from alpha change
+# E. MODE COMPARISON
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  D. MODE COMPARISON — WHICH MODES BENEFIT FROM alpha=1.0?")
-print(f"{'═'*W}")
+print(f"\n\n{'='*W}")
+print(f"  E. MODE COMPARISON — BEST MODES PER EXPERIMENT")
+print(f"{'='*W}")
 
-print(f"\n  {'Mode':<15} │ {'400 TEST':>9} {'Med':>7} {'%Pos':>5} │ "
-      f"{'410 TEST':>9} {'Med':>7} {'%Pos':>5} │ {'Δ Mean':>8} {'Winner':>6}")
-print(f"  {'─'*15} │ {'─'*9} {'─'*7} {'─'*5} │ "
-      f"{'─'*9} {'─'*7} {'─'*5} │ {'─'*8} {'─'*6}")
+hdr = f"  {'Mode':<15}"
+for eid in EXPS:
+    hdr += f" │ {'─ '+eid+' ────────────────────────':}"
+print(f"\n{hdr}")
+
+sub = f"  {'':15}"
+for _ in EXPS:
+    sub += f" │ {'Mean TEST':>9} {'Med':>7} {'%Pos':>5}"
+print(sub)
+
+sep = f"  {'─'*15}"
+for _ in EXPS:
+    sep += f" │ {'─'*9} {'─'*7} {'─'*5}"
+print(sep)
 
 for mode in all_modes:
-    md4 = ps_400[ps_400['tpsl_mode'] == mode]
-    md1 = ps_410[ps_410['tpsl_mode'] == mode]
-
-    if len(md4) > 0:
-        mean4 = md4['val_b_avg_pnl'].mean()
-        med4 = md4['val_b_avg_pnl'].median()
-        pp4 = (md4['val_b_avg_pnl'] > 0).mean() * 100
-        s4 = f"{mean4:>+8.2%} {med4:>+6.2%} {pp4:>4.0f}%"
-    else:
-        mean4 = None
-        s4 = f"{'—':>9} {'—':>7} {'—':>5}"
-
-    if len(md1) > 0:
-        mean1 = md1['val_b_avg_pnl'].mean()
-        med1 = md1['val_b_avg_pnl'].median()
-        pp1 = (md1['val_b_avg_pnl'] > 0).mean() * 100
-        s1 = f"{mean1:>+8.2%} {med1:>+6.2%} {pp1:>4.0f}%"
-    else:
-        mean1 = None
-        s1 = f"{'—':>9} {'—':>7} {'—':>5}"
-
-    if mean4 is not None and mean1 is not None:
-        delta = mean1 - mean4
-        winner = '410' if delta > 0 else '400' if delta < 0 else 'TIE'
-        print(f"  {mode:<15} │ {s4} │ {s1} │ {delta:>+7.2%} {winner:>6}")
-    else:
-        print(f"  {mode:<15} │ {s4} │ {s1} │ {'—':>8} {'—':>6}")
-
-
-# ==============================================================================
-# E. SEED STABILITY COMPARISON
-# ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  E. SEED STABILITY — CROSS-SEED CONSISTENCY ON OVERLAPPING TICKERS")
-print(f"{'═'*W}")
-
-if overlap:
-    print(f"\n  {'Ticker':<7} {'Mode':<12} │ {'── 400 ────────────────':} │ "
-          f"{'── 410 ────────────────':} │ {'More stable':}")
-    print(f"  {'':7} {'':12} │ {'Seeds':>5} {'T+':>3} {'Agree':>5} {'Spread':>6} │ "
-          f"{'Seeds':>5} {'T+':>3} {'Agree':>5} {'Spread':>6} │")
-    print(f"  {'─'*7} {'─'*12} │ {'─'*5} {'─'*3} {'─'*5} {'─'*6} │ "
-          f"{'─'*5} {'─'*3} {'─'*5} {'─'*6} │ {'─'*11}")
-
-    stable_400 = 0
-    stable_410 = 0
-    for tk in overlap:
-        for mode in all_modes:
-            g4 = ps_400[(ps_400['ticker'] == tk) & (ps_400['tpsl_mode'] == mode)]
-            g1 = ps_410[(ps_410['ticker'] == tk) & (ps_410['tpsl_mode'] == mode)]
-            if len(g4) < 3 and len(g1) < 3:
-                continue
-
-            if len(g4) >= 3:
-                n4 = len(g4)
-                tp4 = (g4['val_b_avg_pnl'] > 0).sum()
-                ag4 = tp4 / n4
-                sp4 = g4['val_b_avg_pnl'].std()
-                s4 = f"{n4:>5} {tp4:>3} {ag4:>4.0%} {sp4:>5.2%}"
-            else:
-                ag4 = 0
-                sp4 = 1
-                s4 = f"{'—':>5} {'—':>3} {'—':>5} {'—':>6}"
-
-            if len(g1) >= 3:
-                n1 = len(g1)
-                tp1 = (g1['val_b_avg_pnl'] > 0).sum()
-                ag1 = tp1 / n1
-                sp1 = g1['val_b_avg_pnl'].std()
-                s1 = f"{n1:>5} {tp1:>3} {ag1:>4.0%} {sp1:>5.2%}"
-            else:
-                ag1 = 0
-                sp1 = 1
-                s1 = f"{'—':>5} {'—':>3} {'—':>5} {'—':>6}"
-
-            if ag4 > ag1 or (ag4 == ag1 and sp4 < sp1):
-                winner = '400'
-                stable_400 += 1
-            elif ag1 > ag4 or (ag1 == ag4 and sp1 < sp4):
-                winner = '410'
-                stable_410 += 1
-            else:
-                winner = 'TIE'
-
-            print(f"  {tk:<7} {mode:<12} │ {s4} │ {s1} │ {winner:>11}")
-
-    print(f"\n  Stability score: 400={stable_400}  410={stable_410}")
-else:
-    print(f"\n  No overlapping tickers for stability comparison.")
+    line = f"  {mode:<15}"
+    for eid in EXPS:
+        md = ps[eid][ps[eid]['tpsl_mode'] == mode]
+        if len(md) >= 3:
+            mean_t = md['val_b_avg_pnl'].mean()
+            med_t = md['val_b_avg_pnl'].median()
+            pp = (md['val_b_avg_pnl'] > 0).mean() * 100
+            line += f" │ {mean_t:>+8.2%} {med_t:>+6.2%} {pp:>4.0f}%"
+        else:
+            line += f" │ {'—':>9} {'—':>7} {'—':>5}"
+    print(line)
 
 
 # ==============================================================================
@@ -434,33 +409,35 @@ else:
 # ==============================================================================
 print(f"\n  Generating charts...")
 
-fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+fig, axes = plt.subplots(2, 3, figsize=(22, 14))
 
-# Chart 1: Scatter — 400 TEST (x) vs 410 TEST (y) per ticker
+# Chart 1: Scatter — 400 vs 401 TEST PnL per ticker (fold consistency)
 ax = axes[0, 0]
-common_tickers = [t for t in overlap if t in best_400 and t in best_410]
-if common_tickers:
-    x_vals = [best_400[t][0] * 100 for t in common_tickers]
-    y_vals = [best_410[t][0] * 100 for t in common_tickers]
-    colors_sc = ['#2ca02c' if y > x else '#d62728' for x, y in zip(x_vals, y_vals)]
+if overlap_400_401:
+    x_vals = [best['400'][t][0] * 100 for t in overlap_400_401 if t in best['400'] and t in best['401']]
+    y_vals = [best['401'][t][0] * 100 for t in overlap_400_401 if t in best['400'] and t in best['401']]
+    tks = [t for t in overlap_400_401 if t in best['400'] and t in best['401']]
+    colors_sc = ['#2ca02c' if x > 0 and y > 0 else '#d62728' if x <= 0 and y <= 0
+                 else '#ff7f0e' for x, y in zip(x_vals, y_vals)]
     ax.scatter(x_vals, y_vals, c=colors_sc, alpha=0.6, s=40, edgecolors='white', linewidth=0.5)
-    lim = max(max(abs(v) for v in x_vals + y_vals) + 1, 5)
+    lim = max(max(abs(v) for v in x_vals + y_vals) + 1, 5) if x_vals else 5
     ax.plot([-lim, lim], [-lim, lim], 'k--', alpha=0.3, linewidth=1)
     ax.axhline(0, color='black', linewidth=0.5)
     ax.axvline(0, color='black', linewidth=0.5)
-    for i, tk in enumerate(common_tickers):
+    for i, tk in enumerate(tks):
         if abs(x_vals[i]) > 2 or abs(y_vals[i]) > 2:
             ax.annotate(tk, (x_vals[i], y_vals[i]), fontsize=6, alpha=0.7,
                         xytext=(3, 3), textcoords='offset points')
 ax.set_xlabel('Exp 400 TEST PnL (%)')
-ax.set_ylabel('Exp 410 TEST PnL (%)')
-ax.set_title('400 vs 410 TEST PnL per ticker\n(green = 410 wins, red = 400 wins)', fontweight='bold')
+ax.set_ylabel('Exp 401 TEST PnL (%)')
+ax.set_title('Fold Consistency: 400 vs 401 TEST PnL\n(green=both+, red=both-, orange=split)',
+             fontweight='bold')
 ax.grid(True, alpha=0.3)
 
-# Chart 2: Bar chart — per-ticker Δ(410 - 400) TEST PnL
+# Chart 2: Bar — per-ticker Δ(401 - 400) TEST PnL
 ax = axes[0, 1]
-if common_tickers and len(common_tickers) > 0:
-    deltas = [(t, best_410[t][0] - best_400[t][0]) for t in common_tickers]
+if robustness_rows:
+    deltas = [(r['ticker'], r['t401'] - r['t400']) for r in robustness_rows]
     deltas.sort(key=lambda x: x[1], reverse=True)
     tickers_d = [d[0] for d in deltas]
     vals_d = [d[1] * 100 for d in deltas]
@@ -470,48 +447,75 @@ if common_tickers and len(common_tickers) > 0:
     ax.set_yticklabels(tickers_d, fontsize=7)
     ax.axvline(0, color='black', linewidth=0.8)
     ax.invert_yaxis()
-ax.set_xlabel('Δ TEST PnL (%) [410 − 400]')
-ax.set_title('Per-Ticker Advantage\n(green = 410 better, red = 400 better)', fontweight='bold')
+ax.set_xlabel('Δ TEST PnL (%) [401 − 400]')
+ax.set_title('Per-Ticker Fold Delta\n(green = 401 better, red = 400 better)', fontweight='bold')
 ax.grid(True, alpha=0.3, axis='x')
 
-# Chart 3: Grouped bar — OPT→VAL→TEST retention
+# Chart 3: Bar — deploy candidates (both folds positive), sorted by avg TEST
+ax = axes[0, 2]
+if robustness_rows:
+    bp_rows = [r for r in robustness_rows if r['both_pos']]
+    bp_rows.sort(key=lambda x: x['avg_test'], reverse=True)
+    if bp_rows:
+        tickers_bp = [r['ticker'] for r in bp_rows]
+        avg_vals = [r['avg_test'] * 100 for r in bp_rows]
+        colors_bp = ['#2ca02c' if v >= DEPLOY_PNL_THRESHOLD * 100 else '#1f77b4' for v in avg_vals]
+        ax.barh(range(len(tickers_bp)), avg_vals, color=colors_bp, height=0.7)
+        ax.set_yticks(range(len(tickers_bp)))
+        ax.set_yticklabels(tickers_bp, fontsize=8)
+        ax.axvline(DEPLOY_PNL_THRESHOLD * 100, color='red', linewidth=1, linestyle='--',
+                   label=f'Deploy ({DEPLOY_PNL_THRESHOLD:.1%})')
+        ax.axvline(0, color='black', linewidth=0.5)
+        ax.invert_yaxis()
+        ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, 'No tickers positive\nin both folds',
+                ha='center', va='center', transform=ax.transAxes)
+else:
+    ax.text(0.5, 0.5, 'No data', ha='center', va='center', transform=ax.transAxes)
+ax.set_xlabel('Avg TEST PnL (%)')
+ax.set_title('Deploy Candidates\n(positive in BOTH folds)', fontweight='bold')
+ax.grid(True, alpha=0.3, axis='x')
+
+# Chart 4: Grouped bar — OPT→VAL→TEST for all experiments
 ax = axes[1, 0]
-if c400 and c410:
-    labels_c = ['OPT', 'VAL', 'TEST']
-    vals_400 = [c400['opt'] * 100, c400['val'] * 100, c400['test'] * 100]
-    vals_410 = [c410['opt'] * 100, c410['val'] * 100, c410['test'] * 100]
+labels_c = ['OPT', 'VAL', 'TEST']
+exp_with_data = [e for e in EXPS if len(ps[e]) > 0]
+n_exp = len(exp_with_data)
+width = 0.25
+exp_colors = {'400': '#1f77b4', '401': '#ff7f0e', '410': '#2ca02c'}
+for i, eid in enumerate(exp_with_data):
+    p = ps[eid]
+    vals = [p['opt_avg_pnl'].mean() * 100,
+            p['val_a_avg_pnl'].mean() * 100,
+            p['val_b_avg_pnl'].mean() * 100]
     x_pos = np.arange(len(labels_c))
-    width = 0.35
-    ax.bar(x_pos - width/2, vals_400, width, label='400 (alpha=2.0)', color='#1f77b4', alpha=0.8)
-    ax.bar(x_pos + width/2, vals_410, width, label='410 (alpha=1.0)', color='#ff7f0e', alpha=0.8)
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(labels_c, fontsize=11)
-    ax.axhline(0, color='black', linewidth=0.5)
-    for i, (v4, v1) in enumerate(zip(vals_400, vals_410)):
-        ax.text(i - width/2, v4, f'{v4:+.2f}%', ha='center', va='bottom', fontsize=8)
-        ax.text(i + width/2, v1, f'{v1:+.2f}%', ha='center', va='bottom', fontsize=8)
-    ax.legend(fontsize=9)
+    offset = (i - (n_exp - 1) / 2) * width
+    bars = ax.bar(x_pos + offset, vals, width, label=EXP_LABELS[eid],
+                  color=exp_colors[eid], alpha=0.8)
+    for j, v in enumerate(vals):
+        ax.text(x_pos[j] + offset, v, f'{v:+.2f}%', ha='center',
+                va='bottom' if v >= 0 else 'top', fontsize=7)
+ax.set_xticks(np.arange(len(labels_c)))
+ax.set_xticklabels(labels_c, fontsize=11)
+ax.axhline(0, color='black', linewidth=0.5)
+ax.legend(fontsize=8)
 ax.set_ylabel('Mean PnL (%)')
 ax.set_title('OPT → VAL → TEST Pipeline', fontweight='bold')
 ax.grid(True, alpha=0.3, axis='y')
 
-# Chart 4: Box plot — TEST PnL distributions by mode, 400 vs 410
+# Chart 5: Box plot — TEST PnL distributions by mode, all experiments
 ax = axes[1, 1]
 box_data = []
 box_labels = []
 box_colors = []
 for mode in all_modes:
-    md4 = ps_400[ps_400['tpsl_mode'] == mode]['val_b_avg_pnl'].clip(-0.10, 0.15) * 100
-    md1 = ps_410[ps_410['tpsl_mode'] == mode]['val_b_avg_pnl'].clip(-0.10, 0.15) * 100
-    if len(md4) > 0:
-        box_data.append(md4.values)
-        box_labels.append(f'{mode}\n400')
-        box_colors.append('#1f77b4')
-    if len(md1) > 0:
-        box_data.append(md1.values)
-        box_labels.append(f'{mode}\n410')
-        box_colors.append('#ff7f0e')
-
+    for eid in exp_with_data:
+        md = ps[eid][ps[eid]['tpsl_mode'] == mode]
+        if len(md) >= 3:
+            box_data.append((md['val_b_avg_pnl'].clip(-0.10, 0.15) * 100).values)
+            box_labels.append(f'{mode}\n{eid}')
+            box_colors.append(exp_colors[eid])
 if box_data:
     bp = ax.boxplot(box_data, labels=box_labels, patch_artist=True, showfliers=False)
     for patch, color in zip(bp['boxes'], box_colors):
@@ -519,12 +523,34 @@ if box_data:
         patch.set_alpha(0.6)
     ax.axhline(0, color='black', linewidth=0.5)
     ax.axhline(DEPLOY_PNL_THRESHOLD * 100, color='red', linewidth=1, linestyle='--', alpha=0.5)
-    ax.tick_params(axis='x', labelsize=7)
+    ax.tick_params(axis='x', labelsize=6, rotation=45)
 ax.set_ylabel('TEST Avg PnL (%)')
 ax.set_title('TEST PnL Distribution by Mode', fontweight='bold')
 ax.grid(True, alpha=0.3, axis='y')
 
-plt.suptitle('Exp 400 vs 410 — SHORT/Dump alpha_pos Comparison', fontsize=14, fontweight='bold')
+# Chart 6: Fold agreement matrix (2x2 heatmap)
+ax = axes[1, 2]
+if robustness_rows:
+    pp = sum(1 for r in robustness_rows if r['t400'] > 0 and r['t401'] > 0)
+    pn = sum(1 for r in robustness_rows if r['t400'] > 0 and r['t401'] <= 0)
+    np_ = sum(1 for r in robustness_rows if r['t400'] <= 0 and r['t401'] > 0)
+    nn = sum(1 for r in robustness_rows if r['t400'] <= 0 and r['t401'] <= 0)
+    matrix = np.array([[pp, pn], [np_, nn]])
+    im = ax.imshow(matrix, cmap='RdYlGn', aspect='auto')
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(['401+', '401−'])
+    ax.set_yticks([0, 1])
+    ax.set_yticklabels(['400+', '400−'])
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, str(matrix[i, j]), ha='center', va='center',
+                    fontsize=20, fontweight='bold')
+    ax.set_title('Fold Agreement Matrix\n(400 vs 401 TEST PnL sign)', fontweight='bold')
+else:
+    ax.text(0.5, 0.5, 'No overlap data', ha='center', va='center', transform=ax.transAxes)
+
+plt.suptitle('Exp 400 vs 401 vs 410 — SHORT/Dump Fold Robustness & Alpha Comparison',
+             fontsize=14, fontweight='bold')
 plt.tight_layout()
 plt.savefig('/tmp/compare_400_vs_410.png', dpi=150, bbox_inches='tight')
 plt.show()
@@ -534,25 +560,32 @@ print(f"  Charts saved: /tmp/compare_400_vs_410.png")
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  SUMMARY — EXP 400 (alpha=2.0) vs EXP 410 (alpha=1.0)")
-print(f"{'═'*W}")
+print(f"\n\n{'='*W}")
+print(f"  SUMMARY")
+print(f"{'='*W}")
 
-print(f"""
-  Head-to-head TEST PnL:     400 wins {wins_400} — 410 wins {wins_410} — ties {ties}
-  Grand mean TEST:           400={grand_400:+.3%}  410={grand_410:+.3%}""" if grand_400 is not None and grand_410 is not None else "")
+print(f"\n  Data: {len(df_all)} rows — "
+      f"400: {len(tsets['400'])} tickers, 401: {len(tsets['401'])} tickers, "
+      f"410: {len(tsets['410'])} tickers")
 
-if c400 and c410:
-    print(f"  OPT→TEST retention:       400={c400['test_ret']:.0%}  410={c410['test_ret']:.0%}")
-    print(f"  Flip rate (VAL>0→TEST≤0): 400={c400['flip_rate']:.0%}  410={c410['flip_rate']:.0%}")
+if grand:
+    parts = [f"{eid}={v:+.3%}" for eid, v in grand.items()]
+    print(f"  Grand mean TEST:  " + "  ".join(parts))
 
-print(f"  Deployable tickers:       400={dep_400}  410={dep_410}")
+if overlap_400_401 and robustness_rows:
+    n_bp = sum(1 for r in robustness_rows if r['both_pos'])
+    n_dep = sum(1 for r in robustness_rows if r['deployable'])
+    print(f"\n  FOLD ROBUSTNESS (400 vs 401):")
+    print(f"    {n_bp}/{len(robustness_rows)} tickers positive in BOTH folds")
+    print(f"    {n_dep}/{len(robustness_rows)} deployable (both+ AND avg>={DEPLOY_PNL_THRESHOLD:.1%})")
+    if n_dep > 0:
+        dep_list = [r['ticker'] for r in robustness_rows if r['deployable']]
+        print(f"    Deploy candidates: {', '.join(dep_list)}")
 
-if grand_400 is not None and grand_410 is not None:
-    overall = '410 (alpha=1.0)' if grand_410 > grand_400 else '400 (alpha=2.0)' if grand_400 > grand_410 else 'TIE'
-    print(f"\n  ★ VERDICT: {overall} has higher grand mean TEST PnL")
-    if wins_410 != wins_400:
-        ticker_winner = '410' if wins_410 > wins_400 else '400'
-        print(f"    Per-ticker winner: {ticker_winner} ({max(wins_400, wins_410)} vs {min(wins_400, wins_410)})")
+if len(overlap_400_410) >= 3:
+    print(f"\n  ALPHA COMPARISON (400 vs 410):")
+    print(f"    400 wins {wins_400} — 410 wins {wins_410} (on {len(overlap_400_410)} tickers)")
+else:
+    print(f"\n  ALPHA COMPARISON: insufficient data ({len(overlap_400_410)} overlap tickers)")
 
-print(f"\n{'═'*W}")
+print(f"\n{'='*W}")

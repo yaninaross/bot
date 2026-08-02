@@ -1,15 +1,18 @@
 """
-select_short_deploy.py — SHORT Model Deployment Selection (Exp 400/410)
-========================================================================
-Adapts the S3 composite score + family agreement pipeline for SHORT/dump
-models. Two "families" = two alpha_pos variants (400=2.0, 410=1.0).
+select_short_deploy.py — SHORT Model Deployment Selection (Exp 400 vs 410)
+================================================================================
+Selects SHORT/dump model deployment candidates using alpha agreement.
+
+Alpha=2.0: Exp 400 (cutoff Aug).  Alpha=1.0: Exp 410 (cutoff Aug).
+Selection based ONLY on VAL_A period (Feb 1 – Mar 31, 2026).
+TEST period (Apr 1+) is displayed for reference but never used in selection.
 
 Pipeline:
-  1. Mode Discovery     — which modes work for SHORT?
+  1. Mode Discovery     — which modes have positive VAL PnL?
   2. Composite Score     — score_pnl2 = mean_va_pnl² × agree_18
-  3. Alpha Agreement     — both alphas must be positive OOS (family gate analog)
-  4. Cross-Alpha Seed Stability — min(agree_18_400, agree_18_410)
-  5. Degradation Filter  — reject >70% OPT→TEST decay
+  3. Alpha Agreement     — 400 AND 410 must be positive in VAL
+  4. Cross-Alpha Seed Stability — min(agree_400, agree_410)
+  5. Degradation Filter  — reject >70% OPT→VAL decay
   6. Final Selection     — ranked deployment candidates
 
 Works with partial results. Colab-ready (no if __name__).
@@ -39,14 +42,15 @@ from google.cloud import bigquery
 bq = bigquery.Client()
 
 # ==============================================================================
-# CONFIG — mirrors daily_score_combined.py thresholds exactly
+# CONFIG
 # ==============================================================================
 W = 130
 BQ_TABLE = 'ys-time-series.scoring_logs.wf_optimization_results'
 MV_400 = 'robust_wf_v12_short'
 MV_410 = 'robust_wf_v12_short_a1'
+MV_STITCHED = 'robust_wf_v12_short_stitched'
+_EXP_400_FAMILY = ('400', '401', '402', '403', '404', '405', 'WF400')
 DEPLOY_PNL_THRESHOLD = 0.018
-MIN_TEST_TRADES = 3
 MIN_SEEDS = 3
 MAX_VA_OPT_RATIO = 3.0
 CROSS_AGREE_HIGH = 0.6
@@ -62,11 +66,12 @@ GRP_KEYS = ['ticker', 'experiment', 'tpsl_mode', 'entry_minute',
 
 
 # ==============================================================================
-# LOAD — single query, split by model_version
+# LOAD — split by experiment prefix (not model_version)
 # ==============================================================================
-print(f"{'═'*W}")
-print(f"  SHORT MODEL DEPLOYMENT SELECTION — Exp 400 (α=2.0) & Exp 410 (α=1.0)")
-print(f"{'═'*W}")
+print(f"{'='*W}")
+print(f"  SHORT MODEL DEPLOYMENT SELECTION — Exp 400 (α=2.0) vs Exp 410 (α=1.0)")
+print(f"  Selection on VAL_A only (Feb–Mar 2026). TEST shown for reference.")
+print(f"{'='*W}")
 
 q = f"""
 SELECT
@@ -83,135 +88,123 @@ SELECT
     is_ensemble, n_seeds_avg,
     run_timestamp
 FROM `{BQ_TABLE}`
-WHERE model_version IN ('{MV_400}', '{MV_410}')
-ORDER BY model_version, ticker, tpsl_mode, seed
+WHERE model_version IN ('{MV_400}', '{MV_410}', '{MV_STITCHED}')
+  AND NOT experiment LIKE '401%'
+  AND NOT experiment LIKE '402%'
+ORDER BY experiment, ticker, tpsl_mode, seed
 """
 df_all = bq.query(q).to_dataframe()
 
-df_400 = df_all[df_all['model_version'] == MV_400].copy()
-df_410 = df_all[df_all['model_version'] == MV_410].copy()
+df_400 = df_all[df_all['experiment'].str.startswith(_EXP_400_FAMILY)].copy()
+df_410 = df_all[df_all['experiment'].str.startswith('410')].copy()
 
-ps_400 = df_400[df_400['is_ensemble'] != True].copy()
-en_400 = df_400[df_400['is_ensemble'] == True].copy()
-ps_410 = df_410[df_410['is_ensemble'] != True].copy()
-en_410 = df_410[df_410['is_ensemble'] == True].copy()
+EXPS = {'400': df_400, '410': df_410}
+EXP_LABELS = {'400': '400 (α=2.0, Aug)', '410': '410 (α=1.0, Aug)'}
 
-t400 = set(ps_400['ticker'].unique())
-t410 = set(ps_410['ticker'].unique())
-overlap = sorted(t400 & t410)
-all_tickers = sorted(t400 | t410)
-
-print(f"\n  Exp 400 (α=2.0): {len(ps_400)} per-seed, {len(en_400)} ensemble, "
-      f"{len(t400)} tickers")
-print(f"  Exp 410 (α=1.0): {len(ps_410)} per-seed, {len(en_410)} ensemble, "
-      f"{len(t410)} tickers")
-print(f"  Overlap: {len(overlap)}  |  400-only: {len(t400 - t410)}  |  "
-      f"410-only: {len(t410 - t400)}")
-print(f"\n  Scored by BOTH ({len(overlap)}): "
-      f"{', '.join(overlap) if overlap else 'none yet'}")
-
-if len(df_all) == 0:
-    print(f"\n  ⚠ NO RESULTS YET — optimizers haven't written to BQ.")
-    raise SystemExit
+ps = {}
+for eid, df in EXPS.items():
+    ps[eid] = df[df['is_ensemble'] != True].copy()
 
 for col in ['grace_minutes', 'max_wait_minutes']:
-    for d in [ps_400, ps_410, en_400, en_410]:
-        if col in d.columns:
-            d[col] = d[col].fillna(0).astype(int)
+    for eid in EXPS:
+        if col in ps[eid].columns:
+            ps[eid][col] = ps[eid][col].fillna(0).astype(int)
 for col in ['dip_pct', 'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult',
             'vol_filter_pct']:
-    for d in [ps_400, ps_410, en_400, en_410]:
-        if col in d.columns:
-            d[col] = d[col].fillna(0.0)
+    for eid in EXPS:
+        if col in ps[eid].columns:
+            ps[eid][col] = ps[eid][col].fillna(0.0)
+
+tsets = {eid: set(ps[eid]['ticker'].unique()) for eid in EXPS}
+gate_overlap = sorted(tsets['400'] & tsets['410'])
+all_tickers = sorted(tsets['400'] | tsets['410'])
+
+print(f"\n  Loaded {len(df_all)} total rows from BQ")
+for eid in EXPS:
+    print(f"  Exp {EXP_LABELS[eid]}: {len(ps[eid])} per-seed rows, "
+          f"{len(tsets[eid])} tickers")
+print(f"\n  400∩410 overlap: {len(gate_overlap)}  |  Total unique: {len(all_tickers)}")
+
+if len(df_all) == 0:
+    print(f"\n  No results yet.")
+    raise SystemExit
 
 
 # ==============================================================================
-# STEP 1: MODE DISCOVERY — which modes work for SHORT?
+# STEP 1: MODE DISCOVERY (based on VAL_A)
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  STEP 1: MODE DISCOVERY")
-print(f"{'═'*W}")
-print(f"\n  Which TPSL modes produce positive TEST PnL for each alpha?")
+print(f"\n\n{'='*W}")
+print(f"  STEP 1: MODE DISCOVERY (VAL_A period)")
+print(f"{'='*W}")
+print(f"\n  Which TPSL modes produce positive VAL PnL?")
 if EXCLUDE_MODES:
-    print(f"  Hard-excluded modes: {', '.join(sorted(EXCLUDE_MODES))} "
-          f"(confirmed toxic for SHORT — 73-81% flipped negative)")
+    print(f"  Hard-excluded: {', '.join(sorted(EXCLUDE_MODES))}")
 
-all_modes = sorted(set(ps_400['tpsl_mode'].dropna().unique()) |
-                   set(ps_410['tpsl_mode'].dropna().unique()))
+all_modes = sorted(set().union(*(ps[e]['tpsl_mode'].dropna().unique() for e in EXPS if len(ps[e]) > 0)))
 
-print(f"\n  {'Mode':<15} │ {'── EXP 400 (α=2.0) ──────────':} │ "
-      f"{'── EXP 410 (α=1.0) ──────────':} │ {'Both+':} │ {'':}")
-print(f"  {'':15} │ {'TEST':>8} {'T+':>4} {'WR':>6} {'Tickers':>8} │ "
-      f"{'TEST':>8} {'T+':>4} {'WR':>6} {'Tickers':>8} │ {'':>5} │")
-print(f"  {'─'*15} │ {'─'*8} {'─'*4} {'─'*6} {'─'*8} │ "
-      f"{'─'*8} {'─'*4} {'─'*6} {'─'*8} │ {'─'*5} │ {'─'*8}")
+hdr = f"  {'Mode':<15}"
+for eid in EXPS:
+    hdr += f" │ {'── '+eid+' ──────────────':}"
+print(f"\n{hdr}")
+sub = f"  {'':15}"
+for _ in EXPS:
+    sub += f" │ {'VAL':>8} {'V+':>4} {'Tickers':>7}"
+print(sub)
+sep = f"  {'─'*15}"
+for _ in EXPS:
+    sep += f" │ {'─'*8} {'─'*4} {'─'*7}"
+print(sep)
 
 winning_modes = []
 for mode in all_modes:
-    md4 = ps_400[ps_400['tpsl_mode'] == mode]
-    md1 = ps_410[ps_410['tpsl_mode'] == mode]
-
-    t4 = md4['val_b_avg_pnl'].mean() if len(md4) else np.nan
-    tp4 = (md4['val_b_avg_pnl'] > 0).sum() if len(md4) else 0
-    wr4 = md4['val_b_win_rate'].mean() if len(md4) else np.nan
-    tk4 = md4['ticker'].nunique() if len(md4) else 0
-
-    t1 = md1['val_b_avg_pnl'].mean() if len(md1) else np.nan
-    tp1 = (md1['val_b_avg_pnl'] > 0).sum() if len(md1) else 0
-    wr1 = md1['val_b_win_rate'].mean() if len(md1) else np.nan
-    tk1 = md1['ticker'].nunique() if len(md1) else 0
+    parts = []
+    val_means = {}
+    for eid in EXPS:
+        md = ps[eid][ps[eid]['tpsl_mode'] == mode]
+        if len(md) >= 3:
+            v = md['val_a_avg_pnl'].mean()
+            vp = (md['val_a_avg_pnl'] > 0).sum()
+            tk = md['ticker'].nunique()
+            parts.append(f"{v:>+7.2%} {vp:>4} {tk:>7}")
+            val_means[eid] = v
+        else:
+            parts.append(f"{'—':>8} {'—':>4} {'—':>7}")
 
     excluded = mode in EXCLUDE_MODES
-    both_pos = '✓' if (pd.notna(t4) and t4 > 0 and pd.notna(t1) and t1 > 0 and not excluded) else ''
-    if both_pos:
+    n_pos = sum(1 for v in val_means.values() if v > 0)
+    if n_pos >= 2 and not excluded:
         winning_modes.append(mode)
+    status = ' EXCLUDED' if excluded else (' ✓' if n_pos >= 2 else '')
+    print(f"  {mode:<15}" + " │ ".join([''] + parts) + f" │{status}")
 
-    s4 = (f"{t4:>+7.2%} {tp4:>4} {wr4:>5.1%} {tk4:>8}"
-          if pd.notna(t4) else f"{'—':>8} {'—':>4} {'—':>6} {'—':>8}")
-    s1 = (f"{t1:>+7.2%} {tp1:>4} {wr1:>5.1%} {tk1:>8}"
-          if pd.notna(t1) else f"{'—':>8} {'—':>4} {'—':>6} {'—':>8}")
-    status = ' EXCLUDED' if excluded else ''
-    print(f"  {mode:<15} │ {s4} │ {s1} │ {both_pos:>5} │ {status}")
-
-if winning_modes:
-    print(f"\n  ★ WINNING MODES (positive mean TEST in BOTH alphas): {', '.join(winning_modes)}")
-    print(f"    → These modes will be used for deployment selection below.")
-else:
-    eligible_modes = [m for m in all_modes
-                      if m not in EXCLUDE_MODES and (
-                          len(ps_400[ps_400['tpsl_mode'] == m]) > 0 or
-                          len(ps_410[ps_410['tpsl_mode'] == m]) > 0)]
-    if eligible_modes:
-        print(f"\n  ⚠ No mode has positive mean TEST PnL in BOTH alphas.")
-        print(f"    Falling back to eligible modes (excl. {', '.join(sorted(EXCLUDE_MODES))}): "
-              f"{', '.join(eligible_modes)}")
-        winning_modes = eligible_modes
+if not winning_modes:
+    eligible = [m for m in all_modes if m not in EXCLUDE_MODES]
+    if eligible:
+        print(f"\n  No mode positive in both experiments. Falling back to: {', '.join(eligible)}")
+        winning_modes = eligible
     else:
-        print(f"\n  ⚠ No eligible mode data available. Wait for optimizer results.")
+        print(f"\n  No eligible modes. Wait for optimizer results.")
         raise SystemExit
 
+print(f"\n  Winning modes: {', '.join(winning_modes)}")
+
 
 # ==============================================================================
-# STEP 2: COMPOSITE SCORE + ALPHA AGREEMENT GATE
+# STEP 2: COMPOSITE SCORE (VAL_A only)
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  STEP 2: COMPOSITE SCORE + ALPHA AGREEMENT GATE")
-print(f"{'═'*W}")
-print(f"\n  Replicating S3 pipeline: seed aggregation → score_pnl2 → alpha agreement")
-print(f"  Mode filter: {', '.join(winning_modes)}")
+print(f"\n\n{'='*W}")
+print(f"  STEP 2: COMPOSITE SCORE — score_pnl2 = mean_va_pnl² × agree_18")
+print(f"{'='*W}")
+print(f"\n  Mode filter: {', '.join(winning_modes)}")
 print(f"  Thresholds: DEPLOY={DEPLOY_PNL_THRESHOLD:.1%}, MIN_SEEDS={MIN_SEEDS}, "
       f"MAX_OPT_RATIO={MAX_VA_OPT_RATIO}")
 
 
 def compute_seed_groups(per_seed_df, label):
-    """Seed group aggregation — mirrors daily_score_combined.py lines 226-244."""
     indiv = per_seed_df.copy()
-
     indiv = indiv[indiv['opt_avg_pnl'] > 0].copy()
-    n_before = len(indiv)
     indiv = indiv[indiv['val_a_avg_pnl'] > 0].copy()
-    ov = indiv[indiv['val_a_avg_pnl'] / indiv['opt_avg_pnl'] <= MAX_VA_OPT_RATIO].copy()
-    indiv = ov
+    indiv = indiv[indiv['val_a_avg_pnl'] / indiv['opt_avg_pnl'] <= MAX_VA_OPT_RATIO].copy()
 
     extra_agg = {}
     for c, fn in [('vix_threshold', 'max'), ('tlt_crash', 'min'), ('spy_ignore', 'max')]:
@@ -219,9 +212,8 @@ def compute_seed_groups(per_seed_df, label):
             extra_agg[c] = (c, fn)
 
     available_grp = [k for k in GRP_KEYS if k in indiv.columns]
-
     if len(indiv) == 0:
-        print(f"\n  {label}: 0 rows after filters — no configs to aggregate.")
+        print(f"\n  {label}: 0 rows after filters")
         return pd.DataFrame()
 
     sa = indiv.groupby(available_grp).agg(
@@ -231,9 +223,11 @@ def compute_seed_groups(per_seed_df, label):
         mean_va_wr=('val_a_win_rate', 'mean'),
         mean_va_count=('val_a_count', 'mean'),
         vb_pnl=('val_b_avg_pnl', 'mean'),
-        mean_opt_pnl=('opt_avg_pnl', 'mean'),
         mean_vb_wr=('val_b_win_rate', 'mean'),
         mean_vb_count=('val_b_count', 'mean'),
+        mean_opt_pnl=('opt_avg_pnl', 'mean'),
+        mean_opt_wr=('opt_win_rate', 'mean'),
+        mean_opt_count=('opt_count', 'mean'),
         **extra_agg,
     ).reset_index()
     sa['agree_18'] = (sa['n_pos_seeds_18'] / sa['n_seeds']).clip(upper=1.0)
@@ -242,219 +236,148 @@ def compute_seed_groups(per_seed_df, label):
         (sa['n_seeds'] >= MIN_SEEDS) &
         (sa['tpsl_mode'].isin(winning_modes))
     ].copy()
-
     sa_filt['score_pnl2'] = (sa_filt['mean_va_pnl'] ** 2) * sa_filt['agree_18']
     sa_filt = sa_filt[np.isfinite(sa_filt['score_pnl2'])]
 
-    print(f"\n  {label}: {len(indiv)} rows → {len(sa)} seed groups → "
-          f"{len(sa_filt)} after mode+seed filters")
-    print(f"    Tickers: {sa_filt['ticker'].nunique()}, "
-          f"Mean score_pnl2: {sa_filt['score_pnl2'].mean():.6f}")
-
+    print(f"\n  {label}: {len(indiv)} rows → {len(sa)} groups → "
+          f"{len(sa_filt)} after filters ({sa_filt['ticker'].nunique()} tickers)")
     return sa_filt
 
 
-sa_400 = compute_seed_groups(ps_400, "Exp 400 (α=2.0)")
-sa_410 = compute_seed_groups(ps_410, "Exp 410 (α=1.0)")
-
-
 def best_config_per_ticker(sa_df):
-    """Pick best config per ticker by score_pnl2 (mirrors S3 best selection)."""
     if sa_df.empty:
         return pd.DataFrame()
-    best = sa_df.loc[sa_df.groupby('ticker')['score_pnl2'].idxmax()].copy()
-    return best
+    return sa_df.loc[sa_df.groupby('ticker')['score_pnl2'].idxmax()].copy()
 
 
-best_400_ps = best_config_per_ticker(sa_400)
-best_410_ps = best_config_per_ticker(sa_410)
+# Run pipeline for each experiment (per-seed only, matching LONG strategy)
+sa = {}
+best = {}
+for eid in EXPS:
+    sa[eid] = compute_seed_groups(ps[eid], f"Exp {eid}")
+    best[eid] = best_config_per_ticker(sa[eid])
+    if not best[eid].empty:
+        best[eid]['source'] = 'per_seed'
+
+best_400 = best['400']
+best_410 = best['410']
+
+if not best_400.empty:
+    print(f"\n  Exp 400 best: {len(best_400)} tickers, "
+          f"mean VAL PnL: {best_400['mean_va_pnl'].mean():+.3%}, "
+          f"mean TEST PnL: {best_400['vb_pnl'].mean():+.3%}")
+if not best_410.empty:
+    print(f"  Exp 410 best: {len(best_410)} tickers, "
+          f"mean VAL PnL: {best_410['mean_va_pnl'].mean():+.3%}, "
+          f"mean TEST PnL: {best_410['vb_pnl'].mean():+.3%}")
 
 
-def best_ensemble_per_ticker(en_df, label):
-    """Pick best ensemble config per ticker — ensemble agree_18 = 1.0 (consensus)."""
-    if en_df.empty:
-        print(f"\n  {label} ensemble: 0 rows")
-        return pd.DataFrame()
-    ens = en_df.copy()
-    ens = ens[ens['tpsl_mode'].isin(winning_modes)].copy()
-    ens = ens[ens['opt_avg_pnl'] > 0].copy()
-    ens = ens[ens['val_a_avg_pnl'] > 0].copy()
-    ens = ens[ens['val_a_avg_pnl'] / ens['opt_avg_pnl'] <= MAX_VA_OPT_RATIO].copy()
-    if ens.empty:
-        print(f"\n  {label} ensemble: 0 rows after filters")
-        return pd.DataFrame()
-    ens['agree_18'] = np.where(ens['val_a_avg_pnl'] >= DEPLOY_PNL_THRESHOLD, 1.0, 0.0)
-    ens['n_seeds'] = ens['n_seeds_avg'].fillna(15).astype(int)
-    ens['mean_va_pnl'] = ens['val_a_avg_pnl']
-    ens['mean_va_wr'] = ens['val_a_win_rate']
-    ens['mean_va_count'] = ens['val_a_count']
-    ens['vb_pnl'] = ens['val_b_avg_pnl']
-    ens['mean_opt_pnl'] = ens['opt_avg_pnl']
-    ens['mean_vb_wr'] = ens['val_b_win_rate']
-    ens['mean_vb_count'] = ens['val_b_count']
-    ens['score_pnl2'] = (ens['mean_va_pnl'] ** 2) * ens['agree_18']
-    ens['source'] = 'ensemble'
-    best = ens.loc[ens.groupby('ticker')['score_pnl2'].idxmax()].copy()
-    print(f"\n  {label} ensemble: {len(en_df)} → {len(ens)} after filters → "
-          f"{len(best)} tickers")
-    return best
-
-
-en_best_400 = best_ensemble_per_ticker(en_400, "Exp 400 (α=2.0)")
-en_best_410 = best_ensemble_per_ticker(en_410, "Exp 410 (α=1.0)")
-
-if not best_400_ps.empty:
-    best_400_ps['source'] = 'per_seed'
-if not best_410_ps.empty:
-    best_410_ps['source'] = 'per_seed'
-
-
-def merge_ps_ensemble(ps_best, en_best, label):
-    """Take whichever source (per-seed or ensemble) gives better TEST PnL per ticker."""
-    if ps_best.empty and en_best.empty:
-        return pd.DataFrame()
-    if en_best.empty:
-        return ps_best
-    if ps_best.empty:
-        return en_best
-
-    shared_cols = [c for c in ['ticker', 'tpsl_mode', 'prob_thresh', 'tp_pct', 'sl_pct',
-                               'mean_va_pnl', 'vb_pnl', 'agree_18', 'score_pnl2',
-                               'mean_opt_pnl', 'mean_vb_wr', 'mean_vb_count',
-                               'n_seeds', 'source',
-                               'tp_mult', 'sl_mult', 'trail_start_mult', 'trail_end_mult',
-                               'grace_minutes', 'dip_pct', 'max_wait_minutes',
-                               'vol_filter_pct', 'entry_minute', 'experiment']
-                  if c in ps_best.columns or c in en_best.columns]
-    ps_sub = ps_best[[c for c in shared_cols if c in ps_best.columns]].copy()
-    en_sub = en_best[[c for c in shared_cols if c in en_best.columns]].copy()
-
-    combined = pd.concat([ps_sub, en_sub], ignore_index=True)
-    best = combined.loc[combined.groupby('ticker')['vb_pnl'].idxmax()].copy()
-
-    ps_tickers = set(ps_sub['ticker'])
-    en_tickers = set(en_sub['ticker'])
-    n_ps_wins = (best['source'] == 'per_seed').sum()
-    n_en_wins = (best['source'] == 'ensemble').sum()
-    n_en_only = len(set(best['ticker']) - ps_tickers)
-    print(f"\n  {label} merge: per_seed wins {n_ps_wins}, ensemble wins {n_en_wins}, "
-          f"ensemble-only {n_en_only}")
-    return best
-
-
-best_400 = merge_ps_ensemble(best_400_ps, en_best_400, "Exp 400")
-best_410 = merge_ps_ensemble(best_410_ps, en_best_410, "Exp 410")
+# ==============================================================================
+# STEP 3: ALPHA AGREEMENT GATE — 400 vs 410, VAL_A only
+# ==============================================================================
+print(f"\n\n{'='*W}")
+print(f"  STEP 3: ALPHA AGREEMENT GATE — Exp 400 vs 410 (VAL_A only)")
+print(f"{'='*W}")
 
 tickers_400 = set(best_400['ticker'].unique()) if not best_400.empty else set()
 tickers_410 = set(best_410['ticker'].unique()) if not best_410.empty else set()
-gate_overlap = sorted(tickers_400 & tickers_410)
-gate_only_400 = sorted(tickers_400 - tickers_410)
-gate_only_410 = sorted(tickers_410 - tickers_400)
+gate_tickers = sorted(tickers_400 & tickers_410)
+only_400 = sorted(tickers_400 - tickers_410)
+only_410 = sorted(tickers_410 - tickers_400)
 
-print(f"\n  Alpha Agreement Gate:")
-print(f"    Tickers with best config in 400: {len(tickers_400)}")
-print(f"    Tickers with best config in 410: {len(tickers_410)}")
-print(f"    Overlap (gate candidates):       {len(gate_overlap)}")
+print(f"\n  Exp 400: {len(tickers_400)} tickers")
+print(f"  Exp 410: {len(tickers_410)} tickers")
+print(f"  Gate overlap: {len(gate_tickers)}")
 
 gate_pass = []
 gate_fail_reasons = {}
 
-for ticker in gate_overlap:
+for ticker in gate_tickers:
     r400 = best_400[best_400['ticker'] == ticker].iloc[0]
     r410 = best_410[best_410['ticker'] == ticker].iloc[0]
 
-    vb_400 = r400['vb_pnl']
-    vb_410 = r410['vb_pnl']
+    va_400 = r400['mean_va_pnl']
+    va_410 = r410['mean_va_pnl']
 
-    if vb_400 > 0 and vb_410 > 0:
+    if va_400 > 0 and va_410 > 0:
         selected_alpha = '400' if r400['score_pnl2'] >= r410['score_pnl2'] else '410'
         gate_pass.append({
             'ticker': ticker,
             'selected_alpha': selected_alpha,
-            'vb_400': vb_400,
-            'vb_410': vb_410,
-            'score_400': r400['score_pnl2'],
-            'score_410': r410['score_pnl2'],
-            'agree_400': r400['agree_18'],
-            'agree_410': r410['agree_18'],
-            'mode_400': r400['tpsl_mode'],
-            'mode_410': r410['tpsl_mode'],
-            'va_pnl_400': r400['mean_va_pnl'],
-            'va_pnl_410': r410['mean_va_pnl'],
-            'opt_pnl_400': r400['mean_opt_pnl'],
-            'opt_pnl_410': r410['mean_opt_pnl'],
-            'vb_wr_400': r400.get('mean_vb_wr', np.nan),
-            'vb_wr_410': r410.get('mean_vb_wr', np.nan),
-            'vb_n_400': r400.get('mean_vb_count', 0),
-            'vb_n_410': r410.get('mean_vb_count', 0),
-            'prob_400': r400['prob_thresh'],
-            'prob_410': r410['prob_thresh'],
-            'tp_400': r400['tp_pct'],
-            'tp_410': r410['tp_pct'],
-            'sl_400': r400['sl_pct'],
-            'sl_410': r410['sl_pct'],
+            'va_400': va_400, 'va_410': va_410,
+            'va_wr_400': r400.get('mean_va_wr', 0), 'va_wr_410': r410.get('mean_va_wr', 0),
+            'va_n_400': r400.get('mean_va_count', 0), 'va_n_410': r410.get('mean_va_count', 0),
+            'vb_400': r400['vb_pnl'], 'vb_410': r410['vb_pnl'],
+            'vb_wr_400': r400.get('mean_vb_wr', 0), 'vb_wr_410': r410.get('mean_vb_wr', 0),
+            'vb_n_400': r400.get('mean_vb_count', 0), 'vb_n_410': r410.get('mean_vb_count', 0),
+            'opt_pnl_400': r400['mean_opt_pnl'], 'opt_pnl_410': r410['mean_opt_pnl'],
+            'opt_wr_400': r400.get('mean_opt_wr', 0), 'opt_wr_410': r410.get('mean_opt_wr', 0),
+            'opt_n_400': r400.get('mean_opt_count', 0), 'opt_n_410': r410.get('mean_opt_count', 0),
+            'score_400': r400['score_pnl2'], 'score_410': r410['score_pnl2'],
+            'agree_400': r400['agree_18'], 'agree_410': r410['agree_18'],
+            'mode_400': r400.get('tpsl_mode', ''), 'mode_410': r410.get('tpsl_mode', ''),
+            'prob_400': r400.get('prob_thresh', 0), 'prob_410': r410.get('prob_thresh', 0),
+            'tp_400': r400.get('tp_pct', 0), 'tp_410': r410.get('tp_pct', 0),
+            'sl_400': r400.get('sl_pct', 0), 'sl_410': r410.get('sl_pct', 0),
         })
     else:
-        reason = ('400-neg' if vb_400 <= 0 else '') + \
-                 (' ' if vb_400 <= 0 and vb_410 <= 0 else '') + \
-                 ('410-neg' if vb_410 <= 0 else '')
+        reason = ('400-neg' if va_400 <= 0 else '') + \
+                 (' ' if va_400 <= 0 and va_410 <= 0 else '') + \
+                 ('410-neg' if va_410 <= 0 else '')
         gate_fail_reasons[ticker] = reason.strip()
 
-for ticker in gate_only_400:
+for ticker in only_400:
     gate_fail_reasons[ticker] = '410-missing'
-for ticker in gate_only_410:
+for ticker in only_410:
     gate_fail_reasons[ticker] = '400-missing'
 
 print(f"\n  Gate Results:")
-print(f"    PASS (both alphas positive OOS): {len(gate_pass)}")
+print(f"    PASS (both alphas positive VAL): {len(gate_pass)}")
 print(f"    FAIL: {len(gate_fail_reasons)}")
 if gate_fail_reasons:
     for reason in sorted(set(gate_fail_reasons.values())):
         tks = [t for t, r in gate_fail_reasons.items() if r == reason]
-        print(f"      {reason}: {', '.join(tks[:15])}{'...' if len(tks) > 15 else ''}")
+        print(f"      {reason}: {', '.join(tks[:20])}{'...' if len(tks) > 20 else ''}")
 
 if not gate_pass:
-    print(f"\n  ⚠ No tickers pass the alpha agreement gate yet.")
-    print(f"    This is expected with partial results. Re-run when both optimizers "
-          f"have more overlap.")
+    print(f"\n  No tickers pass the alpha agreement gate.")
 
-    if not best_400.empty or not best_410.empty:
-        print(f"\n  ── For reference: top configs per alpha (no gate applied) ──")
-        for label, best in [('400', best_400), ('410', best_410)]:
-            if best.empty:
-                continue
-            top = best.nlargest(10, 'score_pnl2')
-            print(f"\n  Top Exp {label}:")
-            print(f"  {'Ticker':<8} {'Mode':<13} {'VAL PnL':>8} {'TEST PnL':>9} "
-                  f"{'Agree18':>8} {'Score':>10}")
-            print(f"  {'─'*8} {'─'*13} {'─'*8} {'─'*9} {'─'*8} {'─'*10}")
-            for _, r in top.iterrows():
-                print(f"  {r['ticker']:<8} {r['tpsl_mode']:<13} "
-                      f"{r['mean_va_pnl']:>+7.2%} {r['vb_pnl']:>+8.2%} "
-                      f"{r['agree_18']:>7.0%} {r['score_pnl2']:>10.6f}")
+    for label, best_one in [('400 (α=2.0)', best_400), ('410 (α=1.0)', best_410)]:
+        if best_one.empty:
+            continue
+        top = best_one.nlargest(10, 'score_pnl2')
+        print(f"\n  Top Exp {label} (no gate):")
+        print(f"  {'Ticker':<8} {'Mode':<13} {'VAL PnL':>8} {'(TEST)':>8} "
+              f"{'Agree18':>8} {'Score':>10}")
+        print(f"  {'─'*8} {'─'*13} {'─'*8} {'─'*8} {'─'*8} {'─'*10}")
+        for _, r in top.iterrows():
+            print(f"  {r['ticker']:<8} {r.get('tpsl_mode', '?'):<13} "
+                  f"{r['mean_va_pnl']:>+7.2%} {r['vb_pnl']:>+7.2%} "
+                  f"{r['agree_18']:>7.0%} {r['score_pnl2']:>10.6f}")
 
 gate_df = pd.DataFrame(gate_pass)
 
 
 # ==============================================================================
-# STEP 3: CROSS-ALPHA SEED STABILITY
+# STEP 4: CROSS-ALPHA SEED STABILITY
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  STEP 3: CROSS-ALPHA SEED STABILITY")
-print(f"{'═'*W}")
+print(f"\n\n{'='*W}")
+print(f"  STEP 4: CROSS-ALPHA SEED STABILITY")
+print(f"{'='*W}")
 
 if not gate_df.empty:
     gate_df['cross_agree'] = gate_df[['agree_400', 'agree_410']].min(axis=1)
     gate_df['confidence'] = gate_df['cross_agree'].apply(
         lambda x: 'HIGH' if x >= CROSS_AGREE_HIGH else ('MED' if x >= CROSS_AGREE_MED else 'LOW'))
 
-    print(f"\n  Cross-alpha seed stability = min(agree_18_400, agree_18_410)")
-    print(f"  HIGH ≥ {CROSS_AGREE_HIGH:.0%}  |  MED ≥ {CROSS_AGREE_MED:.0%}  |  LOW < {CROSS_AGREE_MED:.0%}")
-    print(f"\n  {'Ticker':<8} {'Agree400':>9} {'Agree410':>9} {'CrossAgree':>11} {'Confidence':>11}")
-    print(f"  {'─'*8} {'─'*9} {'─'*9} {'─'*11} {'─'*11}")
+    print(f"\n  Cross-alpha stability = min(agree_400, agree_410)")
+    print(f"  HIGH >= {CROSS_AGREE_HIGH:.0%}  |  MED >= {CROSS_AGREE_MED:.0%}  |  LOW < {CROSS_AGREE_MED:.0%}")
+    print(f"\n  {'Ticker':<8} {'Agree_400':>10} {'Agree_410':>10} "
+          f"{'CrossAgree':>11} {'Conf':>6}")
+    print(f"  {'─'*8} {'─'*10} {'─'*10} {'─'*11} {'─'*6}")
     for _, r in gate_df.sort_values('cross_agree', ascending=False).iterrows():
-        print(f"  {r['ticker']:<8} {r['agree_400']:>8.0%} {r['agree_410']:>8.0%} "
-              f"{r['cross_agree']:>10.0%} {r['confidence']:>11}")
+        print(f"  {r['ticker']:<8} {r['agree_400']:>9.0%} "
+              f"{r['agree_410']:>9.0%} {r['cross_agree']:>10.0%} {r['confidence']:>6}")
 
     conf_counts = gate_df['confidence'].value_counts()
     print(f"\n  Distribution: "
@@ -462,252 +385,265 @@ if not gate_df.empty:
           f"MED={conf_counts.get('MED', 0)}  "
           f"LOW={conf_counts.get('LOW', 0)}")
 else:
-    print(f"\n  No tickers passed the alpha agreement gate — skipping.")
+    print(f"\n  No tickers passed the gate — skipping.")
 
 
 # ==============================================================================
-# STEP 4: DEGRADATION FILTER
+# STEP 5: DEGRADATION FILTER — OPT → VAL retention
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  STEP 4: DEGRADATION FILTER — OPT → TEST retention")
-print(f"{'═'*W}")
-print(f"\n  Reject if TEST/OPT retention < {MIN_RETENTION:.0%} (>{1-MIN_RETENTION:.0%} signal lost)")
+print(f"\n\n{'='*W}")
+print(f"  STEP 5: DEGRADATION FILTER — OPT → VAL retention")
+print(f"{'='*W}")
+print(f"\n  Reject if VAL/OPT retention < {MIN_RETENTION:.0%}")
 
 if not gate_df.empty:
     gate_df['opt_pnl_sel'] = gate_df.apply(
         lambda r: r['opt_pnl_400'] if r['selected_alpha'] == '400' else r['opt_pnl_410'], axis=1)
-    gate_df['vb_pnl_sel'] = gate_df.apply(
-        lambda r: r['vb_400'] if r['selected_alpha'] == '400' else r['vb_410'], axis=1)
+    gate_df['va_pnl_sel'] = gate_df.apply(
+        lambda r: r['va_400'] if r['selected_alpha'] == '400' else r['va_410'], axis=1)
     gate_df['retention'] = np.where(
         gate_df['opt_pnl_sel'] > 0,
-        gate_df['vb_pnl_sel'] / gate_df['opt_pnl_sel'],
-        0.0)
+        gate_df['va_pnl_sel'] / gate_df['opt_pnl_sel'], 0.0)
 
-    print(f"\n  {'Ticker':<8} {'Alpha':>6} {'OPT':>8} {'TEST':>9} {'Retention':>10} {'Status':>8}")
+    print(f"\n  {'Ticker':<8} {'Alpha':>6} {'OPT':>8} {'VAL':>9} "
+          f"{'Retention':>10} {'Status':>8}")
     print(f"  {'─'*8} {'─'*6} {'─'*8} {'─'*9} {'─'*10} {'─'*8}")
     for _, r in gate_df.sort_values('retention', ascending=False).iterrows():
-        status = '✓' if r['retention'] >= MIN_RETENTION else 'REJECT'
-        print(f"  {r['ticker']:<8} {r['selected_alpha']:>6} {r['opt_pnl_sel']:>+7.2%} "
-              f"{r['vb_pnl_sel']:>+8.2%} {r['retention']:>9.0%} {status:>8}")
+        status = 'PASS' if r['retention'] >= MIN_RETENTION else 'REJECT'
+        print(f"  {r['ticker']:<8} {r['selected_alpha']:>6} "
+              f"{r['opt_pnl_sel']:>+7.2%} {r['va_pnl_sel']:>+8.2%} "
+              f"{r['retention']:>9.0%} {status:>8}")
 
     n_before = len(gate_df)
     gate_df = gate_df[gate_df['retention'] >= MIN_RETENTION].copy()
     n_rejected = n_before - len(gate_df)
-    print(f"\n  {n_rejected} ticker(s) rejected for excessive degradation.")
+    print(f"\n  {n_rejected} rejected for excessive degradation.")
 else:
-    print(f"\n  No tickers to filter — skipping.")
+    print(f"\n  No tickers to filter.")
 
 
 # ==============================================================================
-# STEP 5: FINAL DEPLOYMENT CANDIDATES
+# STEP 6: FINAL DEPLOYMENT CANDIDATES
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  STEP 5: FINAL DEPLOYMENT CANDIDATES")
-print(f"{'═'*W}")
+print(f"\n\n{'='*W}")
+print(f"  STEP 6: FINAL DEPLOYMENT CANDIDATES")
+print(f"{'='*W}")
 
 if not gate_df.empty:
     gate_df['score_sel'] = gate_df.apply(
         lambda r: r['score_400'] if r['selected_alpha'] == '400' else r['score_410'], axis=1)
     gate_df['mode_sel'] = gate_df.apply(
         lambda r: r['mode_400'] if r['selected_alpha'] == '400' else r['mode_410'], axis=1)
-    gate_df['va_pnl_sel'] = gate_df.apply(
-        lambda r: r['va_pnl_400'] if r['selected_alpha'] == '400' else r['va_pnl_410'], axis=1)
-    gate_df['vb_wr_sel'] = gate_df.apply(
-        lambda r: r['vb_wr_400'] if r['selected_alpha'] == '400' else r['vb_wr_410'], axis=1)
-    gate_df['vb_n_sel'] = gate_df.apply(
-        lambda r: r['vb_n_400'] if r['selected_alpha'] == '400' else r['vb_n_410'], axis=1)
     gate_df['prob_sel'] = gate_df.apply(
         lambda r: r['prob_400'] if r['selected_alpha'] == '400' else r['prob_410'], axis=1)
     gate_df['tp_sel'] = gate_df.apply(
         lambda r: r['tp_400'] if r['selected_alpha'] == '400' else r['tp_410'], axis=1)
     gate_df['sl_sel'] = gate_df.apply(
         lambda r: r['sl_400'] if r['selected_alpha'] == '400' else r['sl_410'], axis=1)
+    gate_df['vb_pnl_sel'] = gate_df.apply(
+        lambda r: r['vb_400'] if r['selected_alpha'] == '400' else r['vb_410'], axis=1)
 
     deploy = gate_df[gate_df['va_pnl_sel'] >= DEPLOY_PNL_THRESHOLD].copy()
     deploy = deploy.sort_values('score_sel', ascending=False)
 
     if len(deploy) == 0:
-        print(f"\n  ⚠ No tickers meet the deploy threshold ({DEPLOY_PNL_THRESHOLD:.1%}) "
-              f"after all filters.")
-        print(f"    {len(gate_df)} ticker(s) passed gate but below PnL threshold.")
+        print(f"\n  No tickers meet deploy threshold ({DEPLOY_PNL_THRESHOLD:.1%}) after filters.")
+        print(f"    {len(gate_df)} passed gate but below VAL PnL threshold.")
     else:
-        print(f"\n  {len(deploy)} deployment candidate(s) "
-              f"(from {len(all_tickers)} total tickers, {len(overlap)} overlap):")
+        print(f"\n  {len(deploy)} deployment candidate(s):")
+        print(f"  (Selected by VAL only — TEST shown for reference)")
 
-        print(f"\n  {'Ticker':<8} {'α':>3} {'Mode':<13} {'Prob':>5} {'TP':>6} {'SL':>6} │"
-              f" {'VAL PnL':>8} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} │"
-              f" {'Agree18':>8} {'XAgree':>7} {'Retain':>7} {'Conf':>5} │"
+        print(f"\n  {'Ticker':<8} {'α':>4} {'Mode':<13} {'Prob':>5} {'TP':>6} {'SL':>6} │"
+              f" {'VAL PnL':>8} {'(TEST)':>8} │"
+              f" {'Agree':>6} {'XAgree':>7} {'Retain':>7} {'Conf':>5} │"
               f" {'Score':>10}")
-        print(f"  {'─'*8} {'─'*3} {'─'*13} {'─'*5} {'─'*6} {'─'*6} │"
-              f" {'─'*8} {'─'*9} {'─'*8} {'─'*7} │"
-              f" {'─'*8} {'─'*7} {'─'*7} {'─'*5} │"
+        print(f"  {'─'*8} {'─'*4} {'─'*13} {'─'*5} {'─'*6} {'─'*6} │"
+              f" {'─'*8} {'─'*8} │"
+              f" {'─'*6} {'─'*7} {'─'*7} {'─'*5} │"
               f" {'─'*10}")
 
         for _, r in deploy.iterrows():
             agree_sel = r['agree_400'] if r['selected_alpha'] == '400' else r['agree_410']
-            print(f"  {r['ticker']:<8} {r['selected_alpha']:>3} {r['mode_sel']:<13} "
-                  f"{r['prob_sel']:>4.2f} {r['tp_sel']:>5.1%} {r['sl_sel']:>5.1%} │"
-                  f" {r['va_pnl_sel']:>+7.2%} {r['vb_pnl_sel']:>+8.2%} "
-                  f"{r['vb_wr_sel']:>7.1%} {r['vb_n_sel']:>7.0f} │"
-                  f" {agree_sel:>7.0%} {r['cross_agree']:>6.0%} "
+            print(f"  {r['ticker']:<8} {r['selected_alpha']:>4} "
+                  f"{r['mode_sel']:<13} {r['prob_sel']:>4.2f} "
+                  f"{r['tp_sel']:>5.1%} {r['sl_sel']:>5.1%} │"
+                  f" {r['va_pnl_sel']:>+7.2%} {r['vb_pnl_sel']:>+7.2%} │"
+                  f" {agree_sel:>5.0%} {r['cross_agree']:>6.0%} "
                   f"{r['retention']:>6.0%} {r['confidence']:>5} │"
                   f" {r['score_sel']:>10.6f}")
 
         print(f"\n  ── Summary ──")
         print(f"  Candidates:      {len(deploy)}")
-        print(f"  Mean TEST PnL:   {deploy['vb_pnl_sel'].mean():+.2%}")
-        print(f"  Mean TEST WR:    {deploy['vb_wr_sel'].mean():.1%}")
-        print(f"  Mean retention:  {deploy['retention'].mean():.0%}")
+        print(f"  Mean VAL PnL:    {deploy['va_pnl_sel'].mean():+.2%}")
+        print(f"  Mean TEST PnL:   {deploy['vb_pnl_sel'].mean():+.2%}  (held-out, not used in selection)")
+        print(f"  Mean retention:  {deploy['retention'].mean():.0%}  (VAL/OPT)")
         a400_n = (deploy['selected_alpha'] == '400').sum()
         a410_n = (deploy['selected_alpha'] == '410').sum()
-        print(f"  Alpha split:     400={a400_n}, 410={a410_n}")
-        for conf in ['HIGH', 'MED', 'LOW']:
-            n = (deploy['confidence'] == conf).sum()
-            if n:
-                print(f"  {conf} confidence:  {n} ticker(s)")
+        print(f"  Alpha split:     400(α=2.0)={a400_n}, 410(α=1.0)={a410_n}")
+
+        # ── Detailed stats per candidate ──
+        print(f"\n  ── DETAILED STATS PER CANDIDATE ──")
+        print(f"  Period dates: OPT=Aug'25–Jan'26  VAL=Feb–Mar'26  TEST=Apr–Jul'26")
+        print(f"\n  {'Ticker':<8} {'α':>4} │"
+              f" {'── OPT (Aug–Jan) ──────────':} │"
+              f" {'── VAL (Feb–Mar) ──────────':} │"
+              f" {'── TEST (Apr–Jul) ─────────':}")
+        print(f"  {'':8} {'':>4} │"
+              f" {'PnL':>8} {'WR':>6} {'#Trd':>5} │"
+              f" {'PnL':>8} {'WR':>6} {'#Trd':>5} │"
+              f" {'PnL':>8} {'WR':>6} {'#Trd':>5}")
+        print(f"  {'─'*8} {'─'*4} │"
+              f" {'─'*8} {'─'*6} {'─'*5} │"
+              f" {'─'*8} {'─'*6} {'─'*5} │"
+              f" {'─'*8} {'─'*6} {'─'*5}")
+
+        for _, r in deploy.iterrows():
+            sel = r['selected_alpha']
+            opt_p = r[f'opt_pnl_{sel}']
+            opt_w = r.get(f'opt_wr_{sel}', 0)
+            opt_n = r.get(f'opt_n_{sel}', 0)
+            va_p = r[f'va_{sel}']
+            va_w = r.get(f'va_wr_{sel}', 0)
+            va_n = r.get(f'va_n_{sel}', 0)
+            vb_p = r[f'vb_{sel}']
+            vb_w = r.get(f'vb_wr_{sel}', 0)
+            vb_n = r.get(f'vb_n_{sel}', 0)
+            print(f"  {r['ticker']:<8} {sel:>4} │"
+                  f" {opt_p:>+7.2%} {opt_w:>5.0%} {opt_n:>5.0f} │"
+                  f" {va_p:>+7.2%} {va_w:>5.0%} {va_n:>5.0f} │"
+                  f" {vb_p:>+7.2%} {vb_w:>5.0%} {vb_n:>5.0f}")
+
+        print(f"\n  ── Cross-alpha detail (both experiments for each candidate) ──")
+        print(f"\n  {'Ticker':<8} │"
+              f" {'── Exp 400 (α=2.0) ─────────────────────':} │"
+              f" {'── Exp 410 (α=1.0) ─────────────────────':} │ {'Sel':>3}")
+        print(f"  {'':8} │"
+              f" {'VAL PnL':>8} {'WR':>5} {'#':>4}  {'TST PnL':>8} {'WR':>5} {'#':>4} │"
+              f" {'VAL PnL':>8} {'WR':>5} {'#':>4}  {'TST PnL':>8} {'WR':>5} {'#':>4} │")
+        print(f"  {'─'*8} │"
+              f" {'─'*8} {'─'*5} {'─'*4}  {'─'*8} {'─'*5} {'─'*4} │"
+              f" {'─'*8} {'─'*5} {'─'*4}  {'─'*8} {'─'*5} {'─'*4} │ {'─'*3}")
+
+        for _, r in deploy.iterrows():
+            print(f"  {r['ticker']:<8} │"
+                  f" {r['va_400']:>+7.2%} {r['va_wr_400']:>4.0%} {r['va_n_400']:>4.0f}"
+                  f"  {r['vb_400']:>+7.2%} {r['vb_wr_400']:>4.0%} {r['vb_n_400']:>4.0f} │"
+                  f" {r['va_410']:>+7.2%} {r['va_wr_410']:>4.0%} {r['va_n_410']:>4.0f}"
+                  f"  {r['vb_410']:>+7.2%} {r['vb_wr_410']:>4.0%} {r['vb_n_410']:>4.0f} │"
+                  f" {r['selected_alpha']:>3}")
 else:
     deploy = pd.DataFrame()
-    print(f"\n  ⚠ No tickers available for deployment selection.")
-    print(f"    Gate passed: 0 | Total tickers: {len(all_tickers)} | Overlap: {len(overlap)}")
-    print(f"    Re-run after both optimizers process more overlapping tickers.")
+    print(f"\n  No tickers available for deployment selection.")
+    print(f"    Re-run after both optimizers process more tickers.")
 
 
-# ── Watch-list: gate pass + positive TEST but below deploy threshold ──
-print(f"\n  ── WATCH LIST (gate pass, TEST > 0, VAL < {DEPLOY_PNL_THRESHOLD:.1%}) ──")
-if not gate_df.empty:
-    watch_cols_needed = ['ticker', 'selected_alpha', 'va_pnl_sel', 'vb_pnl_sel',
-                         'mode_sel', 'score_sel', 'confidence']
-    missing_cols = [c for c in watch_cols_needed if c not in gate_df.columns]
-    if missing_cols:
-        for c in ['score_sel', 'mode_sel', 'va_pnl_sel', 'vb_pnl_sel', 'vb_wr_sel', 'prob_sel']:
-            if c not in gate_df.columns:
-                alpha_key = c.replace('_sel', '')
-                gate_df[c] = gate_df.apply(
-                    lambda r: r.get(f'{alpha_key}_400', np.nan)
-                    if r['selected_alpha'] == '400'
-                    else r.get(f'{alpha_key}_410', np.nan), axis=1)
-
+# ── Watch-list (gate pass, below deploy threshold) ──
+print(f"\n  ── WATCH LIST (gate pass, VAL < {DEPLOY_PNL_THRESHOLD:.1%}) ──")
+if not gate_df.empty and 'va_pnl_sel' in gate_df.columns:
     watch = gate_df[
-        (gate_df['vb_pnl_sel'] > 0) &
-        (gate_df['va_pnl_sel'] < DEPLOY_PNL_THRESHOLD)
-    ].sort_values('vb_pnl_sel', ascending=False)
+        gate_df['va_pnl_sel'] < DEPLOY_PNL_THRESHOLD
+    ].sort_values('va_pnl_sel', ascending=False)
 
     if len(watch) > 0:
-        print(f"  {len(watch)} near-deploy ticker(s) — positive TEST but below VAL threshold:")
-        print(f"\n  {'Ticker':<8} {'α':>3} {'Mode':<13} {'VAL PnL':>8} {'TEST PnL':>9} "
+        print(f"  {len(watch)} near-deploy ticker(s):")
+        print(f"\n  {'Ticker':<8} {'α':>4} {'Mode':<13} {'VAL PnL':>8} {'(TEST)':>8} "
               f"{'XAgree':>7} {'Conf':>5}")
-        print(f"  {'─'*8} {'─'*3} {'─'*13} {'─'*8} {'─'*9} {'─'*7} {'─'*5}")
+        print(f"  {'─'*8} {'─'*4} {'─'*13} {'─'*8} {'─'*8} {'─'*7} {'─'*5}")
         for _, r in watch.iterrows():
-            print(f"  {r['ticker']:<8} {r['selected_alpha']:>3} "
+            print(f"  {r['ticker']:<8} {r['selected_alpha']:>4} "
                   f"{r.get('mode_sel', '?'):<13} "
-                  f"{r['va_pnl_sel']:>+7.2%} {r['vb_pnl_sel']:>+8.2%} "
+                  f"{r['va_pnl_sel']:>+7.2%} {r['vb_pnl_sel']:>+7.2%} "
                   f"{r.get('cross_agree', 0):>6.0%} {r.get('confidence', '?'):>5}")
     else:
-        print(f"  None — no tickers with positive TEST below VAL threshold.")
+        print(f"  None.")
 else:
-    print(f"  None — no tickers passed the alpha agreement gate.")
+    print(f"  None — no tickers passed the gate.")
 
 
-# ── Single-alpha standouts: strong in one alpha only ──
+# ── Single-alpha standouts ──
 print(f"\n  ── SINGLE-ALPHA STANDOUTS (strong in one alpha, missing from other) ──")
 standouts = []
-for label, best_one, missing_set in [('400', best_400, tickers_410),
-                                      ('410', best_410, tickers_400)]:
+for label, best_one, other_set in [('400 (α=2.0)', best_400, tickers_410),
+                                     ('410 (α=1.0)', best_410, tickers_400)]:
     if best_one.empty:
         continue
-    solo = best_one[~best_one['ticker'].isin(missing_set)].copy()
-    solo = solo[solo['vb_pnl'] > 0].copy()
+    solo = best_one[~best_one['ticker'].isin(other_set)].copy()
     if not solo.empty:
-        solo = solo.sort_values('vb_pnl', ascending=False)
+        solo = solo.sort_values('score_pnl2', ascending=False)
         standouts.append((label, solo))
 
 if standouts:
     for label, solo in standouts:
         top = solo.head(10)
-        print(f"\n  Exp {label} only ({len(solo)} with positive TEST, showing top 10):")
-        print(f"  {'Ticker':<8} {'Mode':<13} {'Source':<9} {'VAL PnL':>8} {'TEST PnL':>9} "
+        print(f"\n  {label} only ({len(solo)} tickers, top 10 by score):")
+        print(f"  {'Ticker':<8} {'Mode':<13} {'VAL PnL':>8} {'(TEST)':>8} "
               f"{'Agree18':>8} {'Score':>10}")
-        print(f"  {'─'*8} {'─'*13} {'─'*9} {'─'*8} {'─'*9} {'─'*8} {'─'*10}")
+        print(f"  {'─'*8} {'─'*13} {'─'*8} {'─'*8} {'─'*8} {'─'*10}")
         for _, r in top.iterrows():
             print(f"  {r['ticker']:<8} {r.get('tpsl_mode', '?'):<13} "
-                  f"{r.get('source', 'ps'):<9} "
-                  f"{r['mean_va_pnl']:>+7.2%} {r['vb_pnl']:>+8.2%} "
+                  f"{r['mean_va_pnl']:>+7.2%} {r['vb_pnl']:>+7.2%} "
                   f"{r.get('agree_18', 0):>7.0%} {r.get('score_pnl2', 0):>10.6f}")
 else:
-    print(f"  None — all tickers exist in both alphas (or no positive TEST).")
+    print(f"  None.")
 
 
 # ==============================================================================
-# STEP 6: CHARTS
+# STEP 7: CHARTS
 # ==============================================================================
-print(f"\n\n{'═'*W}")
-print(f"  STEP 6: CHARTS")
-print(f"{'═'*W}")
+print(f"\n\n{'='*W}")
+print(f"  STEP 7: CHARTS")
+print(f"{'='*W}")
 
 fig, axes = plt.subplots(2, 2, figsize=(18, 14))
-fig.suptitle('SHORT Model Deployment Selection — Exp 400 vs 410', fontsize=14, fontweight='bold')
+fig.suptitle('SHORT Model Deploy Selection — Exp 400 (α=2.0) vs 410 (α=1.0) — VAL_A only',
+             fontsize=14, fontweight='bold')
 
-# Panel 1: Alpha agreement scatter
+# Panel 1: Alpha agreement scatter (400 vs 410, VAL PnL)
 ax = axes[0, 0]
-if not gate_df.empty or gate_fail_reasons:
-    all_candidates = []
-    for ticker in gate_overlap:
-        if not best_400.empty and ticker in best_400['ticker'].values:
-            r4 = best_400[best_400['ticker'] == ticker].iloc[0]
-        else:
-            continue
-        if not best_410.empty and ticker in best_410['ticker'].values:
-            r1 = best_410[best_410['ticker'] == ticker].iloc[0]
-        else:
-            continue
-        all_candidates.append((ticker, r4['vb_pnl'], r1['vb_pnl']))
+scatter_tickers = []
+if not best_400.empty and not best_410.empty:
+    for ticker in gate_tickers:
+        r4 = best_400[best_400['ticker'] == ticker]
+        r41 = best_410[best_410['ticker'] == ticker]
+        if not r4.empty and not r41.empty:
+            scatter_tickers.append((ticker, r4.iloc[0]['mean_va_pnl'], r41.iloc[0]['mean_va_pnl']))
 
-    if all_candidates:
-        tks, x_vals, y_vals = zip(*all_candidates)
-        x_vals, y_vals = np.array(x_vals), np.array(y_vals)
+if scatter_tickers:
+    tks, x_vals, y_vals = zip(*scatter_tickers)
+    x_vals, y_vals = np.array(x_vals), np.array(y_vals)
+    colors = ['green' if (x > 0 and y > 0) else 'red' for x, y in zip(x_vals, y_vals)]
+    ax.scatter(x_vals * 100, y_vals * 100, c=colors, s=50, alpha=0.7, edgecolors='k', linewidth=0.5)
+    for t, x, y in zip(tks, x_vals * 100, y_vals * 100):
+        ax.annotate(t, (x, y), fontsize=6, ha='center', va='bottom')
+    lim = max(abs(x_vals).max(), abs(y_vals).max()) * 100 * 1.2
+    ax.axhline(0, color='gray', linewidth=0.5)
+    ax.axvline(0, color='gray', linewidth=0.5)
+    ax.fill_between([-lim, 0], -lim, 0, alpha=0.05, color='red')
+    ax.fill_between([0, lim], 0, lim, alpha=0.05, color='green')
+ax.set_xlabel('Exp 400 (α=2.0) VAL PnL (%)')
+ax.set_ylabel('Exp 410 (α=1.0) VAL PnL (%)')
+ax.set_title('Alpha Agreement — VAL_A Period')
 
-        colors = ['green' if (x > 0 and y > 0) else 'red' for x, y in zip(x_vals, y_vals)]
-        ax.scatter(x_vals * 100, y_vals * 100, c=colors, s=50, alpha=0.7, edgecolors='k', linewidth=0.5)
-        for t, x, y in zip(tks, x_vals * 100, y_vals * 100):
-            ax.annotate(t, (x, y), fontsize=6, ha='center', va='bottom')
-
-        lim = max(abs(x_vals).max(), abs(y_vals).max()) * 100 * 1.2
-        ax.axhline(0, color='gray', linewidth=0.5)
-        ax.axvline(0, color='gray', linewidth=0.5)
-        ax.set_xlim(-lim, lim)
-        ax.set_ylim(-lim, lim)
-
-        ax.fill_between([-lim, 0], -lim, 0, alpha=0.05, color='red')
-        ax.fill_between([0, lim], 0, lim, alpha=0.05, color='green')
-        ax.text(lim * 0.5, lim * 0.8, 'BOTH +\n(PASS)', ha='center', fontsize=9, color='green')
-        ax.text(-lim * 0.5, -lim * 0.8, 'BOTH -\n(FAIL)', ha='center', fontsize=9, color='red')
-
-ax.set_xlabel('Exp 400 TEST PnL (%)')
-ax.set_ylabel('Exp 410 TEST PnL (%)')
-ax.set_title('Alpha Agreement: 400 vs 410 TEST PnL')
-
-# Panel 2: Deploy candidates bar
+# Panel 2: Deploy candidates bar (VAL PnL)
 ax = axes[0, 1]
 if not deploy.empty:
-    deploy_sorted = deploy.sort_values('vb_pnl_sel', ascending=True)
+    deploy_sorted = deploy.sort_values('va_pnl_sel', ascending=True)
     colors = ['#1f77b4' if a == '400' else '#ff7f0e' for a in deploy_sorted['selected_alpha']]
-    bars = ax.barh(range(len(deploy_sorted)), deploy_sorted['vb_pnl_sel'] * 100,
-                   color=colors, edgecolor='k', linewidth=0.5)
+    ax.barh(range(len(deploy_sorted)), deploy_sorted['va_pnl_sel'] * 100,
+            color=colors, edgecolor='k', linewidth=0.5)
     ax.set_yticks(range(len(deploy_sorted)))
     ax.set_yticklabels(deploy_sorted['ticker'], fontsize=8)
-    ax.axvline(DEPLOY_PNL_THRESHOLD * 100, color='red', linestyle='--', linewidth=1,
-               label=f'Deploy threshold ({DEPLOY_PNL_THRESHOLD:.1%})')
+    ax.axvline(DEPLOY_PNL_THRESHOLD * 100, color='red', linestyle='--', linewidth=1)
     ax.axvline(0, color='gray', linewidth=0.5)
-    ax.legend(fontsize=8)
-    ax.set_xlabel('TEST PnL (%)')
     import matplotlib.patches as mpatches
-    p400 = mpatches.Patch(color='#1f77b4', label='α=2.0 (400)')
-    p410 = mpatches.Patch(color='#ff7f0e', label='α=1.0 (410)')
-    ax.legend(handles=[p400, p410], fontsize=8)
+    p_400 = mpatches.Patch(color='#1f77b4', label='400 (α=2.0)')
+    p_410 = mpatches.Patch(color='#ff7f0e', label='410 (α=1.0)')
+    ax.legend(handles=[p_400, p_410], fontsize=8)
+    ax.set_xlabel('VAL PnL (%)')
 else:
     ax.text(0.5, 0.5, 'No deploy candidates yet', ha='center', va='center',
             transform=ax.transAxes, fontsize=12, color='gray')
-ax.set_title('Deploy Candidates — TEST PnL by Selected Alpha')
+ax.set_title('Deploy Candidates — VAL PnL')
 
 # Panel 3: Cross-agree by ticker
 ax = axes[1, 0]
@@ -730,19 +666,20 @@ else:
             transform=ax.transAxes, fontsize=12, color='gray')
 ax.set_title('Cross-Alpha Seed Stability')
 
-# Panel 4: Score distribution
+# Panel 4: Score distributions (400 vs 410)
 ax = axes[1, 1]
-if not sa_400.empty or not sa_410.empty:
-    if not sa_400.empty:
-        ax.hist(sa_400['score_pnl2'] * 10000, bins=30, alpha=0.5, color='#1f77b4',
-                label='400 (α=2.0)', edgecolor='k', linewidth=0.3)
-    if not sa_410.empty:
-        ax.hist(sa_410['score_pnl2'] * 10000, bins=30, alpha=0.5, color='#ff7f0e',
-                label='410 (α=1.0)', edgecolor='k', linewidth=0.3)
+has_data = False
+for eid, color, label in [('400', '#1f77b4', '400 (α=2.0)'),
+                           ('410', '#2ca02c', '410 (α=1.0)')]:
+    if not sa[eid].empty:
+        ax.hist(sa[eid]['score_pnl2'] * 10000, bins=30, alpha=0.4, color=color,
+                label=label, edgecolor='k', linewidth=0.3)
+        has_data = True
+if has_data:
     ax.axvline(DEPLOY_PNL_THRESHOLD**2 * 10000, color='red', linestyle='--',
-               label=f'Deploy² ({DEPLOY_PNL_THRESHOLD**2:.4f})', linewidth=1)
+               label=f'Deploy²', linewidth=1)
     ax.legend(fontsize=8)
-    ax.set_xlabel('score_pnl2 (×10⁴)')
+    ax.set_xlabel('score_pnl2 (x10⁴)')
     ax.set_ylabel('Count')
 else:
     ax.text(0.5, 0.5, 'No data yet', ha='center', va='center',
@@ -759,21 +696,23 @@ plt.show()
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
-print(f"\n\n{'═'*W}")
+print(f"\n\n{'='*W}")
 print(f"  SUMMARY")
-print(f"{'═'*W}")
-print(f"\n  Data:        {len(all_tickers)} tickers scored ({len(t400)} in 400, "
-      f"{len(t410)} in 410, {len(overlap)} overlap)")
-print(f"  Win modes:   {', '.join(winning_modes) if winning_modes else 'TBD'}")
+print(f"{'='*W}")
+print(f"\n  Data:        {len(all_tickers)} tickers "
+      f"(400:{len(tsets['400'])}, 410:{len(tsets['410'])})")
+print(f"  Win modes:   {', '.join(winning_modes)}")
 print(f"  Excluded:    {', '.join(sorted(EXCLUDE_MODES))}")
-print(f"  Gate pass:   {len(gate_pass)} / {len(gate_overlap)} overlap tickers")
+print(f"  Gate pass:   {len(gate_pass)} / {len(gate_tickers)} overlap tickers")
 print(f"  Deploy:      {len(deploy)} candidate(s)")
-n_watch = len(watch) if 'watch' in dir() and not watch.empty else 0
+n_watch = 0
+if 'watch' in dir() and isinstance(watch, pd.DataFrame) and not watch.empty:
+    n_watch = len(watch)
 print(f"  Watch-list:  {n_watch} near-deploy ticker(s)")
 if not deploy.empty:
     print(f"  Best ticker: {deploy.iloc[0]['ticker']} "
-          f"(α={deploy.iloc[0]['selected_alpha']}, "
-          f"TEST={deploy.iloc[0]['vb_pnl_sel']:+.2%}, "
-          f"score={deploy.iloc[0]['score_sel']:.6f})")
-print(f"\n  ★ Re-run this script as more optimization results arrive.")
-print(f"{'═'*W}")
+          f"(α={'2.0' if deploy.iloc[0]['selected_alpha'] == '400' else '1.0'}, "
+          f"VAL={deploy.iloc[0]['va_pnl_sel']:+.2%})")
+print(f"\n  Selection uses VAL_A only (Feb–Mar 2026).")
+print(f"  TEST (Apr+) shown for reference, not used in any gate.")
+print(f"{'='*W}")

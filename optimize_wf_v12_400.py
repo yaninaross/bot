@@ -2173,11 +2173,21 @@ for cfg_idx, cfg in enumerate(deploy_configs):
                       f"{ens_params['prob_thresh']:.2f} → {best_pt:.2f}")
             ens_params['prob_thresh'] = best_pt
 
+            ohlcv_ens_val = precompute_ohlcv_arrays(df_ohlcv, ens_r['val'][0], ens_r['val'][1],
+                                                     vol_baselines, atr_pct_series, vix_lk,
+                                                     dump_rate_dicts=dump_rate_dicts)
+            ens_val = validate_params(ticker, ohlcv_ens_val, regime_dict, ensemble_prob, ens_params,
+                                      pre_range_baselines, day_range_vals)
+            del ohlcv_ens_val
+            if ens_val is None:
+                ens_val = {'Avg_PnL': 0, 'Total_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
+
             ens_test = validate_params(ticker, ohlcv_test, regime_dict, ensemble_prob, ens_params,
                                        pre_range_baselines, day_range_vals)
             if ens_test is None:
                 ens_test = {'Avg_PnL': 0, 'Total_PnL': 0, 'Win_Rate': 0, 'Freq': 0, 'Count': 0}
 
+            ens_tag_va = "PASS" if ens_val['Avg_PnL'] > 0 else "FAIL"
             ens_tag = "PASS" if ens_test['Avg_PnL'] > 0 else "FAIL"
 
             if mode in ('atr', 'atr_adaptive'):
@@ -2205,6 +2215,8 @@ for cfg_idx, cfg in enumerate(deploy_configs):
                   f"params from S{best_seed_id}):")
             print(f"      Params: Entry={ens_params['entry_time']}  "
                   f"Prob>{ens_params['prob_thresh']:.3f}  {ens_tp_sl}")
+            print(f"      VAL:  AvgPnL={ens_val['Avg_PnL']:.2%}  "
+                  f"WR={ens_val['Win_Rate']:.1%}  N={ens_val['Count']}  [{ens_tag_va}]")
             print(f"      TEST: AvgPnL={ens_test['Avg_PnL']:.2%}  "
                   f"WR={ens_test['Win_Rate']:.1%}  N={ens_test['Count']}  [{ens_tag}]")
 
@@ -2266,11 +2278,11 @@ for cfg_idx, cfg in enumerate(deploy_configs):
                 'Win_Rate': ens_params['Win_Rate'],
                 'Freq': ens_params.get('Freq', 0),
                 'Count': ens_params['Count'],
-                'val_a_avg_pnl': ens_params['Avg_PnL'],
-                'val_a_win_rate': ens_params['Win_Rate'],
-                'val_a_freq': ens_params.get('Freq', 0),
-                'val_a_count': ens_params['Count'],
-                'survived_a': True,
+                'val_a_avg_pnl': ens_val['Avg_PnL'],
+                'val_a_win_rate': ens_val['Win_Rate'],
+                'val_a_freq': ens_val.get('Freq', 0),
+                'val_a_count': ens_val['Count'],
+                'survived_a': ens_val['Avg_PnL'] > 0,
                 'val_b_avg_pnl': ens_test['Avg_PnL'],
                 'val_b_win_rate': ens_test['Win_Rate'],
                 'val_b_freq': ens_test.get('Freq', 0),
