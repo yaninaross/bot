@@ -50,6 +50,8 @@ TARGET_TICKERS = [
     'ASTS', 'BBAI', 'LUNR', 'MVIS', 'WULF',
     # Additional tickers for broader WF coverage
     'ALAB', 'OKLO', 'RKLB', 'RDW', 'SMCI',
+    # SHORT RULE_1 tickers (not already above)
+    'BE', 'ONDS', 'WOLF',
 ]
 
 CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY']

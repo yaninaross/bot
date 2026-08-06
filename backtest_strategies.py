@@ -14,6 +14,7 @@ import gc
 import sys
 import subprocess
 import warnings
+import calendar
 from datetime import datetime, timedelta
 
 os.environ['TF_USE_LEGACY_KERAS'] = '1'
@@ -86,7 +87,9 @@ STARTING_CAPITAL = 200_000
 
 DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
                       '175_XSECTOR', '180_XSECTOR', '185_XSECTOR',
-                      '200_XSECTOR'}
+                      '200_XSECTOR',
+                      '240_XSECTOR', '241_XSECTOR', '242_XSECTOR',
+                      '243_XSECTOR', '244_XSECTOR', '245_XSECTOR'}
 EXCLUDE_TICKERS = set()
 
 WALKFORWARD_FOLDS = {
@@ -107,7 +110,7 @@ EXIT_TIME_MIN = 780
 PST = pytz.timezone('America/Los_Angeles')
 W = 130
 
-TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
+TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE', 'BTC': 'BTCUSD'}
 TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 SLIPPAGE_PCT = 0.0015
 MIN_DOLLAR_VOLUME = 50000
@@ -143,6 +146,25 @@ for _t in CONTEXT_ASSETS:
 CONTEXT_COLS += ['Time_Pos']
 ALL_FEATURE_COLS = ASSET_COLS + CONTEXT_COLS
 
+CONTEXT_ASSETS_240 = ['SPY', 'VIX', 'TLT', 'IWM', 'WGMI', 'BTC']
+
+ASSET_COLS_240 = (['Gap_Pct', 'RSI_14', 'RSI_60', 'RVOL', 'Compression',
+                   'ATR_14', 'Dist_to_PM_High', 'Bar_Is_Real'] +
+                  [f'ROC_{h}m' for h in ROC_HORIZONS] + MICRO_COLS +
+                  ['RV_Ratio', 'Intraday_DD', 'ATR_Accel', 'Spread_Z',
+                   'OBI_Accel', 'Cum_VDelta', 'Large_Trade_Ratio', 'Vol_Z',
+                   'Dollar_Vol', 'VDelta_Trend', 'BA_Ratio', 'VWAP_Dev'])
+
+CONTEXT_COLS_240 = []
+for _t in CONTEXT_ASSETS_240:
+    CONTEXT_COLS_240.append(f'{_t}_Anchor_ROC')
+    for _h in ROC_HORIZONS:
+        CONTEXT_COLS_240.append(f'{_t}_ROC_{_h}m')
+CONTEXT_COLS_240 += ['VIX_Level', 'VIX_Velocity', 'IWM_SPY_Spread',
+                     'Day_of_Week_Sin', 'Day_of_Week_Cos', 'OpEx_Dist']
+CONTEXT_COLS_240 += ['Time_Pos']
+ALL_FEATURE_COLS_240 = ASSET_COLS_240 + CONTEXT_COLS_240
+
 TRAIN_TEACHERS = [
     'BBAI', 'RCAT', 'LUNR', 'ASTS', 'ACHR', 'MVIS',
     'WULF', 'CIFR', 'IREN', 'KEEL', 'HUT', 'CLSK', 'APLD',
@@ -152,6 +174,11 @@ TEACHERS_31 = [
     'CIFR', 'IREN', 'KEEL', 'HUT', 'APLD', 'WULF', 'RIOT', 'CLSK', 'BTBT', 'ALAB', 'MARA',
     'RCAT', 'ASTS', 'LUNR', 'BBAI', 'RKLB', 'SPIR', 'BKSY', 'MNTS', 'PLUG', 'BE', 'FCEL', 'FLNC',
     'OKLO', 'SMR', 'MVIS', 'BGDE', 'RDW', 'PL', 'VOYG', 'SMLR',
+]
+
+TEACHERS_47 = TEACHERS_31 + [
+    'AMD', 'NVDA', 'TSLA', 'PLTR', 'SOUN', 'HOOD', 'SMCI', 'VRT', 'NBIS',
+    'KTOS', 'AVAV', 'ACHR', 'JOBY', 'NNDM', 'CCJ', 'CEG',
 ]
 
 EXP_CONFIGS = {
@@ -210,6 +237,18 @@ for _fold_num in range(201, 206):
         'embed_dim': 32,
     }
 
+for _fold_num in range(240, 246):
+    _fold_id = f'{_fold_num}_XSECTOR'
+    EXP_CONFIGS[_fold_id] = {
+        'train_teachers': TEACHERS_47,
+        'n_assets': len(TEACHERS_47) + 1,
+        'stats_id': _fold_id,
+        'model_builder': 'cnn_transformer',
+        'embed_dim': 32,
+        'asset_cols': ASSET_COLS_240,
+        'context_cols': CONTEXT_COLS_240,
+    }
+
 for _eid, _ecfg in EXP_CONFIGS.items():
     _idx = {t: i for i, t in enumerate(_ecfg['train_teachers'])}
     if 'BITF' in _idx: _idx['KEEL'] = _idx['BITF']
@@ -244,11 +283,12 @@ def assign_family(exp):
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
     if 200 <= num <= 205: return '200'
+    if 240 <= num <= 245: return '240'
     return 'other'
 
 
 def load_raw_wf_data():
-    print(f"  Loading WF results from BQ (model_version={MODEL_VERSION})...")
+    print(f"  Loading WF results from BQ (model_version={MODEL_VERSION} + per-fold 17x/18x/20x/24x)...")
     query = f"""
     SELECT ticker, experiment, seed, tpsl_mode, entry_time, entry_minute,
            prob_thresh, tp_pct, sl_pct, tp_mult, sl_mult,
@@ -260,7 +300,11 @@ def load_raw_wf_data():
            is_ensemble, survived_a, survived_b,
            grace_minutes, dip_pct, max_wait_minutes
     FROM `{BQ_TABLE}`
-    WHERE model_version = '{MODEL_VERSION}'
+    WHERE (model_version = '{MODEL_VERSION}'
+           OR model_version LIKE 'robust_wf_v12_17%'
+           OR model_version LIKE 'robust_wf_v12_18%'
+           OR model_version LIKE 'robust_wf_v12_20%'
+           OR model_version LIKE 'robust_wf_v12_24%')
       AND survived_a = TRUE
       AND val_a_count >= {MIN_TRADES}
       AND val_a_avg_pnl > 0
@@ -734,10 +778,13 @@ def transformer_encoder(inputs, head_size, num_heads, ff_dim, dropout=0.4):
     return Add()([x, res])
 
 
-def build_universal_model(n_assets, embed_dim=EMBED_DIM):
-    in_a  = Input(shape=(TIME_STEPS, len(ASSET_COLS)), name='asset_in')
-    in_c  = Input(shape=(len(CONTEXT_COLS),),          name='context_in')
-    in_id = Input(shape=(1,), dtype=tf.int32,          name='asset_id')
+def build_universal_model(n_assets, embed_dim=EMBED_DIM,
+                          n_asset_cols=None, n_context_cols=None):
+    n_ac = n_asset_cols or len(ASSET_COLS)
+    n_cc = n_context_cols or len(CONTEXT_COLS)
+    in_a  = Input(shape=(TIME_STEPS, n_ac), name='asset_in')
+    in_c  = Input(shape=(n_cc,),            name='context_in')
+    in_id = Input(shape=(1,), dtype=tf.int32, name='asset_id')
     x = transformer_encoder(Dense(128)(in_a), 128, 4, 128)
     x = GlobalAveragePooling1D()(transformer_encoder(x, 128, 4, 128))
     y = Dense(128, activation='relu')(LayerNormalization()(in_c))
@@ -750,15 +797,18 @@ def build_universal_model(n_assets, embed_dim=EMBED_DIM):
     return Model(inputs=[in_a, in_c, in_id], outputs=out)
 
 
-def build_cnn_transformer_model(n_assets, embed_dim=32):
+def build_cnn_transformer_model(n_assets, embed_dim=32,
+                                n_asset_cols=None, n_context_cols=None):
     CNN_FILTERS = 64
     CNN_KERNELS = [3, 7, 15]
     CNN_POOL_1 = 4
     CNN_POOL_2 = 4
 
-    in_a  = Input(shape=(TIME_STEPS, len(ASSET_COLS)), name='asset_in')
-    in_c  = Input(shape=(len(CONTEXT_COLS),),          name='context_in')
-    in_id = Input(shape=(1,), dtype=tf.int32,          name='asset_id')
+    n_ac = n_asset_cols or len(ASSET_COLS)
+    n_cc = n_context_cols or len(CONTEXT_COLS)
+    in_a  = Input(shape=(TIME_STEPS, n_ac), name='asset_in')
+    in_c  = Input(shape=(n_cc,),            name='context_in')
+    in_id = Input(shape=(1,), dtype=tf.int32, name='asset_id')
 
     x = Dense(CNN_FILTERS)(in_a)
     x = SpatialDropout1D(0.2)(x)
@@ -812,10 +862,16 @@ def get_model(model_id, seed, n_assets, ecfg=None):
         blob.download_to_filename(local_path)
     builder = (ecfg or {}).get('model_builder', 'standard')
     embed_dim = (ecfg or {}).get('embed_dim', EMBED_DIM)
+    _acols = (ecfg or {}).get('asset_cols', ASSET_COLS)
+    _ccols = (ecfg or {}).get('context_cols', CONTEXT_COLS)
     if builder == 'cnn_transformer':
-        model = build_cnn_transformer_model(n_assets, embed_dim=embed_dim)
+        model = build_cnn_transformer_model(n_assets, embed_dim=embed_dim,
+                                            n_asset_cols=len(_acols),
+                                            n_context_cols=len(_ccols))
     else:
-        model = build_universal_model(n_assets, embed_dim=embed_dim)
+        model = build_universal_model(n_assets, embed_dim=embed_dim,
+                                      n_asset_cols=len(_acols),
+                                      n_context_cols=len(_ccols))
     try:
         model.load_weights(local_path)
     except OSError:
@@ -829,12 +885,53 @@ def get_model(model_id, seed, n_assets, ecfg=None):
     return model
 
 
+def _next_opex(dt):
+    y, m = dt.year, dt.month
+    for _ in range(3):
+        c = calendar.monthcalendar(y, m)
+        fridays = [week[calendar.FRIDAY] for week in c if week[calendar.FRIDAY] != 0]
+        third_friday = fridays[2]
+        opex = pd.Timestamp(y, m, third_friday)
+        if opex >= pd.Timestamp(dt.date()):
+            return opex
+        m += 1
+        if m > 12:
+            m = 1; y += 1
+    return pd.Timestamp(dt.date())
+
+
 def build_market_context():
     print("  Building market context for TF scoring...")
+    all_ctx_assets = list(dict.fromkeys(CONTEXT_ASSETS + CONTEXT_ASSETS_240))
     frames = []
-    for ticker in CONTEXT_ASSETS:
+    vix_close = None
+    for ticker in all_ctx_assets:
         df = load_master(ticker)
         if df is None:
+            clean = TICKER_FILE_MAP.get(ticker, ticker)
+            for fallback in [f"gs://{BUCKET_NAME}/Data/Inference/{clean}_master_inference.parquet",
+                             f"gs://{BUCKET_NAME}/Data/Inference/{clean}_1m_full_historical_data.parquet"]:
+                try:
+                    df = pd.read_parquet(fallback)
+                    df = df.reset_index()
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+                    dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+                    if dt_cols:
+                        df['Datetime'] = pd.to_datetime(df[dt_cols[0]], utc=True)
+                    else:
+                        num_col = next((c for c in df.columns
+                                       if c in ('Datetime','Date','Time','Timestamp','Level_0')),
+                                      df.columns[0])
+                        df['Datetime'] = pd.to_datetime(df[num_col], unit='ms', utc=True)
+                    df = df.set_index('Datetime')
+                    df = df[~df.index.duplicated(keep='first')]
+                    print(f"    {ticker}: loaded from fallback ({fallback.split('/')[-1]})")
+                    break
+                except Exception:
+                    df = None
+        if df is None:
+            print(f"    Could not load context asset {ticker}")
             continue
         df = heal_data(df.sort_index())
         daily_c = df['Close'].resample('D').last().ffill().shift(1).reindex(
@@ -843,10 +940,36 @@ def build_market_context():
         for h in ROC_HORIZONS:
             cols[f'{ticker}_ROC_{h}m'] = df['Close'].pct_change(h).fillna(0)
         frames.append(pd.DataFrame(cols, index=df.index))
+        if ticker == 'VIX':
+            vix_close = df['Close'].copy()
         del df, daily_c; gc.collect()
     if not frames:
         raise RuntimeError("No context assets loaded")
-    return pd.concat(frames, axis=1).ffill().fillna(0)
+    ctx = pd.concat(frames, axis=1).ffill().fillna(0)
+
+    if vix_close is not None:
+        ctx['VIX_Level'] = vix_close.reindex(ctx.index, method='ffill').fillna(0)
+        ctx['VIX_Velocity'] = vix_close.reindex(ctx.index, method='ffill').pct_change(5).fillna(0)
+    else:
+        ctx['VIX_Level'] = 0.0
+        ctx['VIX_Velocity'] = 0.0
+
+    if 'IWM_Anchor_ROC' in ctx.columns and 'SPY_Anchor_ROC' in ctx.columns:
+        ctx['IWM_SPY_Spread'] = ctx['IWM_Anchor_ROC'] - ctx['SPY_Anchor_ROC']
+    else:
+        ctx['IWM_SPY_Spread'] = 0.0
+
+    weekday = ctx.index.weekday
+    ctx['Day_of_Week_Sin'] = np.sin(2 * np.pi * weekday / 5).astype('float32')
+    ctx['Day_of_Week_Cos'] = np.cos(2 * np.pi * weekday / 5).astype('float32')
+
+    opex_vals = np.array([
+        min(1.0, max(0.0, (_next_opex(dt).toordinal() - dt.toordinal()) / 30.0))
+        for dt in ctx.index
+    ], dtype='float32')
+    ctx['OpEx_Dist'] = opex_vals
+
+    return ctx
 
 
 def engineer_features_scoring(df, market_df):
@@ -870,14 +993,59 @@ def engineer_features_scoring(df, market_df):
     mins = df_pst.hour * 60 + df_pst.minute
     df['Time_Pos'] = np.clip((mins - 390) / 390, 0, 1)
     df['Bar_Is_Real'] = (df['Volume'] > 0).astype(float)
+
+    ret = df['Close'].pct_change()
+    rv_short = ret.rolling(30, min_periods=5).std()
+    rv_long = ret.rolling(120, min_periods=10).std().clip(lower=1e-9)
+    df['RV_Ratio'] = (rv_short / rv_long).fillna(1.0)
+
+    roll_max = df['Close'].rolling(240, min_periods=1).max()
+    df['Intraday_DD'] = ((df['Close'] - roll_max) / (roll_max + 1e-9)).fillna(0)
+
+    df['ATR_Accel'] = df['ATR_14'].pct_change(5).clip(-5, 5).fillna(0)
+
+    sp_mean = df['Spread'].rolling(60, min_periods=5).mean()
+    sp_std = df['Spread'].rolling(60, min_periods=5).std().clip(lower=1e-9)
+    df['Spread_Z'] = ((df['Spread'] - sp_mean) / sp_std).fillna(0)
+
+    df['OBI_Accel'] = df['OBI'].diff(5).fillna(0)
+    df['Cum_VDelta'] = df['Volume_Delta'].rolling(30, min_periods=1).sum().fillna(0)
+
+    avg_size = df['Volume'] / df['Trade_Count'].clip(lower=1)
+    avg_size_med = avg_size.rolling(120, min_periods=5).median().clip(lower=1e-9)
+    df['Large_Trade_Ratio'] = (avg_size / avg_size_med).fillna(1.0)
+
+    vol_mean = vol_real.rolling(60, min_periods=5).mean().ffill()
+    vol_std = vol_real.rolling(60, min_periods=5).std().ffill().clip(lower=1e-9)
+    df['Vol_Z'] = ((df['Volume'] - vol_mean) / vol_std).fillna(0)
+
+    df['Dollar_Vol'] = df['Volume'] * df['Close']
+
+    vd_short = df['Volume_Delta'].rolling(30, min_periods=5).mean()
+    vd_long_abs = df['Volume_Delta'].rolling(120, min_periods=10).mean().abs().clip(lower=1e-9)
+    df['VDelta_Trend'] = (vd_short / vd_long_abs).fillna(0)
+
+    df['BA_Ratio'] = (df['bsize'] / (df['asize'] + 1e-9)).fillna(1.0)
+
+    df['_dv'] = df['Volume'] * df['Close']
+    cum_dv = df.groupby(df.index.date)['_dv'].cumsum()
+    cum_vol = df.groupby(df.index.date)['Volume'].cumsum()
+    vwap = cum_dv / cum_vol.clip(lower=1e-9)
+    df['VWAP_Dev'] = ((df['Close'] - vwap) / (vwap + 1e-9)).fillna(0)
+    df.drop(columns=['_dv'], inplace=True)
+
     df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
     return df
 
 
-def apply_scaling_scoring(df, stats):
+SKIP_SCALING_240 = {'Time_Pos', 'Bar_Is_Real', 'Day_of_Week_Sin', 'Day_of_Week_Cos', 'OpEx_Dist'}
+
+
+def apply_scaling_scoring(df, stats, feature_cols=None):
     df_s = df.copy()
-    for col in ALL_FEATURE_COLS:
-        if col in ('Time_Pos', 'Bar_Is_Real'):
+    cols_to_scale = feature_cols if feature_cols is not None else ALL_FEATURE_COLS
+    for col in cols_to_scale:
+        if col in ('Time_Pos', 'Bar_Is_Real') or col in SKIP_SCALING_240:
             continue
         if col in stats:
             df_s[col] = ((df_s[col] - stats[col]['med'])
@@ -928,12 +1096,14 @@ def score_ticker_live(ticker, cfg, df_scaled):
     if len(entry_locs) == 0:
         return []
 
+    _a_cols = ecfg.get('asset_cols', ASSET_COLS)
+    _c_cols = ecfg.get('context_cols', CONTEXT_COLS)
     XA_list, XC_list, valid_locs = [], [], []
     for loc in entry_locs:
         if loc < TIME_STEPS:
             continue
-        window = df_pst.iloc[loc - TIME_STEPS:loc][ASSET_COLS].values.astype(np.float32)
-        context = df_pst.iloc[loc][CONTEXT_COLS].values.astype(np.float32)
+        window = df_pst.iloc[loc - TIME_STEPS:loc][_a_cols].values.astype(np.float32)
+        context = df_pst.iloc[loc][_c_cols].values.astype(np.float32)
         XA_list.append(window)
         XC_list.append(context)
         valid_locs.append(loc)
@@ -1229,7 +1399,9 @@ def run_backtest(configs, label, regime_dict, market_df):
         if df_feat is None:
             print(f"  {ticker}: SKIP (no data)"); continue
         stats = load_scaling_stats(cfg['stats_id'])
-        df_scaled = apply_scaling_scoring(df_feat, stats)
+        _ecfg_bt = EXP_CONFIGS.get(cfg['base_experiment'], {})
+        _fc = _ecfg_bt.get('asset_cols', ASSET_COLS) + _ecfg_bt.get('context_cols', CONTEXT_COLS)
+        df_scaled = apply_scaling_scoring(df_feat, stats, feature_cols=_fc)
 
         df_pst = df_scaled.copy()
         if str(df_pst.index.tz) != 'America/Los_Angeles':

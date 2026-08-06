@@ -28,6 +28,8 @@ except ImportError:
     matplotlib.use('Agg')
     _IN_COLAB = False
 
+import matplotlib.pyplot as plt
+
 from google.cloud import storage as gcs_storage, bigquery
 
 if _IN_COLAB:
@@ -977,6 +979,70 @@ if fu_results:
 else:
     print(f"  No tickers with ≥{MIN_TRADES_VALID} fixed universal trades")
 
+# ── 3F: Visualizations ───────────────────────────────────────────────────────
+fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+fig.suptitle('Phase 3: Exhaustive Oracle Results', fontsize=14, fontweight='bold')
+
+# (0,0) Per-ticker oracle H2 avg PnL
+ax = axes[0, 0]
+sorted_bt = valid_bt.sort_values('h2_avg_pnl')
+colors = ['#2ecc71' if v >= DEPLOY_FLOOR else '#3498db' if v > 0 else '#e74c3c'
+          for v in sorted_bt['h2_avg_pnl']]
+ax.barh(range(len(sorted_bt)), sorted_bt['h2_avg_pnl'] * 100, color=colors)
+ax.set_yticks(range(len(sorted_bt)))
+ax.set_yticklabels(sorted_bt.index, fontsize=7)
+ax.axvline(x=DEPLOY_FLOOR * 100, color='red', linestyle='--', alpha=0.7, label=f'Deploy ≥{DEPLOY_FLOOR*100}%')
+ax.axvline(x=0, color='black', linewidth=0.5)
+ax.set_xlabel('H2 Avg PnL %')
+ax.set_title(f'Oracle H2 Avg PnL ({len(sorted_bt)} tickers)')
+ax.legend(fontsize=8)
+
+# (0,1) Oracle vs BVA
+ax = axes[0, 1]
+bva_compare = valid_bt[valid_bt['bva_h2_avg'].notna()].sort_values('h2_avg_pnl')
+if len(bva_compare) > 0:
+    y_pos = np.arange(len(bva_compare))
+    bar_h = 0.35
+    ax.barh(y_pos + bar_h/2, bva_compare['h2_avg_pnl'] * 100, bar_h,
+            label='Oracle', color='#2ecc71', alpha=0.85)
+    ax.barh(y_pos - bar_h/2, bva_compare['bva_h2_avg'] * 100, bar_h,
+            label='Best val_a', color='#e74c3c', alpha=0.85)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(bva_compare.index, fontsize=7)
+    ax.axvline(x=0, color='black', linewidth=0.5)
+    ax.set_xlabel('H2 Avg PnL %')
+    ax.set_title(f'Oracle vs Best-Val-A ({len(bva_compare)} tickers)')
+    ax.legend(fontsize=8)
+
+# (1,0) Mode distribution
+ax = axes[1, 0]
+mode_counts_plot = valid_bt[valid_bt['oracle_config'] != 'none']['oracle_mode'].value_counts()
+ax.pie(mode_counts_plot.values, labels=mode_counts_plot.index, autopct='%1.0f%%',
+       colors=['#3498db', '#2ecc71', '#e67e22', '#9b59b6'])
+ax.set_title('Oracle Mode Distribution')
+
+# (1,1) TP vs H2 avg PnL scatter
+ax = axes[1, 1]
+tp_mask = valid_bt['oracle_tp'] > 0
+if tp_mask.sum() > 0:
+    tp_plot = valid_bt[tp_mask]
+    colors_sc = ['#2ecc71' if v >= DEPLOY_FLOOR else '#3498db' if v > 0 else '#e74c3c'
+                 for v in tp_plot['h2_avg_pnl']]
+    ax.scatter(tp_plot['oracle_tp'] * 100, tp_plot['h2_avg_pnl'] * 100,
+               c=colors_sc, s=60, edgecolors='white', alpha=0.8)
+    for _, r in tp_plot.iterrows():
+        if abs(r['h2_avg_pnl']) > 0.02:
+            ax.annotate(r.name, (r['oracle_tp'] * 100, r['h2_avg_pnl'] * 100),
+                       fontsize=6, alpha=0.7)
+    ax.axhline(y=DEPLOY_FLOOR * 100, color='red', linestyle='--', alpha=0.5)
+    ax.axhline(y=0, color='black', linewidth=0.5)
+    ax.set_xlabel('Oracle TP %')
+    ax.set_ylabel('H2 Avg PnL %')
+    ax.set_title('TP vs H2 Performance')
+
+plt.tight_layout()
+plt.show()
+
 # ── Build combined DataFrame ───────────────────────────────────────────────
 join_cols = ['h2_avg_pnl', 'h2_trades', 'h2_total_pnl', 'h2_wr',
              'h1_avg_pnl', 'h1_trades', 'full_trades', 'full_avg_pnl',
@@ -1124,6 +1190,48 @@ if not predictive:
 
 print(f"\n  Total predictive features: {len(predictive)}")
 
+# ── 4D: Visualizations ──────────────────────────────────────────────────────
+fig = plt.figure(figsize=(18, 14))
+fig.suptitle('Phase 4: Feature → Oracle H2 Correlations', fontsize=14, fontweight='bold')
+
+# Feature importance bar chart (top left, spanning full width)
+ax_imp = fig.add_subplot(3, 3, (1, 3))
+feat_names = [cr['feature'] for cr in corr_results]
+feat_rhos = [cr['rho_avg'] for cr in corr_results]
+feat_colors = ['#2ecc71' if abs(r) >= 0.15 else '#bdc3c7' for r in feat_rhos]
+ax_imp.barh(range(len(feat_names)), feat_rhos, color=feat_colors)
+ax_imp.set_yticks(range(len(feat_names)))
+ax_imp.set_yticklabels(feat_names, fontsize=8)
+ax_imp.axvline(x=0, color='black', linewidth=0.5)
+ax_imp.axvline(x=0.15, color='gray', linestyle='--', alpha=0.5, label='±0.15')
+ax_imp.axvline(x=-0.15, color='gray', linestyle='--', alpha=0.5)
+ax_imp.set_xlabel('Spearman ρ with H2 Avg PnL')
+ax_imp.set_title('Feature Importance (All 18 Features)')
+ax_imp.legend(fontsize=8)
+
+# Top 6 feature scatter plots (2x3 grid below)
+top_feats = [p['feature'] for p in predictive[:6]]
+for i, fname in enumerate(top_feats):
+    ax = fig.add_subplot(3, 3, 4 + i)
+    x_vals = analysis_df[fname].values
+    y_vals = analysis_df['h2_avg_pnl'].values * 100
+    sc_colors = ['#2ecc71' if v >= DEPLOY_FLOOR * 100 else '#3498db' if v > 0 else '#e74c3c'
+                 for v in y_vals]
+    ax.scatter(x_vals, y_vals, c=sc_colors, alpha=0.7, edgecolors='white', s=40)
+    ax.axhline(y=0, color='black', linewidth=0.5)
+    ax.axhline(y=DEPLOY_FLOOR * 100, color='red', linestyle='--', alpha=0.4)
+    for j in range(len(x_vals)):
+        if abs(y_vals[j]) > 2.5:
+            ax.annotate(analysis_df.index[j], (x_vals[j], y_vals[j]),
+                       fontsize=5, alpha=0.7)
+    rho = next(cr['rho_avg'] for cr in corr_results if cr['feature'] == fname)
+    ax.set_xlabel(fname, fontsize=8)
+    ax.set_ylabel('H2 Avg %', fontsize=8)
+    ax.set_title(f'ρ={rho:+.3f}', fontsize=9)
+
+plt.tight_layout()
+plt.show()
+
 
 # ==============================================================================
 # PHASE 5: COMPOSITE RULE CONSTRUCTION + VALIDATION
@@ -1219,8 +1327,10 @@ for n_features in range(2, min(len(pred_features) + 1, 5)):
 
         avg_pnl = float(h2_sel.mean())
         wr = float((h2_sel > 0).mean())
-        total = float(h2_sel.sum())
         h1_avg = float(h1_sel.mean()) if len(h1_sel) > 0 else 0.0
+
+        h2_trade_total = float(analysis_df.loc[mask, 'h2_total_pnl'].sum())
+        h2_total_trades = int(analysis_df.loc[mask, 'h2_trades'].sum())
 
         overlap_stable = len(set(selected_tickers_list) & set(STABLE_13))
         overlap_oracle = len(set(selected_tickers_list) & set(ORACLE_10))
@@ -1232,7 +1342,8 @@ for n_features in range(2, min(len(pred_features) + 1, 5)):
             'n_pass': n_pass,
             'h2_avg_pnl': avg_pnl,
             'h2_wr': wr,
-            'h2_total_pnl': total,
+            'h2_trade_total': h2_trade_total,
+            'h2_total_trades': h2_total_trades,
             'h1_avg_pnl': h1_avg,
             'overlap_stable13': overlap_stable,
             'overlap_oracle10': overlap_oracle,
@@ -1243,13 +1354,14 @@ combo_results.sort(key=lambda x: x['h2_avg_pnl'], reverse=True)
 
 print(f"\n  Found {len(combo_results)} valid combinations")
 print(f"\n  TOP 20 COMPOSITE RULES (sorted by H2 avg PnL):")
-print(f"  {'#':>3} {'N':>3} {'H2avg%':>8} {'H2WR%':>7} {'H2tot%':>8} {'H1avg%':>8} "
+print(f"  {'#':>3} {'Tkr':>4} {'Trd':>5} {'H2avg%':>8} {'H2WR%':>7} {'TrdTot%':>8} {'H1avg%':>8} "
       f"{'S13':>4} {'O10':>4} {'Rule'}")
-print(f"  {'-'*100}")
+print(f"  {'-'*110}")
 
 for i, cr in enumerate(combo_results[:20]):
-    print(f"  {i+1:>3} {cr['n_pass']:>3} {cr['h2_avg_pnl']*100:>+7.2f}% {cr['h2_wr']*100:>6.0f}% "
-          f"{cr['h2_total_pnl']*100:>+7.1f}% {cr['h1_avg_pnl']*100:>+7.2f}% "
+    print(f"  {i+1:>3} {cr['n_pass']:>4} {cr['h2_total_trades']:>5} "
+          f"{cr['h2_avg_pnl']*100:>+7.2f}% {cr['h2_wr']*100:>6.0f}% "
+          f"{cr['h2_trade_total']*100:>+7.1f}% {cr['h1_avg_pnl']*100:>+7.2f}% "
           f"{cr['overlap_stable13']:>4} {cr['overlap_oracle10']:>4} {cr['rule']}")
 
 # ── 5C: Validation of top 3 rules ───────────────────────────────────────────
@@ -1261,10 +1373,11 @@ for rank, cr in enumerate(combo_results[:3]):
     print(f"  {'─'*80}")
 
     print(f"    Selected tickers ({cr['n_pass']}): {', '.join(sorted(cr['tickers']))}")
-    print(f"    H2 avg PnL:  {cr['h2_avg_pnl']*100:+.2f}%")
-    print(f"    H2 WR:       {cr['h2_wr']*100:.0f}%")
-    print(f"    H2 total:    {cr['h2_total_pnl']*100:+.1f}%")
-    print(f"    H1 avg PnL:  {cr['h1_avg_pnl']*100:+.2f}%")
+    print(f"    H2 avg PnL:     {cr['h2_avg_pnl']*100:+.2f}%")
+    print(f"    H2 WR:          {cr['h2_wr']*100:.0f}%")
+    print(f"    H2 trades:      {cr['h2_total_trades']}")
+    print(f"    H2 trade total: {cr['h2_trade_total']*100:+.1f}%  (sum of all individual trade PnLs)")
+    print(f"    H1 avg PnL:     {cr['h1_avg_pnl']*100:+.2f}%")
     print(f"    Overlap with Stable-13: {cr['overlap_stable13']}/{len(STABLE_13)}")
     print(f"    Overlap with ORACLE-10: {cr['overlap_oracle10']}/{len(ORACLE_10)}")
 
@@ -1309,31 +1422,41 @@ print(f"\n  5D: Final Comparison (ORACLE ground truth)")
 print(f"  {'─'*80}")
 
 all_h2 = analysis_df['h2_avg_pnl']
+all_h2_tot = analysis_df['h2_total_pnl']
+all_h2_trades = int(analysis_df['h2_trades'].sum())
 print(f"  ALL ORACLE ({len(analysis_df)}):            H2 avg = {all_h2.mean()*100:+.2f}%  "
-      f"WR = {(all_h2 > 0).mean()*100:.0f}%  Total = {all_h2.sum()*100:+.1f}%")
+      f"WR = {(all_h2 > 0).mean()*100:.0f}%  Trades = {all_h2_trades}  "
+      f"TradeTot = {all_h2_tot.sum()*100:+.1f}%")
 
 if 'bva_h2_avg' in analysis_df.columns:
     bva_vals = analysis_df['bva_h2_avg'].dropna()
     if len(bva_vals) > 0:
         print(f"  ALL BEST-VAL-A ({len(bva_vals)}):         H2 avg = {bva_vals.mean()*100:+.2f}%  "
-              f"WR = {(bva_vals > 0).mean()*100:.0f}%  Total = {bva_vals.sum()*100:+.1f}%")
+              f"WR = {(bva_vals > 0).mean()*100:.0f}%")
 
 stable_in = analysis_df.index.isin(STABLE_13)
 if stable_in.sum() > 0:
     s13_h2 = analysis_df.loc[stable_in, 'h2_avg_pnl']
+    s13_trades = int(analysis_df.loc[stable_in, 'h2_trades'].sum())
+    s13_tot = analysis_df.loc[stable_in, 'h2_total_pnl'].sum()
     print(f"  STABLE-13 ({stable_in.sum()} found):        H2 avg = {s13_h2.mean()*100:+.2f}%  "
-          f"WR = {(s13_h2 > 0).mean()*100:.0f}%  Total = {s13_h2.sum()*100:+.1f}%")
+          f"WR = {(s13_h2 > 0).mean()*100:.0f}%  Trades = {s13_trades}  "
+          f"TradeTot = {s13_tot*100:+.1f}%")
 
 oracle_in = analysis_df.index.isin(ORACLE_10)
 if oracle_in.sum() > 0:
     o10_h2 = analysis_df.loc[oracle_in, 'h2_avg_pnl']
+    o10_trades = int(analysis_df.loc[oracle_in, 'h2_trades'].sum())
+    o10_tot = analysis_df.loc[oracle_in, 'h2_total_pnl'].sum()
     print(f"  ORACLE-10 ({oracle_in.sum()} found):        H2 avg = {o10_h2.mean()*100:+.2f}%  "
-          f"WR = {(o10_h2 > 0).mean()*100:.0f}%  Total = {o10_h2.sum()*100:+.1f}%")
+          f"WR = {(o10_h2 > 0).mean()*100:.0f}%  Trades = {o10_trades}  "
+          f"TradeTot = {o10_tot*100:+.1f}%")
 
 for i, cr in enumerate(combo_results[:3]):
     print(f"  RULE #{i+1} ({cr['n_pass']} tickers):         "
           f"H2 avg = {cr['h2_avg_pnl']*100:+.2f}%  "
-          f"WR = {cr['h2_wr']*100:.0f}%  Total = {cr['h2_total_pnl']*100:+.1f}%")
+          f"WR = {cr['h2_wr']*100:.0f}%  Trades = {cr['h2_total_trades']}  "
+          f"TradeTot = {cr['h2_trade_total']*100:+.1f}%")
 
 print(f"\n  Best single-feature gates:")
 for fname, ft in sorted(feat_thresholds.items(), key=lambda x: x[1]['h2_avg'], reverse=True):
@@ -1355,6 +1478,134 @@ if combo_results and 'oracle_mode' in combined.columns:
             tp_med = rule_sel['oracle_tp'].median()
             thr_med = rule_sel['oracle_thresh'].median()
             print(f"      Median TP: {tp_med*100:.1f}%  |  Median thresh: {thr_med:.2f}")
+
+# ── 5F: Visualizations ───────────────────────────────────────────────────────
+fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+fig.suptitle('Phase 5: Strategy Comparison & Rule Sensitivity', fontsize=14, fontweight='bold')
+
+# (0) Strategy comparison
+ax = axes[0]
+strat_names = []
+strat_avgs = []
+strat_trades = []
+strat_colors_bar = []
+
+strat_names.append(f'ALL Oracle\n({len(analysis_df)}t)')
+strat_avgs.append(all_h2.mean() * 100)
+strat_trades.append(all_h2_trades)
+strat_colors_bar.append('#95a5a6')
+
+if 'bva_h2_avg' in analysis_df.columns:
+    bva_vals_plot = analysis_df['bva_h2_avg'].dropna()
+    if len(bva_vals_plot) > 0:
+        strat_names.append(f'Best val_a\n({len(bva_vals_plot)}t)')
+        strat_avgs.append(bva_vals_plot.mean() * 100)
+        strat_trades.append(0)
+        strat_colors_bar.append('#e74c3c')
+
+if stable_in.sum() > 0:
+    strat_names.append(f'Stable-13\n({stable_in.sum()}t)')
+    strat_avgs.append(s13_h2.mean() * 100)
+    strat_trades.append(s13_trades)
+    strat_colors_bar.append('#f39c12')
+
+if oracle_in.sum() > 0:
+    strat_names.append(f'ORACLE-10\n({oracle_in.sum()}t)')
+    strat_avgs.append(o10_h2.mean() * 100)
+    strat_trades.append(o10_trades)
+    strat_colors_bar.append('#9b59b6')
+
+for i, cr in enumerate(combo_results[:3]):
+    strat_names.append(f'Rule #{i+1}\n({cr["n_pass"]}t, {cr["h2_total_trades"]}tr)')
+    strat_avgs.append(cr['h2_avg_pnl'] * 100)
+    strat_trades.append(cr['h2_total_trades'])
+    strat_colors_bar.append('#2ecc71')
+
+bars = ax.bar(range(len(strat_names)), strat_avgs, color=strat_colors_bar, edgecolor='white')
+ax.set_xticks(range(len(strat_names)))
+ax.set_xticklabels(strat_names, fontsize=8)
+ax.axhline(y=DEPLOY_FLOOR * 100, color='red', linestyle='--', alpha=0.7, label=f'Deploy ≥{DEPLOY_FLOOR*100}%')
+ax.axhline(y=0, color='black', linewidth=0.5)
+ax.set_ylabel('H2 Avg PnL %')
+ax.set_title('Strategy Comparison')
+ax.legend(fontsize=8)
+for bar, val in zip(bars, strat_avgs):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
+            f'{val:+.2f}%', ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+# (1) Sensitivity curves for top 3 rules
+ax = axes[1]
+perturb_vals = [-0.20, -0.15, -0.10, -0.05, 0.0, +0.05, +0.10, +0.15, +0.20]
+line_colors = ['#2ecc71', '#3498db', '#e67e22']
+
+for rank, cr in enumerate(combo_results[:3]):
+    sens_x = []
+    sens_y = []
+    sens_n = []
+    for perturb in perturb_vals:
+        mask = np.ones(len(analysis_df), dtype=bool)
+        for fname in cr['features']:
+            ft = feat_thresholds[fname]
+            vals_s = analysis_df[fname].values
+            if ft['higher_better']:
+                adj_thresh = ft['threshold'] * (1 + perturb)
+                mask &= vals_s >= adj_thresh
+            else:
+                adj_thresh = ft['threshold'] * (1 - perturb)
+                mask &= vals_s <= adj_thresh
+        n = mask.sum()
+        if n >= 1:
+            avg = analysis_df.loc[mask, 'h2_avg_pnl'].mean() * 100
+            sens_x.append(perturb * 100)
+            sens_y.append(avg)
+            sens_n.append(n)
+        else:
+            sens_x.append(perturb * 100)
+            sens_y.append(None)
+            sens_n.append(0)
+
+    valid_x = [x for x, y in zip(sens_x, sens_y) if y is not None]
+    valid_y = [y for y in sens_y if y is not None]
+    ax.plot(valid_x, valid_y, 'o-', color=line_colors[rank], linewidth=2,
+            label=f'Rule #{rank+1}', markersize=6)
+    for x, y, n in zip(sens_x, sens_y, sens_n):
+        if y is not None:
+            ax.annotate(f'{n}t', (x, y), fontsize=6, alpha=0.7,
+                       textcoords='offset points', xytext=(0, 8), ha='center')
+
+ax.axhline(y=DEPLOY_FLOOR * 100, color='red', linestyle='--', alpha=0.7, label=f'Deploy ≥{DEPLOY_FLOOR*100}%')
+ax.axhline(y=0, color='black', linewidth=0.5)
+ax.set_xlabel('Threshold Perturbation %')
+ax.set_ylabel('H2 Avg PnL %')
+ax.set_title('Rule Sensitivity (wider = more robust)')
+ax.legend(fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+# Rule #1 per-ticker PnL breakdown
+if combo_results:
+    best_rule = combo_results[0]
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.suptitle(f'Rule #1: {best_rule["rule"]}', fontsize=11, fontweight='bold')
+    rule_data = analysis_df.loc[analysis_df.index.isin(best_rule['tickers'])].sort_values('h2_avg_pnl')
+    bar_colors = ['#2ecc71' if v >= DEPLOY_FLOOR else '#3498db' if v > 0 else '#e74c3c'
+                  for v in rule_data['h2_avg_pnl']]
+    bars = ax.barh(range(len(rule_data)), rule_data['h2_avg_pnl'] * 100, color=bar_colors)
+    ax.set_yticks(range(len(rule_data)))
+    ax.set_yticklabels(rule_data.index, fontsize=10)
+    ax.axvline(x=DEPLOY_FLOOR * 100, color='red', linestyle='--', alpha=0.7)
+    ax.set_xlabel('H2 Avg PnL %')
+    for bar, (_, r) in zip(bars, rule_data.iterrows()):
+        trades = int(r['h2_trades'])
+        tot = r['h2_total_pnl'] * 100
+        ax.text(bar.get_width() + 0.1, bar.get_y() + bar.get_height()/2,
+                f'{trades}tr, tot={tot:+.0f}%', va='center', fontsize=9)
+    ax.set_title(f'{best_rule["n_pass"]} tickers, {best_rule["h2_total_trades"]} trades, '
+                 f'avg={best_rule["h2_avg_pnl"]*100:+.2f}%, '
+                 f'trade total={best_rule["h2_trade_total"]*100:+.1f}%')
+    plt.tight_layout()
+    plt.show()
 
 print(f"\n{'='*W}")
 print(f"  ANALYSIS COMPLETE")

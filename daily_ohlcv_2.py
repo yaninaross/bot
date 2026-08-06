@@ -36,10 +36,10 @@ def _release_memory():
 TARGET_TICKERS = [
     'LHX', 'LIN', 'LMT', 'LUNR', 'MARA', 'MIGI', 'MNTS',
     'MOD', 'MP', 'MSTR', 'MU', 'MVIS', 'NBIS', 'NEE', 'NNDM', 'NOC', 'NVDA',
-    'OKLO', 'PL', 'PLTR', 'PLUG', 'POWL',
+    'OKLO', 'ONDS', 'PL', 'PLTR', 'PLUG', 'POWL',
     'RCAT', 'RDW', 'RIOT', 'RKLB', 'RTX',
     'SMCI', 'SMR', 'SOUN', 'SPIR',
-    'TSLA', 'VOYG', 'VRT', 'VST', 'WULF', 'XOM',
+    'TSLA', 'VOYG', 'VRT', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
 CONTEXT_ASSETS = []

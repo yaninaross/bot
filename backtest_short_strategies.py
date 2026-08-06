@@ -1,10 +1,14 @@
-# %% ── Comprehensive SHORT Strategy Evaluation ────────────────────────────────
+# %% ── SHORT Strategy Backtest — Top 3 Config Selection Methods (CSV-Scored) ──
 #
-# Tests ALL ways to combine 12 walkforward folds (400-405 α=2.0, 410-415 α=1.0)
-# into trading strategies on TEST period (Apr-Jul 2026).
+# Compares 3 top config selection methods + oracle ceiling from Phase B:
+#   M01: Best val_a (highest val_a_avg_pnl per ticker, any fold)
+#   M06: Fold-403 (best val_a within fold 403 only)
+#   M07: Alpha-2 folds (best val_a within folds 400-405)
+#   ORACLE: Best actual H2 config per ticker (BIASED ceiling)
 #
-# Strategies: single-fold, fold-group ensemble, voting, ticker-gated
-# ~25 strategies evaluated on same data. No optimization — pure OOS.
+# Uses CSV-scored probabilities (not live TF). Fold-specific scoring.
+# Tickers: RULE_1 (6 tickers from Phase A asset selection).
+# GPU NOT required. Colab-ready.
 
 import os, io, gc, sys, warnings, ctypes
 from datetime import datetime, timedelta
@@ -20,6 +24,8 @@ try:
 except ImportError:
     matplotlib.use('Agg')
     _IN_COLAB = False
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 from google.cloud import storage as gcs_storage, bigquery
 
@@ -32,6 +38,7 @@ def _release_memory():
     try: ctypes.CDLL("libc.so.6").malloc_trim(0)
     except Exception: pass
 
+
 # ==============================================================================
 # CONFIG
 # ==============================================================================
@@ -39,32 +46,67 @@ BUCKET_NAME   = "time-series-bucket-ys"
 RESULTS_DIR   = "Algos/Results_all_v2"
 INFERENCE_DIR = "Data/Inference_v2"
 
-TEST_START = '2026-04-01'
-TEST_END   = '2026-07-28'
-ENTRY_MIN  = 375
+TEST_START  = '2026-04-01'
+TEST_END    = '2026-07-28'
+HALF2_START = '2026-06-01'
+
+ENTRY_MIN     = 375
 EXIT_TIME_MIN = 780
 SLIPPAGE_PCT  = 0.002
+STARTING_CAPITAL = 200_000
+DEPLOY_FLOOR  = 0.018
+SL_FIXED      = 0.03
 
 PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
+
+SHORT_TICKERS = ['BE', 'IREN', 'OKLO', 'ONDS', 'RKLB', 'WOLF']
 
 FOLDS_A2 = [400, 401, 402, 403, 404, 405]
 FOLDS_A1 = [410, 411, 412, 413, 414, 415]
 ALL_FOLDS = FOLDS_A2 + FOLDS_A1
 
-FOLD_EXPERIMENTS = {f: f'{f}_XSECTOR' for f in ALL_FOLDS}
+FOLD_EXPERIMENTS    = {f: f'{f}_XSECTOR' for f in ALL_FOLDS}
 FOLD_MODEL_VERSIONS = {f: f'robust_wf_v12_short_{f}' for f in ALL_FOLDS}
 
 BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
 BQ_ALLOWED_MODES = ('static', 'atr_sl', 'grace')
 
+MIN_H2_TRADES = 3
+
+FIXED_UNIVERSAL_CFG = {
+    'fold': None,
+    'tpsl_mode': 'static',
+    'prob_thresh': 0.50,
+    'tp_pct': 0.05,
+    'sl_pct': SL_FIXED,
+    'sl_mult': 0.0,
+    'grace_minutes': 0,
+    'entry_minute': ENTRY_MIN,
+    'val_a_avg_pnl': 0.0,
+    'opt_avg_pnl': 0.0,
+    'config_id': 'fixed_universal',
+}
+
+STRATEGY_COLORS = {
+    'M01_BEST_VA':      '#1565C0',
+    'M06_FOLD403':      '#E65100',
+    'M07_ALPHA2':       '#2E7D32',
+    'ORACLE':           '#9C27B0',
+}
+
+TICKER_COLORS = {
+    'BE':   '#2196F3', 'IREN': '#4CAF50', 'OKLO': '#FF9800',
+    'ONDS': '#E91E63', 'RKLB': '#9C27B0', 'WOLF': '#00BCD4',
+}
+
 gcs_client = gcs_storage.Client()
 bq_client  = bigquery.Client()
-W = 120
+W = 110
 
 
 # ==============================================================================
-# DATA LOADING — OHLCV
+# DATA LOADING
 # ==============================================================================
 _master_cache = {}
 
@@ -114,6 +156,19 @@ def heal_data(df):
     return df
 
 
+def compute_daily_atr_pct(df, period=14):
+    daily = df.resample('D').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
+    prev_close = daily['Close'].shift(1)
+    tr = pd.concat([
+        daily['High'] - daily['Low'],
+        (daily['High'] - prev_close).abs(),
+        (daily['Low'] - prev_close).abs()
+    ], axis=1).max(axis=1)
+    daily_atr = tr.rolling(period).mean()
+    atr_pct = daily_atr / daily['Close']
+    return atr_pct.reindex(df.index, method='ffill')
+
+
 def precompute_ohlcv_arrays(df, start_date, end_date):
     s = pd.to_datetime(start_date).tz_localize('America/Los_Angeles')
     e = pd.to_datetime(end_date).tz_localize('America/Los_Angeles') + timedelta(days=1)
@@ -135,22 +190,6 @@ def precompute_ohlcv_arrays(df, start_date, end_date):
     }
 
 
-def compute_daily_atr_pct(df, period=14):
-    daily = df.resample('D').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).dropna()
-    prev_close = daily['Close'].shift(1)
-    tr = pd.concat([
-        daily['High'] - daily['Low'],
-        (daily['High'] - prev_close).abs(),
-        (daily['Low'] - prev_close).abs()
-    ], axis=1).max(axis=1)
-    daily_atr = tr.rolling(period).mean()
-    atr_pct = daily_atr / daily['Close']
-    return atr_pct.reindex(df.index, method='ffill')
-
-
-# ==============================================================================
-# DATA LOADING — SEED SCORES
-# ==============================================================================
 def load_seed_scores(ticker, experiment_base):
     clean = TICKER_FILE_MAP.get(ticker, ticker)
     bucket = gcs_client.bucket(BUCKET_NAME)
@@ -183,6 +222,14 @@ def compute_daily_prob(seed_scores, entry_min):
         for dt, val in entry_vals.items():
             all_daily[dt.date()].append(float(val))
     return {d: np.mean(ps) for d, ps in all_daily.items()}
+
+
+def _safe_float(val, default=0.0):
+    try:
+        if pd.isna(val): return default
+    except (TypeError, ValueError): pass
+    try: return float(val)
+    except (TypeError, ValueError): return default
 
 
 # ==============================================================================
@@ -262,147 +309,86 @@ def run_short_trade_grace(prices, highs, lows, date_ints, time_mins,
     return (entry_price - prices[n-1]) / entry_price, ed, True
 
 
-def execute_trade(ohlcv, entry_idx, cfg):
-    mode = cfg['tpsl_mode']
+def execute_trade(ohlcv, entry_idx, mode, tp_pct, sl_pct, sl_mult, grace_min):
+    prices    = ohlcv['prices']
+    highs     = ohlcv['highs']
+    lows      = ohlcv['lows']
+    date_ints = ohlcv['dates']
+    time_mins = ohlcv['times']
     if mode == 'atr_sl':
-        atr_arr = ohlcv.get('atr_pct', np.full(len(ohlcv['prices']), 0.05))
+        atr_arr = ohlcv.get('atr_pct', np.full(len(prices), 0.05))
         pnl, td, filled = run_short_trade_atr_sl(
-            ohlcv['prices'], ohlcv['highs'], ohlcv['lows'], ohlcv['dates'], ohlcv['times'],
-            entry_idx, cfg['tp_pct'], float(atr_arr[entry_idx]), cfg['sl_mult'], EXIT_TIME_MIN)
+            prices, highs, lows, date_ints, time_mins,
+            entry_idx, tp_pct, float(atr_arr[entry_idx]), sl_mult, EXIT_TIME_MIN)
     elif mode == 'grace':
         pnl, td, filled = run_short_trade_grace(
-            ohlcv['prices'], ohlcv['highs'], ohlcv['lows'], ohlcv['dates'], ohlcv['times'],
-            entry_idx, cfg['tp_pct'], cfg['sl_pct'], EXIT_TIME_MIN, cfg['grace_minutes'])
+            prices, highs, lows, date_ints, time_mins,
+            entry_idx, tp_pct, sl_pct, EXIT_TIME_MIN, grace_min)
     else:
         pnl, td, filled = run_short_trade_static(
-            ohlcv['prices'], ohlcv['highs'], ohlcv['lows'], ohlcv['dates'], ohlcv['times'],
-            entry_idx, cfg['tp_pct'], cfg['sl_pct'], EXIT_TIME_MIN)
+            prices, highs, lows, date_ints, time_mins,
+            entry_idx, tp_pct, sl_pct, EXIT_TIME_MIN)
     if filled:
         pnl -= 2 * SLIPPAGE_PCT
     return pnl, td, filled
 
 
 # ==============================================================================
-# BQ CONFIG LOADING
-# ==============================================================================
-def _safe_float(val, default=0.0):
-    try:
-        if pd.isna(val): return default
-    except (TypeError, ValueError): pass
-    try: return float(val)
-    except (TypeError, ValueError): return default
-
-def _safe_int(val, default=0):
-    try:
-        if pd.isna(val): return default
-    except (TypeError, ValueError): pass
-    try: return int(val)
-    except (TypeError, ValueError): return default
-
-
-def load_all_bq_configs():
-    mv_str = ", ".join(f"'{FOLD_MODEL_VERSIONS[f]}'" for f in ALL_FOLDS)
-    modes_str = ", ".join(f"'{m}'" for m in BQ_ALLOWED_MODES)
-    q = f"""
-    SELECT ticker, experiment, tpsl_mode, model_version,
-           prob_thresh, tp_pct, sl_pct, sl_mult, grace_minutes,
-           val_a_avg_pnl, val_a_win_rate, val_a_count,
-           val_b_avg_pnl, val_b_count,
-           opt_avg_pnl, is_ensemble
-    FROM `{BQ_TABLE}`
-    WHERE model_version IN ({mv_str})
-      AND is_ensemble = TRUE
-      AND survived_a = TRUE
-      AND val_a_count >= 2
-      AND val_a_avg_pnl > 0
-      AND tpsl_mode IN ({modes_str})
-    """
-    df = bq_client.query(q).to_dataframe()
-    df['fold'] = df['model_version'].str.extract(r'_(\d+)$').astype(int)
-
-    configs = {}
-    for _, row in df.iterrows():
-        ticker = row['ticker']
-        fold = row['fold']
-        key = (ticker, fold)
-        if key not in configs or row['val_a_avg_pnl'] > configs[key]['val_pnl']:
-            configs[key] = {
-                'ticker': ticker,
-                'fold': fold,
-                'experiment': row['experiment'],
-                'tpsl_mode': row['tpsl_mode'],
-                'prob_thresh': _safe_float(row['prob_thresh']),
-                'tp_pct': _safe_float(row['tp_pct']),
-                'sl_pct': _safe_float(row['sl_pct']),
-                'sl_mult': _safe_float(row['sl_mult']),
-                'grace_minutes': _safe_int(row['grace_minutes']),
-                'val_pnl': _safe_float(row['val_a_avg_pnl']),
-                'val_b_pnl': _safe_float(row['val_b_avg_pnl']),
-            }
-    return configs
-
-
-def best_config_from_folds(ticker, fold_list, bq_configs):
-    best = None
-    for f in fold_list:
-        cfg = bq_configs.get((ticker, f))
-        if cfg and (best is None or cfg['val_pnl'] > best['val_pnl']):
-            best = cfg
-    return best
-
-
-# ==============================================================================
-# TRADE SUMMARIZATION
+# SUMMARIZE RESULTS
 # ==============================================================================
 def summarize_trades(trades_list, label):
     if not trades_list:
-        return {'label': label, 'n_tickers': 0, 'n': 0, 'total': 0.0,
-                'avg': 0.0, 'wr': 0.0, 'dd': 0.0, 'sharpe': 0.0, 'monthly': {}}
+        return {'label': label, 'n': 0, 'total': 0, 'avg': 0, 'wr': 0,
+                'dd': 0, 'monthly': {}, 'trades_df': pd.DataFrame()}
     df = pd.DataFrame(trades_list)
     df['month'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m')
     cum = df.sort_values('date')['pnl'].cumsum()
     max_dd = (cum - cum.cummax()).min()
-    monthly = df.groupby('month').agg(
-        n=('pnl', 'count'), total=('pnl', 'sum'),
-        avg=('pnl', 'mean'), wr=('pnl', lambda x: (x > 0).mean())
-    ).to_dict('index')
-    pnl_arr = df['pnl'].values
-    sharpe = pnl_arr.mean() / pnl_arr.std() * np.sqrt(252) if len(pnl_arr) > 1 and pnl_arr.std() > 0 else 0.0
     return {
         'label': label,
-        'n_tickers': df['ticker'].nunique(),
         'n': len(df), 'total': df['pnl'].sum(), 'avg': df['pnl'].mean(),
-        'wr': (df['pnl'] > 0).mean(), 'dd': max_dd, 'sharpe': sharpe,
-        'monthly': monthly,
+        'wr': (df['pnl'] > 0).mean(), 'dd': max_dd,
+        'monthly': df.groupby('month').agg(
+            n=('pnl', 'count'), total=('pnl', 'sum'),
+            avg=('pnl', 'mean'), wr=('pnl', lambda x: (x > 0).mean())
+        ).to_dict('index'),
         'trades_df': df,
     }
 
 
 # ==============================================================================
-# STRATEGY RUNNER — core simulation loop
+# BACKTEST FUNCTION — CSV-scored with fold-specific probs
 # ==============================================================================
-def run_strategy(strategy_fn, label, ticker_data, daily_probs, bq_configs):
+def run_csv_backtest(configs, daily_probs_cache, ticker_data, label):
     test_start_dt = pd.Timestamp(TEST_START).date()
     test_end_dt   = pd.Timestamp(TEST_END).date()
+    h2_start_dt   = pd.Timestamp(HALF2_START).date()
+
     all_trades = []
+    per_ticker_trades = defaultdict(list)
 
-    for ticker in sorted(ticker_data.keys()):
-        result = strategy_fn(ticker, daily_probs, bq_configs)
-        if result is None:
+    for ticker in sorted(configs.keys()):
+        if ticker not in ticker_data or ticker not in daily_probs_cache:
             continue
-        trade_dates, cfg = result
-        if not trade_dates or cfg is None:
-            continue
+        cfg = configs[ticker]
+        ohlcv = ticker_data[ticker]
+        probs = daily_probs_cache[ticker]
+        entry_min = cfg.get('entry_minute', ENTRY_MIN)
+        prob_thresh = cfg['prob_thresh']
+        mode = cfg['tpsl_mode']
 
-        ohlcv = ticker_data[ticker]['ohlcv']
-        if ohlcv is None:
-            continue
+        prices = ohlcv['prices']
+        highs  = ohlcv['highs']
+        lows   = ohlcv['lows']
+        dates  = ohlcv['dates']
+        times  = ohlcv['times']
+        atr_arr = ohlcv.get('atr_pct', np.full(len(prices), 0.05))
 
-        entry_indices = np.where(ohlcv['times'] == ENTRY_MIN)[0]
+        entry_indices = np.where(times == entry_min)[0]
         last_traded_date = -1
 
         for idx in entry_indices:
-            d_int = int(ohlcv['dates'][idx])
+            d_int = int(dates[idx])
             d_str = str(d_int)
             d_date = pd.Timestamp(f"{d_str[:4]}-{d_str[4:6]}-{d_str[6:8]}").date()
 
@@ -410,181 +396,105 @@ def run_strategy(strategy_fn, label, ticker_data, daily_probs, bq_configs):
                 continue
             if d_int == last_traded_date:
                 continue
-            if d_date not in trade_dates:
+            prob = probs.get(d_date)
+            if prob is None:
+                continue
+            if prob < prob_thresh:
                 continue
 
-            pnl, trade_date, filled = execute_trade(ohlcv, idx, cfg)
+            if mode == 'atr_sl':
+                pnl, trade_date, filled = run_short_trade_atr_sl(
+                    prices, highs, lows, dates, times,
+                    idx, cfg['tp_pct'], float(atr_arr[idx]), cfg['sl_mult'], EXIT_TIME_MIN)
+            elif mode == 'grace':
+                pnl, trade_date, filled = run_short_trade_grace(
+                    prices, highs, lows, dates, times,
+                    idx, cfg['tp_pct'], cfg['sl_pct'], EXIT_TIME_MIN, cfg['grace_minutes'])
+            else:
+                pnl, trade_date, filled = run_short_trade_static(
+                    prices, highs, lows, dates, times,
+                    idx, cfg['tp_pct'], cfg['sl_pct'], EXIT_TIME_MIN)
+
             if not filled:
                 continue
+
+            pnl -= 2 * SLIPPAGE_PCT
             last_traded_date = d_int
 
-            all_trades.append({
+            half = 'H2' if d_date >= h2_start_dt else 'H1'
+            trade = {
                 'date': d_date, 'ticker': ticker, 'pnl': pnl,
-                'mode': cfg['tpsl_mode'], 'tp': cfg['tp_pct'],
-                'sl': cfg['sl_pct'] if cfg['tpsl_mode'] != 'atr_sl' else cfg['sl_mult'],
-                'source_fold': cfg.get('fold', -1),
-            })
+                'prob': prob, 'close': float(prices[idx]),
+                'mode': mode, 'tp': cfg['tp_pct'],
+                'sl': cfg['sl_pct'] if mode != 'atr_sl' else cfg['sl_mult'],
+                'half': half,
+            }
+            all_trades.append(trade)
+            per_ticker_trades[ticker].append(trade)
 
-    return summarize_trades(all_trades, label)
+    return all_trades, per_ticker_trades
 
 
 # ==============================================================================
-# STRATEGY DEFINITIONS
+# CONFIG SELECTION METHODS (from select_short_config.py Phase 4)
 # ==============================================================================
-
-# ── A. Single-fold strategies ─────────────────────────────────────────────────
-def make_single_fold_strategy(fold):
-    def strategy(ticker, daily_probs, bq_configs):
-        cfg = bq_configs.get((ticker, fold))
-        if cfg is None:
-            return None
-        probs = daily_probs.get(ticker, {}).get(fold)
-        if not probs:
-            return None
-        trade_dates = {d for d, p in probs.items() if p >= cfg['prob_thresh']}
-        return trade_dates, cfg
-    return strategy
-
-
-# ── B. Fold-group ensemble strategies ─────────────────────────────────────────
-def make_ensemble_strategy(fold_list, label):
-    def strategy(ticker, daily_probs, bq_configs):
-        cfg = best_config_from_folds(ticker, fold_list, bq_configs)
-        if cfg is None:
-            return None
-        available = []
-        for f in fold_list:
-            fp = daily_probs.get(ticker, {}).get(f)
-            if fp:
-                available.append(fp)
-        if not available:
-            return None
-        all_dates = set()
-        for fp in available:
-            all_dates |= set(fp.keys())
-        avg_probs = {}
-        for d in all_dates:
-            vals = [fp[d] for fp in available if d in fp]
-            if vals:
-                avg_probs[d] = np.mean(vals)
-        trade_dates = {d for d, p in avg_probs.items() if p >= cfg['prob_thresh']}
-        return trade_dates, cfg
-    return strategy
+def _bq_row_to_cfg(row):
+    return {
+        'fold': int(row['fold']),
+        'tpsl_mode': row['tpsl_mode'],
+        'prob_thresh': row['prob_thresh'],
+        'tp_pct': row['tp_pct'],
+        'sl_pct': row['sl_pct'],
+        'sl_mult': row['sl_mult'],
+        'grace_minutes': int(row['grace_minutes']),
+        'entry_minute': int(row['entry_minute']) if row['entry_minute'] > 0 else ENTRY_MIN,
+        'val_a_avg_pnl': row['val_a_avg_pnl'],
+        'opt_avg_pnl': row['opt_avg_pnl'],
+        'config_id': f"f{int(row['fold'])}_{row['tpsl_mode']}_t{row['prob_thresh']:.2f}_tp{row['tp_pct']:.2f}",
+    }
 
 
-def make_best_k_strategy(k):
-    def strategy(ticker, daily_probs, bq_configs):
-        fold_vals = []
-        for f in ALL_FOLDS:
-            cfg = bq_configs.get((ticker, f))
-            if cfg and daily_probs.get(ticker, {}).get(f):
-                fold_vals.append((cfg['val_pnl'], f))
-        if len(fold_vals) < k:
-            return None
-        fold_vals.sort(reverse=True)
-        best_folds = [f for _, f in fold_vals[:k]]
-        cfg = best_config_from_folds(ticker, best_folds, bq_configs)
-        if cfg is None:
-            return None
-        available = [daily_probs[ticker][f] for f in best_folds if f in daily_probs.get(ticker, {})]
-        if not available:
-            return None
-        all_dates = set()
-        for fp in available:
-            all_dates |= set(fp.keys())
-        avg_probs = {}
-        for d in all_dates:
-            vals = [fp[d] for fp in available if d in fp]
-            if vals:
-                avg_probs[d] = np.mean(vals)
-        trade_dates = {d for d, p in avg_probs.items() if p >= cfg['prob_thresh']}
-        return trade_dates, cfg
-    return strategy
-
-
-# ── C. Voting strategies ──────────────────────────────────────────────────────
-def make_vote_strategy(fold_list, min_votes, label):
-    def strategy(ticker, daily_probs, bq_configs):
-        fold_cfgs = []
-        for f in fold_list:
-            cfg = bq_configs.get((ticker, f))
-            fp = daily_probs.get(ticker, {}).get(f)
-            if cfg and fp:
-                fold_cfgs.append((f, cfg, fp))
-        if len(fold_cfgs) < min_votes:
-            return None
-        all_dates = set()
-        for _, _, fp in fold_cfgs:
-            all_dates |= set(fp.keys())
-        trade_dates = set()
-        for d in all_dates:
-            votes = 0
-            best_val = -999
-            best_cfg = None
-            for f, cfg, fp in fold_cfgs:
-                if d in fp and fp[d] >= cfg['prob_thresh']:
-                    votes += 1
-                    if cfg['val_pnl'] > best_val:
-                        best_val = cfg['val_pnl']
-                        best_cfg = cfg
-            if votes >= min_votes:
-                trade_dates.add(d)
-        if not trade_dates:
-            return None
-        best_overall = max(fold_cfgs, key=lambda x: x[1]['val_pnl'])
-        return trade_dates, best_overall[1]
-    return strategy
-
-
-def cross_alpha_strategy(ticker, daily_probs, bq_configs):
-    a2_cfgs = []
-    a1_cfgs = []
-    for f in FOLDS_A2:
-        cfg = bq_configs.get((ticker, f))
-        fp = daily_probs.get(ticker, {}).get(f)
-        if cfg and fp:
-            a2_cfgs.append((f, cfg, fp))
-    for f in FOLDS_A1:
-        cfg = bq_configs.get((ticker, f))
-        fp = daily_probs.get(ticker, {}).get(f)
-        if cfg and fp:
-            a1_cfgs.append((f, cfg, fp))
-    if not a2_cfgs or not a1_cfgs:
+def _pick_best(t_df, col='val_a_avg_pnl'):
+    if len(t_df) == 0:
         return None
-    all_dates = set()
-    for _, _, fp in a2_cfgs + a1_cfgs:
-        all_dates |= set(fp.keys())
-    trade_dates = set()
-    for d in all_dates:
-        a2_fire = any(fp.get(d, 0) >= cfg['prob_thresh'] for _, cfg, fp in a2_cfgs)
-        a1_fire = any(fp.get(d, 0) >= cfg['prob_thresh'] for _, cfg, fp in a1_cfgs)
-        if a2_fire and a1_fire:
-            trade_dates.add(d)
-    if not trade_dates:
-        return None
-    all_cfgs = a2_cfgs + a1_cfgs
-    best = max(all_cfgs, key=lambda x: x[1]['val_pnl'])
-    return trade_dates, best[1]
+    best_idx = t_df[col].idxmax()
+    return _bq_row_to_cfg(t_df.loc[best_idx])
 
 
-# ── D. Ticker-gated strategies ────────────────────────────────────────────────
-def make_gated_strategy(min_folds_val_pos, fold_set=None):
-    if fold_set is None:
-        fold_set = ALL_FOLDS
-    def strategy(ticker, daily_probs, bq_configs):
-        n_val_pos = sum(1 for f in fold_set if (ticker, f) in bq_configs)
-        if n_val_pos < min_folds_val_pos:
-            return None
-        cfg = best_config_from_folds(ticker, fold_set, bq_configs)
-        if cfg is None:
-            return None
-        best_fold = cfg['fold']
-        probs = daily_probs.get(ticker, {}).get(best_fold)
-        if not probs:
-            return None
-        trade_dates = {d for d, p in probs.items() if p >= cfg['prob_thresh']}
-        return trade_dates, cfg
-    return strategy
+def select_m01_best_va(bq_df, tickers):
+    selections = {}
+    for ticker in tickers:
+        t_df = bq_df[bq_df['ticker'] == ticker]
+        if len(t_df) == 0:
+            continue
+        cfg = _pick_best(t_df, 'val_a_avg_pnl')
+        if cfg:
+            selections[ticker] = cfg
+    return selections
+
+
+def select_m06_fold403(bq_df, tickers):
+    selections = {}
+    for ticker in tickers:
+        t_df = bq_df[(bq_df['ticker'] == ticker) & (bq_df['fold'] == 403)]
+        if len(t_df) == 0:
+            t_df = bq_df[bq_df['ticker'] == ticker]
+        cfg = _pick_best(t_df, 'val_a_avg_pnl')
+        if cfg:
+            selections[ticker] = cfg
+    return selections
+
+
+def select_m07_alpha2(bq_df, tickers):
+    selections = {}
+    for ticker in tickers:
+        t_df = bq_df[(bq_df['ticker'] == ticker) & (bq_df['fold'].isin(FOLDS_A2))]
+        if len(t_df) == 0:
+            t_df = bq_df[bq_df['ticker'] == ticker]
+        cfg = _pick_best(t_df, 'val_a_avg_pnl')
+        if cfg:
+            selections[ticker] = cfg
+    return selections
 
 
 # ==============================================================================
@@ -593,214 +503,610 @@ def make_gated_strategy(min_folds_val_pos, fold_set=None):
 np.random.seed(42)
 
 print(f"\n{'='*W}")
-print(f"  COMPREHENSIVE SHORT STRATEGY EVALUATION")
-print(f"  TEST: {TEST_START} → {TEST_END}")
-print(f"  ENTRY: {ENTRY_MIN} min | EXIT: {EXIT_TIME_MIN} min | SLIPPAGE: {SLIPPAGE_PCT:.2%} each way")
-print(f"  FOLDS: {len(ALL_FOLDS)} (α=2.0: {FOLDS_A2}, α=1.0: {FOLDS_A1})")
-print(f"{'='*W}\n")
+print(f"  SHORT STRATEGY BACKTEST — Top 3 Config Methods + Oracle")
+print(f"  TICKERS: {', '.join(sorted(SHORT_TICKERS))} (RULE_1)")
+print(f"  TEST: {TEST_START} → {TEST_END}  |  H2: {HALF2_START} → {TEST_END}")
+print(f"  ENTRY: 6:15 PST ({ENTRY_MIN} min)  |  EXIT: 1:00 PM ({EXIT_TIME_MIN} min)")
+print(f"  SLIPPAGE: {SLIPPAGE_PCT:.2%} each way  |  CAPITAL: ${STARTING_CAPITAL:,}")
+print(f"{'='*W}")
+
 
 # ── Step 1: Load BQ configs ──────────────────────────────────────────────────
-print("Step 1: Loading BQ configs...")
-bq_configs = load_all_bq_configs()
-all_tickers = sorted(set(cfg['ticker'] for cfg in bq_configs.values()))
-print(f"  {len(bq_configs)} ticker-fold configs for {len(all_tickers)} tickers")
+print(f"\n  STEP 1: Loading BQ configs (all 12 folds, ensemble)...")
 
-fold_coverage = defaultdict(set)
-for (t, f) in bq_configs:
-    fold_coverage[t].add(f)
-for n in [1, 2, 3, 4, 6]:
-    ct = sum(1 for t, folds in fold_coverage.items() if len(folds) >= n)
-    print(f"  >= {n} folds: {ct} tickers")
+mv_str = ", ".join(f"'{FOLD_MODEL_VERSIONS[f]}'" for f in ALL_FOLDS)
+modes_str = ", ".join(f"'{m}'" for m in BQ_ALLOWED_MODES)
 
-# ── Step 2: Load OHLCV ──────────────────────────────────────────────────────
-print(f"\nStep 2: Loading OHLCV for {len(all_tickers)} tickers...")
+q = f"""
+SELECT ticker, tpsl_mode, entry_minute,
+       prob_thresh, tp_pct, sl_pct, sl_mult, grace_minutes,
+       opt_avg_pnl, opt_win_rate, opt_count,
+       val_a_avg_pnl, val_a_win_rate, val_a_count,
+       is_ensemble, model_version
+FROM `{BQ_TABLE}`
+WHERE model_version IN ({mv_str})
+  AND opt_avg_pnl > 0
+  AND tpsl_mode IN ({modes_str})
+  AND is_ensemble = TRUE
+ORDER BY ticker, model_version
+"""
+bq_df = bq_client.query(q).to_dataframe()
+bq_df['fold'] = bq_df['model_version'].str.extract(r'_(\d+)$').astype(int)
+
+for col in ['prob_thresh', 'tp_pct', 'sl_pct', 'sl_mult', 'grace_minutes',
+            'entry_minute', 'opt_avg_pnl', 'opt_win_rate', 'opt_count',
+            'val_a_avg_pnl', 'val_a_win_rate', 'val_a_count']:
+    bq_df[col] = bq_df[col].apply(lambda x: _safe_float(x, 0.0))
+
+bq_df['va_opt_ratio'] = bq_df['val_a_avg_pnl'] / bq_df['opt_avg_pnl'].clip(lower=0.001)
+
+bq_tickers = sorted(bq_df['ticker'].unique())
+print(f"    BQ: {len(bq_df)} configs, {len(bq_tickers)} tickers, {bq_df['fold'].nunique()} folds")
+print(f"    RULE_1 in BQ: {[t for t in SHORT_TICKERS if t in bq_tickers]}")
+
+
+# ── Step 2: Run config selection methods ─────────────────────────────────────
+print(f"\n  STEP 2: Selecting configs with 3 methods...")
+
+configs_m01 = select_m01_best_va(bq_df, SHORT_TICKERS)
+configs_m06 = select_m06_fold403(bq_df, SHORT_TICKERS)
+configs_m07 = select_m07_alpha2(bq_df, SHORT_TICKERS)
+
+for label, cfgs in [('M01_BEST_VA', configs_m01), ('M06_FOLD403', configs_m06),
+                     ('M07_ALPHA2', configs_m07)]:
+    tks = sorted(cfgs.keys())
+    print(f"    {label}: {len(tks)} tickers — {', '.join(tks)}")
+    for tk in tks:
+        c = cfgs[tk]
+        print(f"      {tk}: f{c['fold']}_{c['tpsl_mode']} TP={c['tp_pct']:.0%} "
+              f"SL={c['sl_pct']:.0%} thresh={c['prob_thresh']:.2f} va={c['val_a_avg_pnl']:+.2%}")
+
+
+# ── Step 3: Load OHLCV data ─────────────────────────────────────────────────
+print(f"\n  STEP 3: Loading OHLCV + ATR for {len(SHORT_TICKERS)} tickers...")
 ticker_data = {}
-for i, ticker in enumerate(all_tickers):
-    df = load_master(ticker)
-    if df is None:
-        continue
-    df = heal_data(df)
-    ohlcv = precompute_ohlcv_arrays(df, TEST_START, TEST_END)
-    if ohlcv is None:
-        continue
-    atr_pct = compute_daily_atr_pct(df)
-    ohlcv['atr_pct'] = atr_pct.reindex(df.index).values[:len(ohlcv['prices'])]
-    if len(ohlcv['atr_pct']) < len(ohlcv['prices']):
-        ohlcv['atr_pct'] = np.pad(ohlcv['atr_pct'],
-            (0, len(ohlcv['prices']) - len(ohlcv['atr_pct'])), constant_values=0.05)
-    ticker_data[ticker] = {'ohlcv': ohlcv}
-    if (i + 1) % 10 == 0:
-        print(f"    {i+1}/{len(all_tickers)} loaded")
-        _release_memory()
 
-print(f"  {len(ticker_data)} tickers with OHLCV data")
+for ticker in SHORT_TICKERS:
+    try:
+        df = load_master(ticker)
+        if df is None:
+            continue
+        if isinstance(df.index, pd.MultiIndex):
+            _master_cache.pop(ticker, None)
+            continue
+        df = heal_data(df)
+        if isinstance(df.index, pd.MultiIndex):
+            _master_cache.pop(ticker, None)
+            continue
+        ohlcv = precompute_ohlcv_arrays(df, TEST_START, TEST_END)
+        if ohlcv is None:
+            print(f"    {ticker}: no data in test period")
+            del df
+            _master_cache.pop(ticker, None)
+            continue
+        atr_pct = compute_daily_atr_pct(df)
+        atr_vals = atr_pct.reindex(df.index).fillna(0.05)
+        s = pd.to_datetime(TEST_START).tz_localize('America/Los_Angeles')
+        e = pd.to_datetime(TEST_END).tz_localize('America/Los_Angeles') + timedelta(days=1)
+        idx = df.index
+        if str(idx.tz) != 'America/Los_Angeles':
+            idx = idx.tz_convert('America/Los_Angeles')
+        atr_cut = atr_vals[(idx >= s) & (idx < e)]
+        ohlcv['atr_pct'] = atr_cut.values.astype(np.float64)
+        ticker_data[ticker] = ohlcv
+        n_days = len(np.unique(ohlcv['dates']))
+        print(f"    {ticker}: {n_days} trading days, ATR_pct={atr_cut.median():.4f}")
+        del df
+        _master_cache.pop(ticker, None)
+    except Exception as ex:
+        print(f"    {ticker}: OHLCV load failed -- {ex}")
+        _master_cache.pop(ticker, None)
+    gc.collect()
 
-# ── Step 3: Load seed scores for all folds ───────────────────────────────────
-print(f"\nStep 3: Loading seed scores for all {len(ALL_FOLDS)} folds...")
-daily_probs = defaultdict(dict)
-total_loaded = 0
+_release_memory()
 
-for fold in ALL_FOLDS:
+
+# ── Step 4: Load fold-specific CSV scores ────────────────────────────────────
+print(f"\n  STEP 4: Loading CSV seed scores (fold-specific)...")
+
+all_strategy_configs = {
+    'M01_BEST_VA': configs_m01,
+    'M06_FOLD403': configs_m06,
+    'M07_ALPHA2':  configs_m07,
+}
+
+needed_folds = set()
+for cfgs in all_strategy_configs.values():
+    for ticker, cfg in cfgs.items():
+        if cfg['fold'] is not None:
+            needed_folds.add(cfg['fold'])
+needed_folds.update(ALL_FOLDS)
+
+all_fold_probs = defaultdict(dict)
+for fold in sorted(needed_folds):
     exp = FOLD_EXPERIMENTS[fold]
-    fold_tickers = [t for t in all_tickers if (t, fold) in bq_configs]
     n_loaded = 0
-    for ticker in fold_tickers:
+    for ticker in SHORT_TICKERS:
         if ticker not in ticker_data:
+            continue
+        if fold in all_fold_probs[ticker]:
             continue
         seeds = load_seed_scores(ticker, exp)
         if not seeds:
             continue
         dp = compute_daily_prob(seeds, ENTRY_MIN)
         if dp:
-            daily_probs[ticker][fold] = dp
+            all_fold_probs[ticker][fold] = dp
             n_loaded += 1
         del seeds
-    total_loaded += n_loaded
-    print(f"  Fold {fold} ({exp}): {n_loaded}/{len(fold_tickers)} tickers loaded")
+    if n_loaded > 0:
+        print(f"    Fold {fold}: {n_loaded} tickers loaded")
     _release_memory()
 
-print(f"  Total: {total_loaded} ticker-fold probability sets loaded")
-
-# ── Step 4: Define all strategies ────────────────────────────────────────────
-print(f"\nStep 4: Running strategies...\n")
-
-strategies = []
-
-# A. Single-fold strategies
-for fold in ALL_FOLDS:
-    alpha = '2.0' if fold < 410 else '1.0'
-    strategies.append((f'FOLD_{fold}', make_single_fold_strategy(fold)))
-
-# B. Fold-group ensembles
-strategies.append(('EARLY_A2 (400-402)', make_ensemble_strategy([400,401,402], 'EARLY_A2')))
-strategies.append(('LATE_A2 (403-405)',  make_ensemble_strategy([403,404,405], 'LATE_A2')))
-strategies.append(('ALL_A2 (400-405)',   make_ensemble_strategy(FOLDS_A2, 'ALL_A2')))
-strategies.append(('EARLY_A1 (410-412)', make_ensemble_strategy([410,411,412], 'EARLY_A1')))
-strategies.append(('LATE_A1 (413-415)',  make_ensemble_strategy([413,414,415], 'LATE_A1')))
-strategies.append(('ALL_A1 (410-415)',   make_ensemble_strategy(FOLDS_A1, 'ALL_A1')))
-strategies.append(('ALL_12',            make_ensemble_strategy(ALL_FOLDS, 'ALL_12')))
-strategies.append(('BEST_3',            make_best_k_strategy(3)))
-strategies.append(('BEST_5',            make_best_k_strategy(5)))
-
-# C. Voting strategies
-strategies.append(('VOTE_2of6_A2', make_vote_strategy(FOLDS_A2, 2, 'VOTE_2of6_A2')))
-strategies.append(('VOTE_3of6_A2', make_vote_strategy(FOLDS_A2, 3, 'VOTE_3of6_A2')))
-strategies.append(('VOTE_2of6_A1', make_vote_strategy(FOLDS_A1, 2, 'VOTE_2of6_A1')))
-strategies.append(('VOTE_3of6_A1', make_vote_strategy(FOLDS_A1, 3, 'VOTE_3of6_A1')))
-strategies.append(('CROSS_ALPHA',  cross_alpha_strategy))
-
-# D. Ticker-gated (best-fold config, gated by N folds having VAL+)
-strategies.append(('GATE_2of12', make_gated_strategy(2)))
-strategies.append(('GATE_3of12', make_gated_strategy(3)))
-strategies.append(('GATE_4of12', make_gated_strategy(4)))
-strategies.append(('GATE_6of12', make_gated_strategy(6)))
-strategies.append(('GATE_2of6_A2', make_gated_strategy(2, FOLDS_A2)))
-strategies.append(('GATE_3of6_A2', make_gated_strategy(3, FOLDS_A2)))
-strategies.append(('GATE_2of6_A1', make_gated_strategy(2, FOLDS_A1)))
-strategies.append(('GATE_3of6_A1', make_gated_strategy(3, FOLDS_A1)))
-
-# ── Step 5: Execute all strategies ───────────────────────────────────────────
-results = []
-for label, fn in strategies:
-    r = run_strategy(fn, label, ticker_data, daily_probs, bq_configs)
-    results.append(r)
-    if r['n'] > 0:
-        print(f"  {label:25s}  tickers={r['n_tickers']:3d}  trades={r['n']:4d}  "
-              f"avg={r['avg']:+.2%}  WR={r['wr']:.0%}  total={r['total']:+.1%}  "
-              f"DD={r['dd']:+.2%}  sharpe={r['sharpe']:.2f}")
-    else:
-        print(f"  {label:25s}  (no trades)")
-
-# ── Step 6: Summary table sorted by total PnL ───────────────────────────────
-print(f"\n{'='*W}")
-print(f"  RESULTS — SORTED BY TOTAL PnL")
-print(f"{'='*W}")
-
-results_sorted = sorted(results, key=lambda r: r['total'], reverse=True)
-
-print(f"\n  {'Strategy':25s}  {'Tickers':>7}  {'Trades':>6}  {'Avg_PnL':>8}  {'WR':>5}  "
-      f"{'Total_PnL':>10}  {'Max_DD':>7}  {'Sharpe':>7}  {'PnL/mo':>7}")
-print(f"  {'─'*25}  {'─'*7}  {'─'*6}  {'─'*8}  {'─'*5}  {'─'*10}  {'─'*7}  {'─'*7}  {'─'*7}")
-
-for r in results_sorted:
-    if r['n'] == 0:
-        print(f"  {r['label']:25s}  {'—':>7}  {'—':>6}  {'—':>8}  {'—':>5}  {'—':>10}  {'—':>7}  {'—':>7}  {'—':>7}")
+ensemble_probs = {}
+for ticker in ticker_data:
+    fold_dps = all_fold_probs.get(ticker, {})
+    if not fold_dps:
         continue
-    months = len(r['monthly']) if r['monthly'] else 1
-    pnl_mo = r['total'] / months
-    print(f"  {r['label']:25s}  {r['n_tickers']:>7}  {r['n']:>6}  {r['avg']:>+7.2%}  {r['wr']:>4.0%}  "
-          f"{r['total']:>+9.1%}  {r['dd']:>+6.2%}  {r['sharpe']:>7.2f}  {pnl_mo:>+6.1%}")
+    all_dates = set()
+    for dp in fold_dps.values():
+        all_dates.update(dp.keys())
+    ep = {}
+    for d in all_dates:
+        vals = [dp[d] for dp in fold_dps.values() if d in dp]
+        if vals:
+            ep[d] = np.mean(vals)
+    ensemble_probs[ticker] = ep
 
-# ── Step 7: Top strategies — per-ticker breakdown ────────────────────────────
-print(f"\n{'='*W}")
-print(f"  TOP 5 STRATEGIES — PER-TICKER BREAKDOWN")
-print(f"{'='*W}")
+tickers_ready = sorted(set(ticker_data.keys()) & set(ensemble_probs.keys()))
+print(f"\n    Ready: {len(tickers_ready)} tickers with OHLCV + probs")
 
-top5 = [r for r in results_sorted if r['n'] > 0][:5]
 
-for r in top5:
-    df = r.get('trades_df')
-    if df is None or df.empty:
+# ── Step 5: Build per-strategy daily probs ───────────────────────────────────
+print(f"\n  STEP 5: Building per-strategy daily probability maps...")
+
+strategy_probs = {}
+for strat_name, cfgs in all_strategy_configs.items():
+    dp_map = {}
+    for ticker, cfg in cfgs.items():
+        if ticker not in ticker_data:
+            continue
+        fold = cfg['fold']
+        if fold is not None and fold in all_fold_probs.get(ticker, {}):
+            dp_map[ticker] = all_fold_probs[ticker][fold]
+        elif ticker in ensemble_probs:
+            dp_map[ticker] = ensemble_probs[ticker]
+    strategy_probs[strat_name] = dp_map
+    print(f"    {strat_name}: {len(dp_map)} tickers with probs")
+
+
+# ── Step 6: Exhaustive oracle backtest ───────────────────────────────────────
+print(f"\n  STEP 6: Running exhaustive oracle backtest (all configs x all tickers)...")
+
+test_start_dt = pd.Timestamp(TEST_START).date()
+test_end_dt   = pd.Timestamp(TEST_END).date()
+h2_start_dt   = pd.Timestamp(HALF2_START).date()
+
+all_ticker_configs = {}
+for ticker in SHORT_TICKERS:
+    t_df = bq_df[bq_df['ticker'] == ticker]
+    if len(t_df) == 0:
         continue
-    print(f"\n  ── {r['label']} ({'─'*60}")
-    tk_stats = df.groupby('ticker').agg(
-        n=('pnl', 'count'), total=('pnl', 'sum'),
-        avg=('pnl', 'mean'), wr=('pnl', lambda x: (x > 0).mean())
-    ).sort_values('total', ascending=False)
+    configs_list = []
+    for _, bq_row in t_df.iterrows():
+        configs_list.append({
+            'fold': int(bq_row['fold']),
+            'tpsl_mode': bq_row['tpsl_mode'],
+            'prob_thresh': bq_row['prob_thresh'],
+            'tp_pct': bq_row['tp_pct'],
+            'sl_pct': bq_row['sl_pct'],
+            'sl_mult': bq_row['sl_mult'],
+            'grace_minutes': int(bq_row['grace_minutes']),
+            'entry_minute': int(bq_row['entry_minute']) if bq_row['entry_minute'] > 0 else ENTRY_MIN,
+            'config_id': f"f{int(bq_row['fold'])}_{bq_row['tpsl_mode']}_t{bq_row['prob_thresh']:.2f}_tp{bq_row['tp_pct']:.2f}",
+        })
+    configs_list.append(FIXED_UNIVERSAL_CFG.copy())
+    all_ticker_configs[ticker] = configs_list
 
-    print(f"  {'Ticker':>8}  {'Trades':>6}  {'Avg_PnL':>8}  {'WR':>5}  {'Total':>8}  {'Source':>8}")
-    for t, row in tk_stats.iterrows():
-        t_trades = df[df['ticker'] == t]
-        src = int(t_trades['source_fold'].mode().iloc[0]) if 'source_fold' in t_trades.columns else '?'
-        print(f"  {t:>8}  {int(row['n']):>6}  {row['avg']:>+7.2%}  {row['wr']:>4.0%}  "
-              f"{row['total']:>+7.1%}  fold_{src}")
+oracle_configs = {}
+total_bt = 0
 
-# ── Step 8: Monthly PnL for top 3 ───────────────────────────────────────────
-print(f"\n{'='*W}")
-print(f"  TOP 3 STRATEGIES — MONTHLY PnL")
-print(f"{'='*W}")
+for ticker in tickers_ready:
+    if ticker not in all_ticker_configs:
+        continue
+    ohlcv = ticker_data[ticker]
+    best_h2_avg = -999
+    best_cfg = None
 
-top3 = [r for r in results_sorted if r['n'] > 0][:3]
-
-all_months = sorted(set(m for r in top3 for m in r['monthly'].keys()))
-header = "  {:25s}".format("Strategy") + "".join(f"  {m:>10}" for m in all_months) + "   TOTAL"
-print(f"\n{header}")
-print(f"  {'─'*25}" + "  ─────────" * len(all_months) + "  ─────────")
-
-for r in top3:
-    row = f"  {r['label']:25s}"
-    for m in all_months:
-        if m in r['monthly']:
-            mi = r['monthly'][m]
-            row += f"  {mi['total']:>+9.1%}"
+    for cfg in all_ticker_configs[ticker]:
+        if cfg['fold'] is not None:
+            dp = all_fold_probs.get(ticker, {}).get(cfg['fold'], {})
+            if not dp:
+                dp = ensemble_probs.get(ticker, {})
         else:
-            row += f"  {'·':>10}"
-    row += f"  {r['total']:>+8.1%}"
+            dp = ensemble_probs.get(ticker, {})
+        if not dp:
+            continue
+
+        em = cfg['entry_minute'] if cfg['entry_minute'] > 0 else ENTRY_MIN
+        thresh = cfg['prob_thresh']
+        entry_indices = np.where(ohlcv['times'] == em)[0]
+        h2_trades_list = []
+        last_td = -1
+
+        for idx in entry_indices:
+            d_int = int(ohlcv['dates'][idx])
+            if d_int == last_td:
+                continue
+            d_str = str(d_int)
+            d_date = pd.Timestamp(f"{d_str[:4]}-{d_str[4:6]}-{d_str[6:8]}").date()
+            if d_date < test_start_dt or d_date > test_end_dt:
+                last_td = d_int
+                continue
+            if d_date < h2_start_dt:
+                last_td = d_int
+                continue
+            prob = dp.get(d_date, 0.0)
+            if prob < thresh:
+                last_td = d_int
+                continue
+            pnl, td, filled = execute_trade(
+                ohlcv, idx, cfg['tpsl_mode'],
+                cfg['tp_pct'], cfg['sl_pct'], cfg['sl_mult'],
+                cfg['grace_minutes'])
+            if filled:
+                h2_trades_list.append(pnl)
+            last_td = d_int
+
+        total_bt += 1
+        if len(h2_trades_list) >= MIN_H2_TRADES:
+            h2_avg = np.mean(h2_trades_list)
+            if h2_avg > best_h2_avg:
+                best_h2_avg = h2_avg
+                best_cfg = cfg.copy()
+
+    if best_cfg is not None:
+        oracle_configs[ticker] = best_cfg
+        print(f"    {ticker}: oracle = f{best_cfg['fold']}_{best_cfg['tpsl_mode']} "
+              f"TP={best_cfg['tp_pct']:.0%} thresh={best_cfg['prob_thresh']:.2f} -> H2 avg={best_h2_avg:+.2%}")
+
+print(f"    Total configs backtested: {total_bt}")
+print(f"    Oracle tickers: {len(oracle_configs)}")
+
+all_strategy_configs['ORACLE'] = oracle_configs
+
+oracle_dp_map = {}
+for ticker, cfg in oracle_configs.items():
+    fold = cfg['fold']
+    if fold is not None and fold in all_fold_probs.get(ticker, {}):
+        oracle_dp_map[ticker] = all_fold_probs[ticker][fold]
+    elif ticker in ensemble_probs:
+        oracle_dp_map[ticker] = ensemble_probs[ticker]
+strategy_probs['ORACLE'] = oracle_dp_map
+
+
+# ── Step 7: Run backtests ───────────────────────────────────────────────────
+print(f"\n  STEP 7: Running backtests for all 4 strategies...")
+
+strategy_results = {}
+strategy_per_tk = {}
+
+for strat_name in ['M01_BEST_VA', 'M06_FOLD403', 'M07_ALPHA2', 'ORACLE']:
+    np.random.seed(42)
+    cfgs = all_strategy_configs[strat_name]
+    probs = strategy_probs[strat_name]
+    trades, per_tk = run_csv_backtest(cfgs, probs, ticker_data, strat_name)
+    port = summarize_trades(trades, strat_name)
+    strategy_results[strat_name] = port
+    strategy_per_tk[strat_name] = per_tk
+    print(f"    {strat_name}: {port['n']} trades, avg={port['avg']:+.2%}, "
+          f"wr={port['wr']:.0%}, total={port['total']:+.1%}")
+
+
+# ==============================================================================
+# RESULTS TABLES
+# ==============================================================================
+strat_order = ['ORACLE', 'M01_BEST_VA', 'M07_ALPHA2', 'M06_FOLD403']
+
+# ── Table 1: Portfolio Summary ──
+print(f"\n{'='*W}")
+print(f"  PORTFOLIO SUMMARY — All Strategies ({TEST_START} -> {TEST_END})")
+print(f"{'='*W}")
+
+print(f"\n  {'Strategy':<16}  {'Trades':>6}  {'Total':>8}  {'Avg':>7}  {'WR':>5}  {'MaxDD':>7}  {'Deploy':>6}")
+print(f"  {'─'*62}")
+
+oracle_avg = strategy_results['ORACLE']['avg'] if strategy_results['ORACLE']['avg'] != 0 else 1
+for sn in strat_order:
+    p = strategy_results[sn]
+    deploy = 'YES' if p['avg'] >= DEPLOY_FLOOR else 'NO'
+    print(f"  {sn:<16}  {p['n']:>6}  {p['total']:>+8.1%}  "
+          f"{p['avg']:>+7.2%}  {p['wr']:>5.0%}  {p['dd']:>+7.2%}  {deploy:>6}")
+
+
+# ── Table 2: Config Details ──
+print(f"\n  Config Details per Ticker:")
+print(f"  {'Ticker':<7} | {'Strategy':<16} | {'Fold':>4} {'Mode':<8} {'Prob>':>5} {'TP':>5} {'SL':>5} {'ValA':>7}")
+print(f"  {'─'*70}")
+for ticker in sorted(SHORT_TICKERS):
+    for sn in strat_order:
+        cfg = all_strategy_configs[sn].get(ticker)
+        if cfg:
+            fold_s = f"{cfg['fold']}" if cfg['fold'] else '—'
+            print(f"  {ticker:<7} | {sn:<16} | {fold_s:>4} {cfg['tpsl_mode']:<8} "
+                  f"{cfg['prob_thresh']:>5.2f} {cfg['tp_pct']:>4.0%} "
+                  f"{cfg['sl_pct']:>4.0%} {cfg.get('val_a_avg_pnl',0):>+7.2%}")
+        else:
+            print(f"  {ticker:<7} | {sn:<16} |  {'— no config —':>40}")
+    print(f"  {'─'*70}")
+
+
+# ── Table 3: Per-Ticker Results ──
+print(f"\n  Per-Ticker Results:")
+hdr = '  {:7} |'.format('Ticker')
+for sn in strat_order:
+    hdr += f" {sn[:12]:>12} |"
+print(hdr)
+sub = '  {:7} |'.format('')
+for _ in strat_order:
+    sub += f" {'N':>3} {'Avg':>6} {'WR':>4} |"
+print(sub)
+print(f"  {'─'*75}")
+
+for ticker in sorted(SHORT_TICKERS):
+    row = f"  {ticker:<7} |"
+    for sn in strat_order:
+        trades = strategy_per_tk[sn].get(ticker, [])
+        n = len(trades)
+        avg = np.mean([t['pnl'] for t in trades]) if n > 0 else 0
+        wr = np.mean([1 for t in trades if t['pnl'] > 0]) / n * 100 if n > 0 else 0
+        row += f" {n:>3} {avg:>+5.2%} {wr:>3.0f}% |"
     print(row)
 
-# ── Step 9: Strategy type comparison ─────────────────────────────────────────
-print(f"\n{'='*W}")
-print(f"  STRATEGY TYPE COMPARISON — BEST OF EACH CATEGORY")
-print(f"{'='*W}\n")
 
-categories = {
-    'Single Fold': [r for r in results if r['label'].startswith('FOLD_') and r['n'] > 0],
-    'Ensemble':    [r for r in results if any(r['label'].startswith(p) for p in ['EARLY','LATE','ALL_','BEST_']) and r['n'] > 0],
-    'Voting':      [r for r in results if any(r['label'].startswith(p) for p in ['VOTE_','CROSS_']) and r['n'] > 0],
-    'Gated':       [r for r in results if r['label'].startswith('GATE_') and r['n'] > 0],
-}
+# ── Table 4: Monthly Breakdown ──
+all_months = set()
+for p in strategy_results.values():
+    all_months.update(p['monthly'].keys())
+all_months = sorted(all_months)
 
-for cat_name, cat_results in categories.items():
-    if not cat_results:
-        print(f"  {cat_name}: (no viable strategies)")
+if all_months:
+    print(f"\n  Monthly Breakdown:")
+    hdr = f"  {'Month':<8} |"
+    for sn in strat_order:
+        hdr += f" {'--- ' + sn[:8] + ' ---':>20} |"
+    print(hdr)
+    sub = f"  {'':8} |"
+    for _ in strat_order:
+        sub += f" {'N':>3} {'Total':>7} {'Avg':>7} |"
+    print(sub)
+    print(f"  {'─'*90}")
+
+    for month in all_months:
+        row = f"  {month:<8} |"
+        for sn in strat_order:
+            m = strategy_results[sn]['monthly'].get(month, {'n': 0, 'total': 0, 'avg': 0})
+            row += f" {m['n']:>3} {m['total']:>+7.1%} {m['avg']:>+7.2%} |"
+        print(row)
+
+
+# ── Table 5: H1 vs H2 Split ──
+print(f"\n  H1 vs H2 Split (H1=Apr-May, H2=Jun-Jul):")
+print(f"  {'Strategy':<16} | {'-- H1 ------------------':} | {'-- H2 ------------------':} | {'Edge':>5}")
+print(f"  {'':16} | {'N':>4} {'Avg':>7} {'WR':>5} {'Tot':>7} | {'N':>4} {'Avg':>7} {'WR':>5} {'Tot':>7} |")
+print(f"  {'─'*80}")
+
+for sn in strat_order:
+    trades_df = strategy_results[sn]['trades_df']
+    if len(trades_df) == 0:
+        print(f"  {sn:<16} | {'— no trades —':>40}")
         continue
-    best = max(cat_results, key=lambda r: r['total'])
-    months = len(best['monthly']) if best['monthly'] else 1
-    print(f"  {cat_name:15s}  BEST: {best['label']:25s}  "
-          f"tickers={best['n_tickers']}  trades={best['n']}  "
-          f"avg={best['avg']:+.2%}  WR={best['wr']:.0%}  total={best['total']:+.1%}  "
-          f"sharpe={best['sharpe']:.2f}")
+    h1 = trades_df[trades_df['half'] == 'H1']
+    h2 = trades_df[trades_df['half'] == 'H2']
 
+    h1_n = len(h1); h1_avg = h1['pnl'].mean() if h1_n > 0 else 0
+    h1_wr = (h1['pnl'] > 0).mean() if h1_n > 0 else 0
+    h1_tot = h1['pnl'].sum() if h1_n > 0 else 0
+
+    h2_n = len(h2); h2_avg = h2['pnl'].mean() if h2_n > 0 else 0
+    h2_wr = (h2['pnl'] > 0).mean() if h2_n > 0 else 0
+    h2_tot = h2['pnl'].sum() if h2_n > 0 else 0
+
+    edge = 'UP' if h2_avg > h1_avg else ('DOWN' if h2_avg < h1_avg else 'FLAT')
+    print(f"  {sn:<16} | {h1_n:>4} {h1_avg:>+7.2%} {h1_wr:>5.0%} {h1_tot:>+7.1%} | "
+          f"{h2_n:>4} {h2_avg:>+7.2%} {h2_wr:>5.0%} {h2_tot:>+7.1%} | {edge:>5}")
+
+
+# ==============================================================================
+# CHARTS (3x2 layout)
+# ==============================================================================
+print(f"\n  Generating charts...")
+
+fig, axes = plt.subplots(3, 2, figsize=(20, 18))
+
+# ── Chart 1: Cumulative PnL — all strategies ──
+ax1 = axes[0, 0]
+for sn in strat_order:
+    p = strategy_results[sn]
+    if p['n'] == 0:
+        continue
+    df_t = p['trades_df'].sort_values('date')
+    cum = df_t['pnl'].cumsum() * 100
+    ls = '--' if sn == 'ORACLE' else '-'
+    lw = 1.5 if sn == 'ORACLE' else 2.5
+    ax1.plot(pd.to_datetime(df_t['date'].values), cum.values,
+             color=STRATEGY_COLORS[sn], linewidth=lw, linestyle=ls, label=sn)
+ax1.axhline(y=0, color='gray', linewidth=0.5, linestyle='--')
+ax1.axvline(x=pd.Timestamp(HALF2_START), color='red', linewidth=1, linestyle=':', alpha=0.5, label='H2 start')
+ax1.set_ylabel('Cumulative PnL (%)')
+ax1.set_title('Cumulative PnL — All Strategies', fontsize=13, fontweight='bold')
+ax1.legend(fontsize=9)
+ax1.grid(True, alpha=0.3)
+ax1.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
+
+# ── Chart 2: Equity curves ──
+ax2 = axes[0, 1]
+for sn in strat_order:
+    p = strategy_results[sn]
+    if p['n'] == 0:
+        continue
+    df_s = p['trades_df'].sort_values('date')
+    n_tk = max(len(strategy_per_tk[sn]), 1)
+    eq = STARTING_CAPITAL
+    eq_vals, eq_dates = [], []
+    for _, row in df_s.iterrows():
+        eq += (eq / n_tk) * row['pnl']
+        eq_vals.append(eq)
+        eq_dates.append(row['date'])
+    ls = '--' if sn == 'ORACLE' else '-'
+    lw = 1.5 if sn == 'ORACLE' else 2.5
+    ax2.plot(pd.to_datetime(eq_dates), np.array(eq_vals) / 1000,
+             color=STRATEGY_COLORS[sn], linewidth=lw, linestyle=ls, label=sn)
+ax2.axhline(y=STARTING_CAPITAL / 1000, color='gray', linewidth=1, linestyle='--', alpha=0.5)
+ax2.set_ylabel('Equity ($K)')
+ax2.set_title(f'Equity Curves (${STARTING_CAPITAL/1000:.0f}K start)', fontsize=13, fontweight='bold')
+ax2.legend(fontsize=9)
+ax2.grid(True, alpha=0.3)
+ax2.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
+
+# ── Chart 3: Per-ticker avg PnL — grouped bar ──
+ax3 = axes[1, 0]
+tickers_sorted = sorted(SHORT_TICKERS)
+x = np.arange(len(tickers_sorted))
+bar_w = 0.18
+for i, sn in enumerate(strat_order):
+    avgs = []
+    for tk in tickers_sorted:
+        trades = strategy_per_tk[sn].get(tk, [])
+        avgs.append(np.mean([t['pnl'] for t in trades]) * 100 if trades else 0)
+    offset = (i - len(strat_order)/2 + 0.5) * bar_w
+    ax3.bar(x + offset, avgs, bar_w, label=sn, color=STRATEGY_COLORS[sn], alpha=0.85)
+ax3.axhline(y=DEPLOY_FLOOR * 100, color='red', linewidth=1, linestyle='--', alpha=0.7, label=f'Deploy ({DEPLOY_FLOOR:.1%})')
+ax3.set_xticks(x)
+ax3.set_xticklabels(tickers_sorted, fontsize=11)
+ax3.set_ylabel('Avg PnL per Trade (%)')
+ax3.set_title('Per-Ticker Avg PnL: Strategy Comparison', fontsize=13, fontweight='bold')
+ax3.legend(fontsize=8, loc='best')
+ax3.axhline(y=0, color='gray', linewidth=0.5)
+ax3.grid(True, alpha=0.3, axis='y')
+
+# ── Chart 4: Per-ticker cumulative PnL (best non-oracle strategy) ──
+ax4 = axes[1, 1]
+best_non_oracle = max([sn for sn in strat_order if sn != 'ORACLE'],
+                      key=lambda sn: strategy_results[sn]['avg'])
+for ticker in tickers_sorted:
+    trades = strategy_per_tk[best_non_oracle].get(ticker, [])
+    if not trades:
+        continue
+    df_t = pd.DataFrame(trades).sort_values('date')
+    cum = df_t['pnl'].cumsum() * 100
+    ax4.plot(pd.to_datetime(df_t['date'].values), cum.values,
+             label=ticker, color=TICKER_COLORS.get(ticker, '#666'), linewidth=2)
+ax4.axhline(y=0, color='gray', linewidth=0.5, linestyle='--')
+ax4.axvline(x=pd.Timestamp(HALF2_START), color='red', linewidth=1, linestyle=':', alpha=0.5)
+ax4.set_ylabel('Cumulative PnL (%)')
+ax4.set_title(f'Per-Ticker ({best_non_oracle})', fontsize=13, fontweight='bold')
+ax4.legend(fontsize=9, loc='best')
+ax4.grid(True, alpha=0.3)
+ax4.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
+
+# ── Chart 5: Monthly PnL heatmap ──
+ax5 = axes[2, 0]
+if all_months:
+    month_data = np.zeros((len(strat_order), len(all_months)))
+    for i, sn in enumerate(strat_order):
+        for j, month in enumerate(all_months):
+            m = strategy_results[sn]['monthly'].get(month, {'avg': 0})
+            month_data[i, j] = m['avg'] * 100
+
+    vmax = max(abs(month_data.min()), abs(month_data.max()))
+    if vmax == 0:
+        vmax = 1
+    im = ax5.imshow(month_data, cmap='RdYlGn', aspect='auto', vmin=-vmax, vmax=vmax)
+    ax5.set_yticks(range(len(strat_order)))
+    ax5.set_yticklabels(strat_order, fontsize=10)
+    ax5.set_xticks(range(len(all_months)))
+    ax5.set_xticklabels(all_months, fontsize=10)
+    for i in range(len(strat_order)):
+        for j in range(len(all_months)):
+            ax5.text(j, i, f'{month_data[i,j]:+.1f}%', ha='center', va='center',
+                     fontsize=10, fontweight='bold',
+                     color='white' if abs(month_data[i,j]) > 2 else 'black')
+    fig.colorbar(im, ax=ax5, label='Avg PnL (%)', shrink=0.8)
+    ax5.set_title('Monthly Avg PnL Heatmap', fontsize=13, fontweight='bold')
+else:
+    ax5.text(0.5, 0.5, 'No monthly data', ha='center', va='center', fontsize=14)
+    ax5.set_title('Monthly Avg PnL Heatmap', fontsize=13, fontweight='bold')
+
+# ── Chart 6: H1 vs H2 comparison ──
+ax6 = axes[2, 1]
+x = np.arange(len(strat_order))
+bar_w = 0.35
+h1_avgs = []
+h2_avgs = []
+for sn in strat_order:
+    trades_df = strategy_results[sn]['trades_df']
+    if len(trades_df) == 0:
+        h1_avgs.append(0)
+        h2_avgs.append(0)
+        continue
+    h1 = trades_df[trades_df['half'] == 'H1']
+    h2 = trades_df[trades_df['half'] == 'H2']
+    h1_avgs.append(h1['pnl'].mean() * 100 if len(h1) > 0 else 0)
+    h2_avgs.append(h2['pnl'].mean() * 100 if len(h2) > 0 else 0)
+
+ax6.bar(x - bar_w/2, h1_avgs, bar_w, label='H1 (Apr-May)', color='#90CAF9', alpha=0.85)
+ax6.bar(x + bar_w/2, h2_avgs, bar_w, label='H2 (Jun-Jul)', color='#1565C0', alpha=0.85)
+ax6.axhline(y=DEPLOY_FLOOR * 100, color='red', linewidth=1, linestyle='--', alpha=0.7)
+ax6.set_xticks(x)
+ax6.set_xticklabels(strat_order, fontsize=10, rotation=15)
+ax6.set_ylabel('Avg PnL per Trade (%)')
+ax6.set_title('H1 vs H2 — Edge Persistence', fontsize=13, fontweight='bold')
+ax6.legend(fontsize=10)
+ax6.axhline(y=0, color='gray', linewidth=0.5)
+ax6.grid(True, alpha=0.3, axis='y')
+
+fig.suptitle(f'SHORT Strategy Backtest — RULE_1 ({len(SHORT_TICKERS)} tickers)\n'
+             f'{TEST_START} -> {TEST_END}  |  Deploy threshold: {DEPLOY_FLOOR:.1%}',
+             fontsize=15, fontweight='bold', y=1.01)
+plt.tight_layout()
+plt.savefig('/tmp/backtest_short_strategies.png', dpi=150, bbox_inches='tight')
+plt.show()
+print(f"\n  Chart saved: /tmp/backtest_short_strategies.png")
+
+
+# ==============================================================================
+# TRADE LOG — best non-oracle strategy
+# ==============================================================================
 print(f"\n{'='*W}")
-print(f"  DONE — {len(strategies)} strategies evaluated on TEST {TEST_START} → {TEST_END}")
+print(f"  TRADE LOG — {best_non_oracle}")
+print(f"{'='*W}")
+
+best_port = strategy_results[best_non_oracle]
+if best_port['n'] > 0:
+    df_log = best_port['trades_df'].sort_values('date')
+    for _, t in df_log.iterrows():
+        print(f"    {t['date']}  {t['ticker']:<7}  pnl={t['pnl']:+.2%}  "
+              f"prob={t['prob']:.3f}  close=${t['close']:.2f}  "
+              f"mode={t['mode']}  tp={t['tp']:.0%}  {t['half']}")
+
+
+# ==============================================================================
+# FINAL VERDICT
+# ==============================================================================
+print(f"\n{'='*W}")
+print(f"  VERDICT")
+print(f"{'='*W}")
+
+for sn in strat_order:
+    p = strategy_results[sn]
+    biased = ' [BIASED]' if sn == 'ORACLE' else ''
+    deploy = 'DEPLOY-READY' if p['avg'] >= DEPLOY_FLOOR else 'BELOW THRESHOLD'
+    capture = f" ({p['avg']/oracle_avg*100:.0f}% oracle)" if sn != 'ORACLE' else ''
+    n_tk = len(strategy_per_tk[sn])
+    print(f"  {sn:<16}: {p['n']} trades, avg={p['avg']:+.2%}, wr={p['wr']:.0%}, "
+          f"{n_tk} tickers -> {deploy}{capture}{biased}")
+
+print(f"\n  LONG S3 reference: +2.23% avg")
+print(f"  Deploy threshold:  {DEPLOY_FLOOR:.1%}")
 print(f"{'='*W}")

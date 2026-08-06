@@ -180,6 +180,7 @@ def _assign_family(exp_name):
     if 180 <= num <= 185: return '180'
     if 200 <= num <= 205: return '200'
     if 220 <= num <= 225: return '220'
+    if 240 <= num <= 245: return '240'
     return 'other'
 
 def load_deploy_configs_from_bq():
@@ -195,7 +196,11 @@ def load_deploy_configs_from_bq():
            opt_avg_pnl, is_ensemble,
            grace_minutes, dip_pct, max_wait_minutes
     FROM `{WF_BQ_TABLE}`
-    WHERE model_version IN ('{WF_MODEL_VERSION}', '{WF_MODEL_VERSION}_stitched')
+    WHERE (model_version IN ('{WF_MODEL_VERSION}', '{WF_MODEL_VERSION}_stitched')
+           OR model_version LIKE 'robust_wf_v12_17%'
+           OR model_version LIKE 'robust_wf_v12_18%'
+           OR model_version LIKE 'robust_wf_v12_20%'
+           OR model_version LIKE 'robust_wf_v12_24%')
       AND survived_a = TRUE
       AND val_a_count >= {WF_MIN_TRADES}
       AND val_a_avg_pnl > 0
