@@ -57,7 +57,7 @@ RESULTS_FALLBACK = "Algos/Results_all_v2"
 INFERENCE_DIR  = "Data/Inference_v2"
 
 FULL_START  = '2026-04-01'
-FULL_END    = '2026-07-23'
+FULL_END    = '2026-08-04'
 HALF1_END   = '2026-05-31'
 HALF2_START = '2026-06-01'
 
@@ -68,7 +68,11 @@ PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
 BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
-BQ_MODEL_VERSIONS = ('robust_wf_v12', 'robust_wf_v12_stitched')
+BQ_MODEL_VERSIONS_BASE = ('robust_wf_v12', 'robust_wf_v12_stitched')
+BQ_MODEL_VERSION_LIKES = (
+    'robust_wf_v12_17%', 'robust_wf_v12_18%',
+    'robust_wf_v12_20%', 'robust_wf_v12_24%',
+)
 
 MAX_VA_OPT_RATIO = 3.0
 DEPLOY_THRESHOLD = 0.018
@@ -355,6 +359,8 @@ def assign_family(exp):
     if 170 <= num <= 175: return '170'
     if 180 <= num <= 185: return '180'
     if 200 <= num <= 205: return '200'
+    if 220 <= num <= 225: return '220'
+    if 240 <= num <= 245: return '240'
     return 'other'
 
 def _safe_float(val, default=0.0):
@@ -381,7 +387,8 @@ print("  Exhaustive backtest: ALL configs × ALL tickers")
 print("=" * W)
 
 print(f"\n  PHASE 1: Querying BQ...")
-versions_sql = ', '.join(f"'{v}'" for v in BQ_MODEL_VERSIONS)
+base_sql = ', '.join(f"'{v}'" for v in BQ_MODEL_VERSIONS_BASE)
+like_clauses = '\n       '.join(f"OR model_version LIKE '{p}'" for p in BQ_MODEL_VERSION_LIKES)
 q = f"""
 SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        prob_thresh, tp_pct, sl_pct, tp_mult, sl_mult,
@@ -393,7 +400,8 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        val_b_avg_pnl, val_b_win_rate, val_b_count,
        model_version, is_ensemble
 FROM `{BQ_TABLE}`
-WHERE model_version IN ({versions_sql})
+WHERE (model_version IN ({base_sql})
+       {like_clauses})
   AND survived_a = TRUE
   AND val_a_count >= 3
   AND opt_avg_pnl > 0
@@ -665,75 +673,107 @@ _release_memory()
 # ==============================================================================
 # PHASE 4: S3 BASELINE (production strategy per ticker)
 # ==============================================================================
-print(f"\n  PHASE 4: Computing S3 baseline per ticker...")
+def _run_s3_pipeline(bq_subset, label):
+    """Run S3 family-agreement pipeline on a BQ subset. Returns (tickers, configs, backtest)."""
+    indiv = bq_subset[bq_subset['is_ensemble'] == False].copy()
+    for k in GRP_KEYS:
+        if k not in indiv.columns:
+            indiv[k] = 0
+        else:
+            indiv[k] = indiv[k].fillna(0)
 
-indiv = bq_df[bq_df['is_ensemble'] == False].copy()
-for k in GRP_KEYS:
-    if k not in indiv.columns:
-        indiv[k] = 0
-    else:
-        indiv[k] = indiv[k].fillna(0)
+    sa = indiv.groupby(GRP_KEYS).agg(
+        n_seeds=('seed', 'nunique'),
+        n_pos_seeds_18=('val_a_avg_pnl', lambda x: (x >= DEPLOY_THRESHOLD).sum()),
+        mean_va_pnl=('val_a_avg_pnl', 'mean'),
+        mean_va_wr=('val_a_win_rate', 'mean'),
+        mean_va_count=('val_a_count', 'mean'),
+        vb_pnl=('val_b_avg_pnl', 'mean'),
+    ).reset_index()
+    sa['agree_18'] = (sa['n_pos_seeds_18'] / sa['n_seeds']).clip(upper=1.0)
+    sa = sa[sa['n_seeds'] >= MIN_SEEDS].copy()
 
-sa = indiv.groupby(GRP_KEYS).agg(
-    n_seeds=('seed', 'nunique'),
-    n_pos_seeds_18=('val_a_avg_pnl', lambda x: (x >= DEPLOY_THRESHOLD).sum()),
-    mean_va_pnl=('val_a_avg_pnl', 'mean'),
-    mean_va_wr=('val_a_win_rate', 'mean'),
-    mean_va_count=('val_a_count', 'mean'),
-    vb_pnl=('val_b_avg_pnl', 'mean'),
-).reset_index()
-sa['agree_18'] = (sa['n_pos_seeds_18'] / sa['n_seeds']).clip(upper=1.0)
-sa = sa[sa['n_seeds'] >= MIN_SEEDS].copy()
+    sa_limit = sa[sa['tpsl_mode'] == 'limit_entry'].copy()
+    sa_limit['score'] = (sa_limit['mean_va_pnl'] ** 2) * sa_limit['agree_18']
+    sa_limit['exp_fam'] = sa_limit['experiment'].apply(assign_family)
+    sa_fam = sa_limit[sa_limit['exp_fam'] != 'other'].copy()
 
-sa_limit = sa[sa['tpsl_mode'] == 'limit_entry'].copy()
-sa_limit['score'] = (sa_limit['mean_va_pnl'] ** 2) * sa_limit['agree_18']
-sa_limit['exp_fam'] = sa_limit['experiment'].apply(assign_family)
-sa_fam = sa_limit[sa_limit['exp_fam'] != 'other'].copy()
+    best_per_fam = sa_fam.loc[sa_fam.groupby(['ticker', 'exp_fam'])['score'].idxmax()]
+    best_per_fam = best_per_fam[best_per_fam['mean_va_pnl'] >= DEPLOY_THRESHOLD]
 
-best_per_fam = sa_fam.loc[sa_fam.groupby(['ticker', 'exp_fam'])['score'].idxmax()]
-best_per_fam = best_per_fam[best_per_fam['mean_va_pnl'] >= DEPLOY_THRESHOLD]
+    agreement = {}
+    for tk in best_per_fam['ticker'].unique():
+        tk_rows = best_per_fam[best_per_fam['ticker'] == tk]
+        n_fams = len(tk_rows)
+        n_pos = int((tk_rows['vb_pnl'] > 0).sum())
+        fam_list = sorted(tk_rows['exp_fam'].unique())
+        agreement[tk] = {
+            'n_fams': n_fams, 'n_pos': n_pos,
+            'majority_pos': n_pos > n_fams / 2 and n_fams >= 2,
+            'families': fam_list,
+        }
 
-agreement = {}
-for tk in best_per_fam['ticker'].unique():
-    tk_rows = best_per_fam[best_per_fam['ticker'] == tk]
-    n_fams = len(tk_rows)
-    n_pos = int((tk_rows['vb_pnl'] > 0).sum())
-    agreement[tk] = {
-        'n_fams': n_fams, 'n_pos': n_pos,
-        'majority_pos': n_pos > n_fams / 2 and n_fams >= 2,
-    }
+    s3_tickers = sorted([tk for tk, ag in agreement.items() if ag['majority_pos']])
 
-s3_tickers = sorted([tk for tk, ag in agreement.items() if ag['majority_pos']])
-print(f"    Family agreement: {len(s3_tickers)} tickers pass S3 gate")
+    sa_s3 = sa_limit[sa_limit['ticker'].isin(s3_tickers)].copy()
+    sa_s3['score'] = (sa_s3['mean_va_pnl'] ** 2) * sa_s3['agree_18']
+    best_s3 = sa_s3.loc[sa_s3.groupby('ticker')['score'].idxmax()]
+    best_s3 = best_s3[best_s3['mean_va_pnl'] >= DEPLOY_THRESHOLD]
 
-sa_s3 = sa_limit[sa_limit['ticker'].isin(s3_tickers)].copy()
-sa_s3['score'] = (sa_s3['mean_va_pnl'] ** 2) * sa_s3['agree_18']
-best_s3 = sa_s3.loc[sa_s3.groupby('ticker')['score'].idxmax()]
-best_s3 = best_s3[best_s3['mean_va_pnl'] >= DEPLOY_THRESHOLD]
+    s3_bt = {}
+    for _, row in best_s3.iterrows():
+        tk = row['ticker']
+        match = results_df[
+            (results_df['ticker'] == tk) &
+            (results_df['experiment'] == row['experiment']) &
+            (results_df['tpsl_mode'] == 'limit_entry') &
+            (results_df['entry_minute'] == int(row['entry_minute'])) &
+            (results_df['prob_thresh'] == float(row['prob_thresh'])) &
+            (results_df['tp_pct'] == float(row['tp_pct'])) &
+            (results_df['sl_pct'] == float(row['sl_pct']))
+        ]
+        if not match.empty:
+            avg_pnl = match['bt_full_avg'].mean()
+            avg_h2  = match['bt_h2_avg'].mean()
+            avg_h1  = match['bt_h1_avg'].mean()
+            avg_n   = int(match['bt_full_n'].mean())
+        else:
+            avg_pnl = 0.0
+            avg_h2  = 0.0
+            avg_h1  = 0.0
+            avg_n   = 0
+        s3_bt[tk] = {'full': avg_pnl, 'h2': avg_h2, 'h1': avg_h1, 'n': avg_n,
+                      'experiment': row['experiment'],
+                      'prob_thresh': float(row['prob_thresh']),
+                      'tp': float(row['tp_pct']),
+                      'sl': float(row['sl_pct']),
+                      'dip_pct': float(row.get('dip_pct', 0)),
+                      'agree_18': float(row['agree_18'])}
 
-s3_backtest = {}
-for _, row in best_s3.iterrows():
-    tk = row['ticker']
-    match = results_df[
-        (results_df['ticker'] == tk) &
-        (results_df['experiment'] == row['experiment']) &
-        (results_df['tpsl_mode'] == 'limit_entry') &
-        (results_df['entry_minute'] == int(row['entry_minute'])) &
-        (results_df['prob_thresh'] == float(row['prob_thresh'])) &
-        (results_df['tp_pct'] == float(row['tp_pct'])) &
-        (results_df['sl_pct'] == float(row['sl_pct']))
-    ]
-    if not match.empty:
-        avg_pnl = match['bt_full_avg'].mean()
-        avg_h2  = match['bt_h2_avg'].mean()
-        avg_n   = int(match['bt_full_n'].mean())
-    else:
-        avg_pnl = 0.0
-        avg_h2  = 0.0
-        avg_n   = 0
-    s3_backtest[tk] = {'full': avg_pnl, 'h2': avg_h2, 'n': avg_n}
+    print(f"    [{label}] {len(s3_tickers)} tickers pass S3 gate → {len(s3_bt)} with configs")
+    return s3_tickers, agreement, s3_bt
 
-print(f"    S3 baseline computed for {len(s3_backtest)} tickers: {', '.join(sorted(s3_backtest.keys()))}")
+
+print(f"\n  PHASE 4: Computing S3 baselines (OLD + NEW)...")
+
+bq_old = bq_df[bq_df['model_version'].isin(BQ_MODEL_VERSIONS_BASE)]
+print(f"    OLD BQ subset: {len(bq_old)} rows (base model_versions only)")
+old_s3_tickers, old_agreement, old_s3_backtest = _run_s3_pipeline(bq_old, 'OLD S3')
+
+print(f"    NEW BQ: {len(bq_df)} rows (all model_versions)")
+new_s3_tickers, new_agreement, new_s3_backtest = _run_s3_pipeline(bq_df, 'NEW S3')
+
+s3_backtest = new_s3_backtest
+s3_tickers = new_s3_tickers
+
+print(f"\n    OLD S3: {len(old_s3_backtest)} tickers — {', '.join(sorted(old_s3_backtest.keys()))}")
+print(f"    NEW S3: {len(new_s3_backtest)} tickers — {', '.join(sorted(new_s3_backtest.keys()))}")
+old_only_tk = sorted(set(old_s3_backtest.keys()) - set(new_s3_backtest.keys()))
+new_only_tk = sorted(set(new_s3_backtest.keys()) - set(old_s3_backtest.keys()))
+if old_only_tk:
+    print(f"    OLD only (dropped): {', '.join(old_only_tk)}")
+if new_only_tk:
+    print(f"    NEW only (gained):  {', '.join(new_only_tk)}")
 
 
 # ==============================================================================
@@ -758,9 +798,13 @@ for ticker in sorted(results_df['ticker'].unique()):
     else:
         best_h2 = best_full
 
-    s3_full = s3_backtest.get(ticker, {}).get('full', 0.0)
-    s3_h2   = s3_backtest.get(ticker, {}).get('h2', 0.0)
-    s3_n    = s3_backtest.get(ticker, {}).get('n', 0)
+    old_s3_f = old_s3_backtest.get(ticker, {}).get('full', 0.0)
+    old_s3_h2 = old_s3_backtest.get(ticker, {}).get('h2', 0.0)
+    new_s3_f = new_s3_backtest.get(ticker, {}).get('full', 0.0)
+    new_s3_h2 = new_s3_backtest.get(ticker, {}).get('h2', 0.0)
+    s3_full = new_s3_f
+    s3_h2   = new_s3_h2
+    s3_n    = new_s3_backtest.get(ticker, {}).get('n', 0)
 
     med_full = grp['bt_full_avg'].median()
 
@@ -776,11 +820,16 @@ for ticker in sorted(results_df['ticker'].unique()):
         'oracle_h2': float(best_full['bt_h2_avg']),
         'best_h2': float(best_h2['bt_h2_avg']),
         'best_h2_full': float(best_h2['bt_full_avg']),
+        'old_s3_full': old_s3_f,
+        'old_s3_h2': old_s3_h2,
+        'new_s3_full': new_s3_f,
+        'new_s3_h2': new_s3_h2,
         's3_full': s3_full,
         's3_h2': s3_h2,
         's3_n': s3_n,
         'gap_full': float(best_full['bt_full_avg']) - s3_full,
         'gap_h2': float(best_h2['bt_h2_avg']) - s3_h2,
+        'gap_old_s3': float(best_full['bt_full_avg']) - old_s3_f,
         'median_full': med_full,
         'best_mode': best_full['tpsl_mode'],
         'best_tp': float(best_full['tp_pct']),
@@ -807,15 +856,20 @@ n_oracle_pos = (ceiling_df['oracle_full'] > 0).sum()
 n_s3_pos     = (ceiling_df['s3_full'] > 0).sum()
 n_oracle_strong = (ceiling_df['oracle_full'] > 0.01).sum()
 
+n_old_s3_pos = (ceiling_df['old_s3_full'] > 0).sum()
+
 print(f"\n  ── SUMMARY ──")
 print(f"    {n_total} tickers with backtest data")
 print(f"    {n_oracle_pos} ({100*n_oracle_pos/n_total:.0f}%) have ≥1 profitable config (TRUE ORACLE)")
-print(f"    {n_s3_pos} ({100*n_s3_pos/n_total:.0f}%) profitable with S3 selection")
+print(f"    {n_old_s3_pos} ({100*n_old_s3_pos/n_total:.0f}%) profitable with OLD S3 (base only)")
+print(f"    {n_s3_pos} ({100*n_s3_pos/n_total:.0f}%) profitable with NEW S3 (base + per-fold)")
 print(f"    {n_oracle_strong} ({100*n_oracle_strong/n_total:.0f}%) have oracle PnL > +1.0%")
 print(f"    Gap: {n_oracle_pos - n_s3_pos} additional tickers become profitable with oracle config")
-print(f"    Avg oracle ceiling: {ceiling_df['oracle_full'].mean()*100:+.2f}%")
-print(f"    Avg S3 PnL:         {ceiling_df['s3_full'].mean()*100:+.2f}%")
-print(f"    Avg config gap:     {ceiling_df['gap_full'].mean()*100:+.2f}%")
+print(f"    Avg oracle ceiling:  {ceiling_df['oracle_full'].mean()*100:+.2f}%")
+print(f"    Avg OLD S3 PnL:      {ceiling_df['old_s3_full'].mean()*100:+.2f}%")
+print(f"    Avg NEW S3 PnL:      {ceiling_df['new_s3_full'].mean()*100:+.2f}%")
+print(f"    Gap (oracle - new):  {ceiling_df['gap_full'].mean()*100:+.2f}%")
+print(f"    Gap (oracle - old):  {ceiling_df['gap_old_s3'].mean()*100:+.2f}%")
 
 # ── BQ val_b vs CSV backtest correlation ──
 valid = results_df[(results_df['bq_vb_avg_pnl'] != 0) & (results_df['bt_full_n'] > 0)]
@@ -838,16 +892,16 @@ if len(valid_va) > 10:
 
 # ── Per-ticker table ──
 print(f"\n  ── PER-TICKER TRUE ORACLE (sorted by oracle FULL PnL) ──")
-print(f"  {'Ticker':<8}│{'ORACLE':>8} {'WR':>5} {'N':>4} │{'S3':>8} │{'GAP':>8} │{'ORC_H2':>8} {'BST_H2':>8} │{'Ncfg':>5} {'%Pos':>5}│ Best Config")
-print(f"  {'─'*8}┼{'─'*18}─┼{'─'*9}┼{'─'*9}┼{'─'*18}─┼{'─'*11}┼{'─'*25}")
+print(f"  {'Ticker':<8}│{'ORACLE':>8} {'WR':>5} {'N':>4} │{'OLD_S3':>8} {'NEW_S3':>8} │{'GAP':>8} │{'ORC_H2':>8} │{'Ncfg':>5} {'%Pos':>5}│ Best Config")
+print(f"  {'─'*8}┼{'─'*18}─┼{'─'*18}─┼{'─'*9}┼{'─'*9}┼{'─'*11}┼{'─'*25}")
 
 for _, row in ceiling_df.iterrows():
     sl_str = f"sl={row['best_sl']:.3f}" if row['best_mode'] != 'atr_sl' else f"sm={row['best_sl']:.1f}"
     cfg_str = f"{row['best_mode'][:6]} tp={row['best_tp']:.3f} {sl_str}"
     flag = " ★" if row['oracle_full'] > 0.01 else ""
     print(f"  {row['ticker']:<8}│{row['oracle_full']*100:+7.2f}% {row['oracle_full_wr']*100:4.0f}% {int(row['oracle_full_n']):3d} │"
-          f"{row['s3_full']*100:+7.2f}% │{row['gap_full']*100:+7.2f}% │"
-          f"{row['oracle_h2']*100:+7.2f}% {row['best_h2']*100:+7.2f}% │"
+          f"{row['old_s3_full']*100:+7.2f}% {row['new_s3_full']*100:+7.2f}% │{row['gap_full']*100:+7.2f}% │"
+          f"{row['oracle_h2']*100:+7.2f}% │"
           f"{int(row['n_configs']):4d} {row['pct_positive']*100:4.0f}%│ {cfg_str}{flag}")
 
 # ── MODE ANALYSIS (key question: is limit_entry the best mode?) ──
@@ -903,6 +957,39 @@ for _, row in ceiling_df.iterrows():
 
 print(f"\n    limit_entry matches oracle: {n_limit_matches}/{len(ceiling_df)} ({100*n_limit_matches/len(ceiling_df):.0f}%)")
 
+# ── OLD S3 vs NEW S3 vs ORACLE ──
+print(f"\n  ══ OLD S3 vs NEW S3 vs ORACLE ══")
+
+all_s3_tickers = sorted(set(old_s3_backtest.keys()) | set(new_s3_backtest.keys()))
+print(f"\n  {'Ticker':<8}│{'ORACLE':>8} │{'OLD_S3':>8} {'Exp':<16}│{'NEW_S3':>8} {'Exp':<16}│{'Δ(N-O)':>8} │{'Gap(Orc-N)':>10}")
+print(f"  {'─'*8}┼{'─'*9}┼{'─'*25}┼{'─'*25}┼{'─'*9}┼{'─'*11}")
+
+for tk in sorted(ceiling_df['ticker'].unique()):
+    row = ceiling_df[ceiling_df['ticker'] == tk].iloc[0]
+    o_bt = old_s3_backtest.get(tk, {})
+    n_bt = new_s3_backtest.get(tk, {})
+    o_full = o_bt.get('full', 0.0)
+    n_full = n_bt.get('full', 0.0)
+    o_exp = o_bt.get('experiment', '—')[:15] if o_bt else '—'
+    n_exp = n_bt.get('experiment', '—')[:15] if n_bt else '—'
+    delta = n_full - o_full
+    gap = row['oracle_full'] - n_full
+    if o_full != 0 or n_full != 0:
+        in_old = '✓' if tk in old_s3_backtest else ' '
+        in_new = '✓' if tk in new_s3_backtest else ' '
+        print(f"  {tk:<8}│{row['oracle_full']*100:+7.2f}% │{o_full*100:+7.2f}% {o_exp:<16}│"
+              f"{n_full*100:+7.2f}% {n_exp:<16}│{delta*100:+7.2f}% │{gap*100:+9.2f}%")
+
+old_avg = np.mean([v['full'] for v in old_s3_backtest.values()]) if old_s3_backtest else 0
+new_avg = np.mean([v['full'] for v in new_s3_backtest.values()]) if new_s3_backtest else 0
+orc_avg_s3 = ceiling_df[ceiling_df['ticker'].isin(all_s3_tickers)]['oracle_full'].mean() if all_s3_tickers else 0
+print(f"\n  S3 tickers only:")
+print(f"    OLD S3 avg ({len(old_s3_backtest)} tk): {old_avg*100:+.2f}%")
+print(f"    NEW S3 avg ({len(new_s3_backtest)} tk): {new_avg*100:+.2f}%")
+print(f"    ORACLE avg ({len(all_s3_tickers)} tk): {orc_avg_s3*100:+.2f}%")
+print(f"    NEW vs OLD Δ:   {(new_avg - old_avg)*100:+.2f}%")
+print(f"    ORACLE headroom: {(orc_avg_s3 - new_avg)*100:+.2f}%")
+
 # ── Config parameter ranges for winners ──
 winners = ceiling_df[ceiling_df['oracle_full'] > 0]
 if len(winners) > 0:
@@ -946,31 +1033,37 @@ fig.suptitle('LONG Oracle — True Ceiling per Asset (All 7 Modes)', fontsize=14
 ax = axes[0, 0]
 tks = ceiling_df['ticker'].values
 oracle_vals = ceiling_df['oracle_full'].values * 100
-s3_vals = ceiling_df['s3_full'].values * 100
+old_s3_vals = ceiling_df['old_s3_full'].values * 100
+new_s3_vals = ceiling_df['new_s3_full'].values * 100
 colors = ['#2E7D32' if v > 0 else '#C62828' for v in oracle_vals]
 x = np.arange(len(tks))
 ax.bar(x, oracle_vals, color=colors, alpha=0.7, label='Oracle (best config, any mode)')
-ax.scatter(x, s3_vals, color='blue', s=20, zorder=5, label='S3 selection (limit_entry)')
+ax.scatter(x, old_s3_vals, color='#2196F3', s=20, zorder=5, marker='o', label='OLD S3 (base)')
+ax.scatter(x, new_s3_vals, color='#E91E63', s=20, zorder=5, marker='^', label='NEW S3 (base+per-fold)')
 ax.axhline(0, color='black', linewidth=0.5)
 ax.set_xticks(x)
 ax.set_xticklabels(tks, rotation=90, fontsize=6)
 ax.set_ylabel('Avg PnL (%)')
-ax.set_title('Per-Ticker: Oracle vs S3')
-ax.legend(fontsize=8)
+ax.set_title('Per-Ticker: Oracle vs OLD S3 vs NEW S3')
+ax.legend(fontsize=7)
 
 ax = axes[0, 1]
-ax.scatter(ceiling_df['s3_full'] * 100, ceiling_df['oracle_full'] * 100,
-           c=colors, s=40, alpha=0.7)
-lim = max(abs(ceiling_df['oracle_full'].max()), abs(ceiling_df['s3_full'].max())) * 100 + 1
+ax.scatter(ceiling_df['old_s3_full'] * 100, ceiling_df['oracle_full'] * 100,
+           c='#2196F3', s=40, alpha=0.6, label='OLD S3', marker='o')
+ax.scatter(ceiling_df['new_s3_full'] * 100, ceiling_df['oracle_full'] * 100,
+           c='#E91E63', s=40, alpha=0.6, label='NEW S3', marker='^')
+lim = max(abs(ceiling_df['oracle_full'].max()),
+          abs(ceiling_df['old_s3_full'].max()),
+          abs(ceiling_df['new_s3_full'].max())) * 100 + 1
 ax.plot([-lim, lim], [-lim, lim], 'k--', alpha=0.3, label='No gap')
 for _, row in ceiling_df.head(10).iterrows():
     ax.annotate(row['ticker'],
-                (row['s3_full'] * 100, row['oracle_full'] * 100),
+                (row['new_s3_full'] * 100, row['oracle_full'] * 100),
                 fontsize=7, alpha=0.8)
 ax.set_xlabel('S3 PnL (%)')
 ax.set_ylabel('Oracle PnL (%)')
-ax.set_title('Config Selection Gap (S3 vs Oracle)')
-ax.legend(fontsize=8)
+ax.set_title('Config Selection Gap (OLD/NEW S3 vs Oracle)')
+ax.legend(fontsize=7)
 
 ax = axes[1, 0]
 if len(valid) > 10:
@@ -1014,8 +1107,12 @@ print(f"  Per-ticker ceiling: {OUTPUT_PER_TICKER} ({len(ceiling_df)} tickers)")
 print(f"  Chart: {OUTPUT_CHART}")
 print(f"")
 print(f"  TRUE ORACLE ceiling:   {ceiling_df['oracle_full'].mean()*100:+.2f}% avg FULL, {ceiling_df.head(10)['oracle_full'].mean()*100:+.2f}% top-10")
-print(f"  S3 selection:          {ceiling_df['s3_full'].mean()*100:+.2f}% avg FULL")
-print(f"  Config selection gap:  {ceiling_df['gap_full'].mean()*100:+.2f}% avg")
+print(f"  OLD S3 selection:      {ceiling_df['old_s3_full'].mean()*100:+.2f}% avg FULL  ({len(old_s3_backtest)} tickers)")
+print(f"  NEW S3 selection:      {ceiling_df['new_s3_full'].mean()*100:+.2f}% avg FULL  ({len(new_s3_backtest)} tickers)")
+print(f"  Gap (oracle - new S3): {ceiling_df['gap_full'].mean()*100:+.2f}% avg")
+print(f"  Gap (oracle - old S3): {ceiling_df['gap_old_s3'].mean()*100:+.2f}% avg")
+print(f"")
+print(f"  OLD→NEW S3 Δ:          {(ceiling_df['new_s3_full'].mean() - ceiling_df['old_s3_full'].mean())*100:+.2f}% avg FULL")
 print(f"")
 print(f"  MODE VERDICT:")
 limit_oracle_pct = 100 * (ceiling_df['best_mode'] == 'limit_entry').sum() / len(ceiling_df)
@@ -1025,7 +1122,10 @@ print(f"    Most common oracle mode: {top_mode}")
 print(f"")
 print(f"  Top 5 by TRUE ORACLE:")
 for _, row in ceiling_df.head(5).iterrows():
-    print(f"    {row['ticker']:<8} {row['oracle_full']*100:+.2f}% FULL  {row['oracle_h2']*100:+.2f}% H2  (S3: {row['s3_full']*100:+.2f}%, gap: {row['gap_full']*100:+.2f}%, mode: {row['best_mode']})")
+    old_s3 = row['old_s3_full']
+    new_s3 = row['new_s3_full']
+    print(f"    {row['ticker']:<8} {row['oracle_full']*100:+.2f}% FULL  {row['oracle_h2']*100:+.2f}% H2  "
+          f"(OLD: {old_s3*100:+.2f}%, NEW: {new_s3*100:+.2f}%, gap: {row['gap_full']*100:+.2f}%, mode: {row['best_mode']})")
 print(f"")
 print(f"  → Use {OUTPUT_PER_CONFIG} as ML training data:")
 print(f"    Features: opt/val_a stats, hyperparams, mode flags  (~20 unbiased)")
