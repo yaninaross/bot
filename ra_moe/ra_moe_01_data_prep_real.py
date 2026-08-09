@@ -56,9 +56,9 @@ GCS_INFER_DIR   = 'Data/Inference_v2'
 GCS_DATA_PREFIX = 'Algos/RA_MoE/real_data'
 
 MAX_TICKERS       = None     # None = all tradable tickers (~80)
-FOLDS_TO_BUILD    = [1]
+FOLDS_TO_BUILD    = [4]
 SUBSAMPLE_EVERY   = 30       # take every Nth valid window (train only)
-MAX_TRAIN_SAMPLES = 100_000  # safety cap per fold
+MAX_TRAIN_SAMPLES = 50_000   # safety cap per fold (100K OOM on 15GB VM)
 
 SEED = 42
 W    = 100
@@ -71,6 +71,10 @@ WALK_FORWARD_FOLDS = [
      'val_end': '2026-04-30', 'test_start': '2026-05-01', 'test_end': '2026-06-30'},
     {'fold': 2, 'train_end': '2026-03-31', 'val_start': '2026-04-01',
      'val_end': '2026-05-31', 'test_start': '2026-06-01', 'test_end': '2026-07-31'},
+    {'fold': 3, 'train_end': '2026-01-31', 'val_start': '2026-02-01',
+     'val_end': '2026-03-31', 'test_start': '2026-04-01', 'test_end': '2026-08-08'},
+    {'fold': 4, 'train_end': '2026-03-31', 'val_start': '2026-04-01',
+     'val_end': '2026-05-31', 'test_start': '2026-06-01', 'test_end': '2026-08-08'},
 ]
 
 # ── Ticker filtering ──
@@ -611,7 +615,8 @@ for fold_config in WALK_FORWARD_FOLDS:
 
     accum = {s: {'X_seq': [], 'X_regime': [], 'X_id': [], 'Y': [],
                  'Y_cont': [], 'W_sample': [],
-                 'days': [], 'regime_ids': [], 'n_tickers': 0} for s, *_ in splits_config}
+                 'days': [], 'date_ints': [], 'minutes': [], 'regime_ids': [],
+                 'n_tickers': 0} for s, *_ in splits_config}
 
     print(f"\n    Building windows (per-ticker budget: {per_ticker_budget:,} for train)...")
     t0 = time.time()
@@ -670,17 +675,25 @@ for fold_config in WALK_FORWARD_FOLDS:
 
             days = np.array([date_to_day.get(ts.normalize(), -1)
                              for ts in timestamps], dtype=np.int32)
+            date_ints = np.array(
+                [int(ts.normalize().strftime('%Y%m%d')) for ts in timestamps],
+                dtype=np.int32)
+            ts_pst = timestamps.tz_convert(PST)
+            minutes = np.array(
+                [t.hour * 60 + t.minute for t in ts_pst], dtype=np.int32)
             rids = np.array([regime_labels.get(ts, 1)
                              for ts in timestamps], dtype=np.int32)
 
             a = accum[split_name]
-            a['X_seq'].append(X_seq)
-            a['X_regime'].append(X_regime)
+            a['X_seq'].append(X_seq.astype(np.float16))
+            a['X_regime'].append(X_regime.astype(np.float16))
             a['X_id'].append(X_id)
             a['Y'].append(Y)
             a['Y_cont'].append(Y_cont)
             a['W_sample'].append(W_sample)
             a['days'].append(days)
+            a['date_ints'].append(date_ints)
+            a['minutes'].append(minutes)
             a['regime_ids'].append(rids)
             a['n_tickers'] += 1
 
@@ -704,19 +717,24 @@ for fold_config in WALK_FORWARD_FOLDS:
 
         n_tickers = a['n_tickers']
 
-        def _concat_and_free(key):
+        def _concat_and_free(key, dtype=None):
             arr = np.concatenate(a[key], axis=0)
-            del a[key]
+            a[key].clear()
+            a[key] = None
             _release_memory()
+            if dtype is not None and arr.dtype != dtype:
+                arr = arr.astype(dtype)
             return arr
 
-        X_seq_all    = _concat_and_free('X_seq')
-        X_regime_all = _concat_and_free('X_regime')
+        X_seq_all    = _concat_and_free('X_seq', np.float32)
+        X_regime_all = _concat_and_free('X_regime', np.float32)
         X_id_all     = _concat_and_free('X_id')
         Y_all        = _concat_and_free('Y')
         Y_cont_all   = _concat_and_free('Y_cont')
         W_all        = _concat_and_free('W_sample')
-        days_all     = _concat_and_free('days')
+        days_all      = _concat_and_free('days')
+        date_ints_all = _concat_and_free('date_ints')
+        minutes_all   = _concat_and_free('minutes')
         regime_all   = _concat_and_free('regime_ids')
 
         n = len(Y_all)
@@ -743,10 +761,12 @@ for fold_config in WALK_FORWARD_FOLDS:
                             Y_continuous=Y_cont_all,
                             W_sample=W_all,
                             days=days_all,
+                            date_ints=date_ints_all,
+                            minutes=minutes_all,
                             regime_ids=regime_all)
         upload_to_gcs(local_path, GCS_DATA_PREFIX)
 
-        del X_seq_all, X_regime_all, X_id_all, Y_all, Y_cont_all, W_all, days_all, regime_all
+        del X_seq_all, X_regime_all, X_id_all, Y_all, Y_cont_all, W_all, days_all, date_ints_all, minutes_all, regime_all
         accum[split_name] = None
         _release_memory()
 

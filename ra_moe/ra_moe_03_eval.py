@@ -109,7 +109,7 @@ ASL_GAMMA_POS        = 0.1
 ASL_CLIP             = 0.10
 
 BATCH_SIZE           = 512
-FOLDS_TO_EVAL        = [1, 2]
+FOLDS_TO_EVAL        = [4]
 
 SEED = 42
 W = 100
