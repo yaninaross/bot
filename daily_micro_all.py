@@ -1,11 +1,14 @@
 """
-daily_micro_all.py — Unified Microstructure Bootstrapper
-=========================================================
+daily_micro_all.py — Microstructure Bootstrapper (all deploy tickers)
+=====================================================================
 Downloads T&Q raw data from Polygon and computes microstructure
-parquets for ALL actively scored/training assets (74 tickers).
+parquets for all 11 ST LONG + SHORT deploy tickers.
 
 Fully incremental and idempotent: already up-to-date tickers are skipped,
 gaps are filled from GCS cache or Polygon API.
+
+ST LONG F5:  ACHR, CLSK, MARA, ONDS, PL, RIOT, SOUN
+ST SHORT F7: CAT, CLSK, HUT, KEEL, KTOS, RIOT
 """
 
 import os
@@ -24,14 +27,8 @@ warnings.filterwarnings('ignore')
 # ⚙️  CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # S3 deploy tickers (11)
-    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'MARA', 'PL', 'RCAT', 'RIOT',
-    # Train teachers needed for model inference (not already above)
-    'ASTS', 'BBAI', 'LUNR', 'MVIS', 'WULF',
-    # Additional tickers for broader WF coverage
-    'ALAB', 'OKLO', 'RKLB', 'RDW', 'SMCI',
-    # SHORT RULE_1 tickers (not already above)
-    'BE', 'ONDS', 'WOLF',
+    'ACHR', 'CAT', 'CLSK', 'HUT', 'KEEL', 'KTOS',
+    'MARA', 'ONDS', 'PL', 'RIOT', 'SOUN',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
@@ -207,11 +204,11 @@ def process_raw_to_microstructure(trades_df, quotes_df):
 # 🚀  MAIN LOOP
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 daily_micro_all.py — Unified Microstructure Bootstrapper")
+    print("🚀 daily_micro_all.py — Microstructure Batch 1 (A-F)")
     run_ts    = datetime.now(pytz.utc)
     fetch_end = run_ts
     print(f"   Run time : {run_ts.strftime('%Y-%m-%d %H:%M UTC')}")
-    _write_pipeline_status('daily_micro', 'running')
+    _write_pipeline_status('daily_micro_1', 'running')
 
     # Deduplicate to be safe
     ALL_TICKERS = list(set(TARGET_TICKERS))
@@ -343,5 +340,5 @@ if __name__ == "__main__":
         df_micro.to_parquet(micro_uri, engine='pyarrow')
         print(f"      ✅ Appended {len(new_micro):,} rows  |  total: {len(df_micro):,} rows")
 
-    _write_pipeline_status('daily_micro', 'complete')
-    print("\n🎉 daily_micro_all.py COMPLETE.")
+    _write_pipeline_status('daily_micro_1', 'complete')
+    print("\n🎉 daily_micro_all.py COMPLETE (batch 1).")

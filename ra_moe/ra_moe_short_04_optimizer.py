@@ -71,7 +71,7 @@ MODEL_VERSION  = 'spike_transformer_short_fold5'
 EXPERIMENT     = 'spike_transformer_short_fold5'
 DEPLOY_PNL_THRESHOLD = 0.018
 MIN_TRADES_PER_MONTH = 2.0
-MIN_TRADES_ABSOLUTE  = 3
+MIN_TRADES_ABSOLUTE  = 2
 
 GCS_BUCKET       = 'time-series-bucket-ys'
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_data'

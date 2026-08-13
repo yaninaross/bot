@@ -121,7 +121,7 @@ PATIENCE             = 10
 LR_PATIENCE          = 3
 
 MAX_TRAIN_SAMPLES    = None
-FOLDS_TO_TRAIN       = [4]
+FOLDS_TO_TRAIN       = [5]
 
 SEED = 42
 tf.random.set_seed(SEED)

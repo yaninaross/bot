@@ -1,12 +1,13 @@
 """
-daily_ohlcv_2.py — OHLCV Refresh (batch 2 of 2)
-=================================================
+daily_ohlcv_2.py — OHLCV Refresh (batch 2 of 2, L-X)
+=====================================================
 Fetches 1-min OHLCV from Polygon, appends to GCS parquets.
 Run in parallel with daily_ohlcv_1.py and daily_micro_all.py.
 Stitch step is handled separately by daily_stitch_master.py.
 
-Batch 2 (37 tickers L-X):
-  Context: (shared via batch 1)
+Batch 2 (5 deploy tickers L-X + 2 sector proxies):
+  Deploy: MARA, ONDS, PL, RIOT, SOUN
+  Sector proxies: ITA, MSTR (OHLCV-only, for SHORT regime features)
 """
 
 import time
@@ -34,12 +35,7 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'LHX', 'LIN', 'LMT', 'LUNR', 'MARA', 'MIGI', 'MNTS',
-    'MOD', 'MP', 'MSTR', 'MU', 'MVIS', 'NBIS', 'NEE', 'NNDM', 'NOC', 'NVDA',
-    'OKLO', 'ONDS', 'PL', 'PLTR', 'PLUG', 'POWL',
-    'RCAT', 'RDW', 'RIOT', 'RKLB', 'RTX',
-    'SMCI', 'SMR', 'SOUN', 'SPIR',
-    'TSLA', 'VOYG', 'VRT', 'VST', 'WOLF', 'WULF', 'XOM',
+    'ITA', 'MARA', 'MSTR', 'ONDS', 'PL', 'RIOT', 'SOUN',
 ]
 
 CONTEXT_ASSETS = []

@@ -326,6 +326,28 @@ def generate_paths_for_ticker(pipeline, ticker, score_minute, entry_minute,
     return pd.DataFrame(results)
 
 
+def _upload_summary_to_gcs(summary_path):
+    """Push summary parquet to GCS for crash-resilient resume."""
+    from google.cloud import storage
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
+    blob = bucket.blob(f'{GCS_MOIRAI_PATHS}/path_validation_v2_summary.parquet')
+    blob.upload_from_filename(summary_path)
+
+
+def _download_summary_from_gcs(summary_path):
+    """Try to resume from GCS if local /tmp/ is gone (runtime restart)."""
+    from google.cloud import storage
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
+    blob = bucket.blob(f'{GCS_MOIRAI_PATHS}/path_validation_v2_summary.parquet')
+    if blob.exists():
+        os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+        blob.download_to_filename(summary_path)
+        return True
+    return False
+
+
 def batch_generate_all_tickers(tickers=None, date_start=None, date_end=None,
                                 save_npy=True):
     """Generate paths for all tickers × all SCORE_CONFIGS. Incremental save."""
@@ -341,6 +363,9 @@ def batch_generate_all_tickers(tickers=None, date_start=None, date_end=None,
 
     all_results = []
     done_keys = set()
+    if not os.path.exists(summary_path):
+        if _download_summary_from_gcs(summary_path):
+            print(f"  Resumed summary from GCS")
     if os.path.exists(summary_path):
         prev = pd.read_parquet(summary_path)
         done_keys = set(zip(prev['ticker'], prev['entry_label']))
@@ -377,8 +402,9 @@ def batch_generate_all_tickers(tickers=None, date_start=None, date_end=None,
             master = pd.concat(all_results, ignore_index=True)
             summary_cols = [c for c in master.columns if c != 'paths']
             master[summary_cols].to_parquet(summary_path)
+            _upload_summary_to_gcs(summary_path)
             print(f"  Saved: {len(master)} predictions, "
-                  f"{master['ticker'].nunique()} tickers → {summary_path}")
+                  f"{master['ticker'].nunique()} tickers → local + GCS")
 
             gc.collect()
 
@@ -387,10 +413,12 @@ def batch_generate_all_tickers(tickers=None, date_start=None, date_end=None,
         return pd.DataFrame()
 
     master = pd.concat(all_results, ignore_index=True)
+    master.to_parquet(summary_path, index=False)
+    _upload_summary_to_gcs(summary_path)
     print(f"\n{'='*60}")
     print(f"Total: {len(master)} predictions across "
           f"{master['ticker'].nunique()} tickers × {len(SCORE_CONFIGS)} entries")
-    print(f"Summary → {summary_path}")
+    print(f"Summary → {summary_path} (uploaded to GCS)")
     print(f".npy paths → {LOCAL_PATHS_DIR}/")
     return master
 

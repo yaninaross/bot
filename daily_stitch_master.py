@@ -9,7 +9,8 @@ Checks pipeline_status.json, then for each ticker:
   4. Concats with head of existing master_inference
   5. Saves atomic master_inference parquet
 
-Context assets (VIX, SPY, TLT, IWM) get OHLCV-only masters for regime filter.
+11 deploy tickers (ST LONG F5 + SHORT F7) + 6 context/proxy assets.
+Context assets (VIX, SPY, TLT, IWM, MSTR, ITA) get OHLCV-only masters.
 Uses google.cloud.storage API + local /tmp reads to avoid gcsfs memory overhead.
 """
 
@@ -44,22 +45,14 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # S3 deploy tickers (11)
-    'APLD', 'CIFR', 'CLSK', 'FLNC', 'HUT', 'IREN', 'KEEL', 'MARA', 'PL', 'RCAT', 'RIOT',
-    # Train teachers needed for model inference (not already above)
-    'ASTS', 'BBAI', 'LUNR', 'MVIS', 'WULF',
-    # Additional tickers for broader WF coverage
-    'ALAB', 'OKLO', 'RKLB', 'RDW', 'SMCI',
-    # SHORT RULE_1 tickers (not already above)
-    'BE', 'ONDS', 'WOLF',
+    # ST LONG F5 (7) + ST SHORT F7 (6) = 11 unique deploy tickers
+    'ACHR', 'CAT', 'CLSK', 'HUT', 'KEEL', 'KTOS',
+    'MARA', 'ONDS', 'PL', 'RIOT', 'SOUN',
 ]
 
-CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY']
+CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY', 'MSTR', 'ITA']
 
-TICKER_DATA_START = {
-    'FCEL': pd.Timestamp("2025-08-01", tz='UTC'),
-    'MU':   pd.Timestamp("2026-01-01", tz='UTC'),
-}
+TICKER_DATA_START = {}
 DATA_START_DEFAULT = pd.Timestamp("2022-01-01", tz='UTC')
 
 TAIL_DAYS = 5
@@ -169,7 +162,7 @@ def _check_prerequisites():
     status = _read_pipeline_status()
     today = pd.Timestamp.now(tz='UTC').normalize()
     missing = []
-    for stage in ['daily_micro', 'ohlcv_1', 'ohlcv_2']:
+    for stage in ['daily_micro_1', 'daily_micro_2', 'ohlcv_1', 'ohlcv_2']:
         info = status.get(stage, {})
         if info.get('status') != 'complete':
             missing.append(f"{stage}: not complete")
@@ -273,6 +266,12 @@ def stitch_ticker(ticker, is_context=False):
         scalar = _ts_scalar(tail_start, col.type)
         n_head = int(pc.sum(pc.less(col, scalar)).as_py())
         head_t = master_t.slice(0, n_head)
+
+        # Match tail index name to head schema so Arrow alignment finds it
+        if ts_col_m == '__index_level_0__':
+            df_tail.index.name = None
+        else:
+            df_tail.index.name = ts_col_m
 
         tail_arrow = pa.Table.from_pandas(df_tail)
         aligned = []

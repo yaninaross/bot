@@ -56,7 +56,7 @@ GCS_INFER_DIR   = 'Data/Inference_v2'
 GCS_DATA_PREFIX = 'Algos/RA_MoE/real_data'
 
 MAX_TICKERS       = None     # None = all tradable tickers (~80)
-FOLDS_TO_BUILD    = [4]
+FOLDS_TO_BUILD    = [5]
 SUBSAMPLE_EVERY   = 30       # take every Nth valid window (train only)
 MAX_TRAIN_SAMPLES = 50_000   # safety cap per fold (100K OOM on 15GB VM)
 
@@ -75,6 +75,8 @@ WALK_FORWARD_FOLDS = [
      'val_end': '2026-03-31', 'test_start': '2026-04-01', 'test_end': '2026-08-08'},
     {'fold': 4, 'train_end': '2026-03-31', 'val_start': '2026-04-01',
      'val_end': '2026-05-31', 'test_start': '2026-06-01', 'test_end': '2026-08-08'},
+    {'fold': 5, 'train_end': '2026-06-09', 'val_start': '2026-06-10',
+     'val_end': '2026-07-09', 'test_start': '2026-07-10', 'test_end': '2026-08-10'},
 ]
 
 # ── Ticker filtering ──
