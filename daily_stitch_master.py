@@ -9,7 +9,7 @@ Checks pipeline_status.json, then for each ticker:
   4. Concats with head of existing master_inference
   5. Saves atomic master_inference parquet
 
-11 deploy tickers (ST LONG F5 + SHORT F7) + 6 context/proxy assets.
+40 deploy tickers (ST LONG HYB_F7_25 + SHORT HYB_F7_30) + 6 context/proxy assets.
 Context assets (VIX, SPY, TLT, IWM, MSTR, ITA) get OHLCV-only masters.
 Uses google.cloud.storage API + local /tmp reads to avoid gcsfs memory overhead.
 """
@@ -45,9 +45,11 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # ST LONG F5 (7) + ST SHORT F7 (6) = 11 unique deploy tickers
-    'ACHR', 'CAT', 'CLSK', 'HUT', 'KEEL', 'KTOS',
-    'MARA', 'ONDS', 'PL', 'RIOT', 'SOUN',
+    # ST LONG HYB_F7_25 (20) + ST SHORT HYB_F7_30 (21) = 40 unique deploy tickers
+    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'BBAI', 'BE',
+    'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN', 'FLNC',
+    'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'ONDS', 'PL', 'PLTR',
+    'RIOT', 'RKLB', 'SLS', 'SMCI', 'SMR', 'SOUN', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
 CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY', 'MSTR', 'ITA']

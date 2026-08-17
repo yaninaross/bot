@@ -70,7 +70,7 @@ PST           = pytz.timezone('America/Los_Angeles')
 TAIL_DAYS     = 60
 
 BACKTEST_START = '2026-07-10'
-BACKTEST_END   = '2026-08-12'
+BACKTEST_END   = '2026-08-13'
 
 SLIPPAGE_PCT  = 0.0015
 EXIT_TIME_MIN = 780

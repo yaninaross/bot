@@ -1,20 +1,17 @@
-"""
-Daily Scoring — SHORT F7 Filt >=3.0% (Spike Transformer fold 7)
-================================================================
-Self-contained. Scores deployed tickers under F7 Filt >=3.0% and prints dashboard.
-
-Strategy: F7 Filt >=3.0% (val_b_avg_pnl >= 3%)
-  - 1 model (fold 7, train → Jun 28), 6 deployed tickers
-  - CAT, CLSK, HUT, KEEL, KTOS, RIOT
-  - Score at minute 375 (6:15 AM PT), entry at minute 385 (6:25 AM PT)
-  - Modes: static, limit_entry
-  - FiLM regime conditioning (no separate regime filter)
-
-F7 Filt >=3.0% backtest (Jul 29 – Aug 12):
-  +3.13%/trade, 88% WR, PF 16.60, EqW +51.48%, 6 tickers
-
-Run AFTER daily_stitch_master.py has finished updating GCS.
-"""
+# %% ── Daily Scoring — ST SHORT L5-2 HYB_F7_30 (22 regime features) ──────────
+#
+# Spike Transformer SHORT — L5-2 Hybrid F5+F6+F7 (F7 filtered to val_b >= 3.0%)
+#
+#   - 3 models (fold 5/6/7), L5-2 architecture (22 regime features)
+#   - Per-ticker fold assignment from BQ (best val_b_avg_pnl per ticker)
+#   - F7 tickers only included if val_b_avg_pnl >= 3.0%
+#   - Score at minute 375 (6:15 AM PT), entry at minute 385 (6:25 AM PT)
+#   - FiLM regime conditioning (no separate regime filter)
+#
+# Upgraded from L5-1 to L5-2 (2026-08-16): L5-2 HYB +2.84% avg, EqW +56.30%
+# vs L5-1 HYB +2.64% avg, EqW +46.19% (Jul 10 – Aug 13, 33 trading days)
+#
+# Run AFTER daily_stitch_master.py has finished updating GCS.
 
 import os
 import sys
@@ -61,28 +58,31 @@ except Exception:
 # ==============================================================================
 # CONSTANTS
 # ==============================================================================
-BUCKET_NAME     = "time-series-bucket-ys"
-GCS_DATA_PREFIX = 'Algos/RA_MoE/short_L5_1_data'
-GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_1_models'
-BQ_PREDICTIONS  = "ys-time-series.scoring_logs.live_predictions"
-INFERENCE_DIR   = "Data/Inference_v2"
-TAIL_DAYS       = 25
-PST             = pytz.timezone('America/Los_Angeles')
-MIN_PRICE       = 2.00
+BUCKET_NAME      = "time-series-bucket-ys"
+GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_L5_2_data'
+GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_2_models'
+BQ_PREDICTIONS   = "ys-time-series.scoring_logs.live_predictions"
+WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
+INFERENCE_DIR    = "Data/Inference_v2"
+TAIL_DAYS        = 25
+PST              = pytz.timezone('America/Los_Angeles')
+MIN_PRICE        = 2.00
 
-FOLDS           = [7]
-SCORE_MINUTE    = 375
-ENTRY_MINUTE    = 385
-TIME_STEPS      = 128
-D_MODEL         = 64
-N_HEADS         = 4
-D_FF            = 128
-N_BLOCKS        = 2
-DROPOUT_RATE    = 0.1
-FILM_HIDDEN     = 64
-N_HORIZONS      = 3
-N_ASSET_F       = 33
-N_REGIME_F      = 22
+FOLDS            = [5, 6, 7]
+F7_VAL_B_THRESH  = 0.030
+BASE_PNL_THRESH  = 0.018
+SCORE_MINUTE     = 375
+ENTRY_MINUTE     = 385
+TIME_STEPS       = 128
+D_MODEL          = 64
+N_HEADS          = 4
+D_FF             = 128
+N_BLOCKS         = 2
+DROPOUT_RATE     = 0.1
+FILM_HIDDEN      = 64
+N_HORIZONS       = 3
+N_ASSET_F        = 33
+N_REGIME_F       = 22
 
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
@@ -118,29 +118,102 @@ REGIME_COLS = [
 ]
 
 HORIZON_LABELS = {0: '15m', 1: '30m', 2: '60m'}
+HORIZON_FROM_LABEL = {'15m': 0, '30m': 1, '60m': 2}
+
+EXCLUDE_TICKERS = {'SPY', 'VIX', 'TLT', 'IWM', 'XLE', 'ITA', 'BITF', 'MIGI', 'SMLR'}
+
+BQ_MODEL_VERSIONS = {
+    5: 'spike_transformer_short_L5_2_fold5',
+    6: 'spike_transformer_short_L5_2_fold6',
+    7: 'spike_transformer_short_L5_2_fold7',
+}
 
 gcs_client = gcs_storage.Client()
 
 
 # ==============================================================================
-# FROZEN DEPLOY CONFIGS — F7 Filt >=3.0% (val_b_avg_pnl >= 3%)
+# BQ CONFIG LOADING — HYB_F7_30 logic
 # ==============================================================================
-DEPLOY_CONFIGS = {
-    'CAT':  {'fold': 7, 'horizon': 0, 'prob_thresh': 0.20, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.005, 'max_wait': 30},
-    'CLSK': {'fold': 7, 'horizon': 1, 'prob_thresh': 0.70, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.005, 'max_wait': 30},
-    'HUT':  {'fold': 7, 'horizon': 1, 'prob_thresh': 0.30, 'tp_pct': 0.12, 'sl_pct': 0.06, 'mode': 'static'},
-    'KEEL': {'fold': 7, 'horizon': 0, 'prob_thresh': 0.60, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.0125, 'max_wait': 30},
-    'KTOS': {'fold': 7, 'horizon': 2, 'prob_thresh': 0.20, 'tp_pct': 0.20, 'sl_pct': 0.10, 'mode': 'limit_entry', 'dip_pct': 0.04, 'max_wait': 90},
-    'RIOT': {'fold': 7, 'horizon': 0, 'prob_thresh': 0.30, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.005, 'max_wait': 30},
-}
+def load_deploy_configs():
+    if bigquery is None:
+        raise RuntimeError("BigQuery not available — cannot load deploy configs")
+    bq_client = bigquery.Client()
 
-DEPLOY_TICKERS = sorted(DEPLOY_CONFIGS.keys())
+    fold_cfgs = {}
+    for fold_id, model_version in BQ_MODEL_VERSIONS.items():
+        q = f"""
+        SELECT ticker, experiment, tpsl_mode, prob_thresh, tp_pct, sl_pct,
+               grace_minutes, dip_pct, max_wait_minutes,
+               val_b_avg_pnl, val_b_win_rate, val_b_count
+        FROM `{WF_BQ_TABLE}`
+        WHERE model_version = '{model_version}'
+          AND survived_a = TRUE
+          AND val_b_avg_pnl >= {BASE_PNL_THRESH}
+        """
+        rows = bq_client.query(q).to_dataframe()
+        if len(rows) == 0:
+            fold_cfgs[fold_id] = {}
+            continue
+        best = rows.loc[rows.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+        cfgs = {}
+        for _, row in best.iterrows():
+            tk = row['ticker']
+            if tk in EXCLUDE_TICKERS:
+                continue
+            exp = row['experiment']
+            h_part = exp.replace(f'{model_version}_', '').split('_')[0]
+            horizon_idx = HORIZON_FROM_LABEL.get(h_part, 1)
+            mode = row['tpsl_mode']
+            if pd.isna(mode) or mode == '':
+                if '_GRACE' in exp:
+                    mode = 'grace'
+                elif '_LIMIT' in exp:
+                    mode = 'limit_entry'
+                else:
+                    mode = 'static'
+            cfgs[tk] = {
+                'fold': fold_id,
+                'horizon': horizon_idx,
+                'prob_thresh': float(row['prob_thresh']),
+                'tp_pct': float(row['tp_pct']),
+                'sl_pct': float(row['sl_pct']),
+                'mode': mode,
+                'grace_minutes': int(row['grace_minutes']) if pd.notna(row['grace_minutes']) else 0,
+                'dip_pct': float(row['dip_pct']) if pd.notna(row['dip_pct']) else 0,
+                'max_wait': int(row['max_wait_minutes']) if pd.notna(row['max_wait_minutes']) else 0,
+                'val_b_avg_pnl': float(row['val_b_avg_pnl']),
+            }
+        fold_cfgs[fold_id] = cfgs
+        print(f"    F{fold_id}: {len(cfgs)} tickers — {', '.join(sorted(cfgs.keys()))}")
 
-FOLD_TICKERS = {}
-for _t, _c in DEPLOY_CONFIGS.items():
-    FOLD_TICKERS.setdefault(_c['fold'], []).append(_t)
-for _f in FOLD_TICKERS:
-    FOLD_TICKERS[_f].sort()
+    deploy = {}
+    all_tickers = set()
+    for cfgs in fold_cfgs.values():
+        all_tickers |= set(cfgs.keys())
+
+    for tk in sorted(all_tickers):
+        best_fold, best_val, best_cfg = None, -999, None
+        for fold_id in FOLDS:
+            if tk not in fold_cfgs.get(fold_id, {}):
+                continue
+            cfg = fold_cfgs[fold_id][tk]
+            v = cfg['val_b_avg_pnl']
+            if fold_id == 7 and v < F7_VAL_B_THRESH:
+                continue
+            if v > best_val:
+                best_fold, best_val, best_cfg = fold_id, v, cfg
+        if best_cfg is not None:
+            deploy[tk] = best_cfg
+
+    fold_counts = {}
+    for tk, cfg in deploy.items():
+        f = cfg['fold']
+        fold_counts.setdefault(f, []).append(tk)
+    for f in sorted(fold_counts):
+        tickers = sorted(fold_counts[f])
+        print(f"    Hybrid F{f}: {len(tickers)} — {', '.join(tickers)}")
+    print(f"    Total: {len(deploy)} tickers")
+    return deploy
 
 
 # ==============================================================================
@@ -198,9 +271,6 @@ def load_master(ticker, tail_days=None):
         return None
 
 
-# ==============================================================================
-# DATA HEALING
-# ==============================================================================
 def heal_data(df):
     df = df.resample('1min').asfreq()
     for c in ['Open', 'High', 'Low', 'Close']:
@@ -377,7 +447,7 @@ class _DeStationaryAttention(_kl.Layer):
         Q = tf.transpose(tf.reshape(self.wq(x), (B, T, H, D)), (0, 2, 1, 3))
         K = tf.transpose(tf.reshape(self.wk(x), (B, T, H, D)), (0, 2, 1, 3))
         V = tf.transpose(tf.reshape(self.wv(x), (B, T, H, D)), (0, 2, 1, 3))
-        scores = tf.matmul(Q, K, transpose_b=True) / self.scale
+        scores = tf.matmul(Q, K, transpose_b=True) / tf.cast(self.scale, Q.dtype)
         tau = tf.reshape(self.tau_proj(stats), (B, H, 1, 1))
         scores = scores + tau
         attn = self.attn_drop(tf.nn.softmax(scores, axis=-1), training=training)
@@ -435,7 +505,7 @@ class _AttentionPooling(_kl.Layer):
         self.scale = tf.sqrt(tf.cast(d_model, tf.float32))
 
     def call(self, x, training=False):
-        scores = tf.matmul(self.query, x, transpose_b=True) / self.scale
+        scores = tf.matmul(self.query, x, transpose_b=True) / tf.cast(self.scale, x.dtype)
         return tf.matmul(tf.nn.softmax(scores, axis=-1), x)[:, 0, :]
 
 
@@ -473,8 +543,6 @@ class SpikeTransformer(Model):
 
 # ==============================================================================
 # MODEL LOADING — single instance, swap weights per fold
-# Weight files saved by Keras 3.x; tf_keras uses a different .weights.h5 format,
-# so we load via h5py using the Keras 3 layout (attribute-name-based groups).
 # ==============================================================================
 _model = None
 _fold_weights = {}
@@ -540,11 +608,11 @@ def _ensure_fold_loaded(fold_id):
         _current_fold = fold_id
 
 
-def load_models_and_meta():
+def load_models_and_meta(deploy_configs):
     global _model, _fold_weights, _current_fold, _scaling_stats, _regime_stats
 
     meta_path = _ensure_file(
-        f'{GCS_DATA_PREFIX}/meta.npz', '/tmp/ra_moe_short_L5_1_meta.npz')
+        f'{GCS_DATA_PREFIX}/meta.npz', '/tmp/ra_moe_short_L5_2_meta.npz')
     meta = np.load(meta_path, allow_pickle=True)
     _scaling_stats = meta['scaling_stats'].item()
     _regime_stats = meta['regime_stats'].item()
@@ -557,8 +625,9 @@ def load_models_and_meta():
     dummy_reg = tf.zeros((1, N_REGIME_F))
     _model({'seq_input': dummy_seq, 'regime_input': dummy_reg})
 
-    for fold_id in FOLDS:
-        local_dir = f'/tmp/ra_moe_short_L5_1_models/fold_{fold_id}'
+    needed_folds = sorted(set(cfg['fold'] for cfg in deploy_configs.values()))
+    for fold_id in needed_folds:
+        local_dir = f'/tmp/ra_moe_short_L5_2_models/fold_{fold_id}'
         weights_path = os.path.join(local_dir, 'model.weights.h5')
         if not os.path.exists(weights_path):
             os.makedirs(local_dir, exist_ok=True)
@@ -568,13 +637,14 @@ def load_models_and_meta():
                 fname = blob.name.split('/')[-1]
                 blob.download_to_filename(os.path.join(local_dir, fname))
         _fold_weights[fold_id] = weights_path
-        n_tickers = len(FOLD_TICKERS.get(fold_id, []))
+        n_tickers = sum(1 for c in deploy_configs.values() if c['fold'] == fold_id)
         print(f"   Fold {fold_id} weights cached ({n_tickers} tickers): {weights_path}")
 
-    _load_keras3_weights(_model, _fold_weights[FOLDS[0]])
-    _current_fold = FOLDS[0]
-    print(f"   Model built: {_model.count_params():,} params, {len(FOLDS)} folds, "
-          f"{len(DEPLOY_CONFIGS)} tickers")
+    first_fold = needed_folds[0]
+    _load_keras3_weights(_model, _fold_weights[first_fold])
+    _current_fold = first_fold
+    print(f"   Model built: {_model.count_params():,} params, {len(needed_folds)} folds, "
+          f"{len(deploy_configs)} tickers")
 
 
 def apply_scaling(df, stats, cols):
@@ -671,7 +741,6 @@ def score_ticker(ticker, cfg, df_feat, regime_df, run_ts):
         'dip_pct': cfg.get('dip_pct', 0),
         'max_wait_minutes': cfg.get('max_wait', 0),
         'grace_minutes': cfg.get('grace_minutes', 0),
-        'score_minute': SCORE_MINUTE,
         'entry_minute': ENTRY_MINUTE,
         'score_date': score_date,
         'bar_ts': df_feat.index[row_idx],
@@ -689,19 +758,25 @@ _MODE_LABELS = {'static': 'STATIC', 'grace': 'GRACE', 'limit_entry': 'LIMIT',
                 'volscaled': 'VOLSC'}
 
 
-def print_dashboard(results, run_ts):
+def print_dashboard(results, deploy_configs, run_ts):
     W = 120
     pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %H:%M PST')
 
+    fold_counts = {}
+    for cfg in deploy_configs.values():
+        fold_counts.setdefault(cfg['fold'], 0)
+        fold_counts[cfg['fold']] += 1
+
     print()
     print(f"  {'='*W}")
-    print(f"  ST SHORT SIGNALS — F7 Filt >=3.0%   {pst_str}")
+    print(f"  ST SHORT SIGNALS — L5-2 HYB_F7_30   {pst_str}")
     print(f"  {'='*W}")
-    print(f"  Strategy: F7 Filt >=3.0% (fold 7, val_b >= 3%)  |  "
+    print(f"  Strategy: Hybrid F5+F6+F7 (F7>=3.0%)  |  "
           f"Score: {SCORE_MINUTE // 60}:{SCORE_MINUTE % 60:02d} PST  |  "
           f"Entry: {ENTRY_MINUTE // 60}:{ENTRY_MINUTE % 60:02d} PST")
-    tickers = FOLD_TICKERS.get(7, [])
-    print(f"  Fold 7: {', '.join(tickers)} ({len(tickers)})")
+    for f in sorted(fold_counts):
+        f_tickers = sorted(t for t, c in deploy_configs.items() if c['fold'] == f)
+        print(f"  F{f}: {', '.join(f_tickers)} ({len(f_tickers)})")
 
     if not results:
         print(f"\n  No tickers scored.")
@@ -739,7 +814,7 @@ def print_dashboard(results, run_ts):
 
     print()
     print(f"  {'='*W}")
-    print(f"  SUMMARY")
+    print(f"  ST SHORT SUMMARY")
     print(f"  {'─'*W}")
     print(f"  Scored:    {len(results)} tickers")
     print(f"  Signals:   {len(signals)}/{len(results)}" +
@@ -761,9 +836,6 @@ def print_dashboard(results, run_ts):
             print(f"  {'─'*W}")
             print(f"  LIMIT SELL ORDERS (rally-wait, enter at SHORT)")
             print(f"  {'─'*W}")
-            print(f"  {'Ticker':<6} {'F':>1}  {'SELL LIMIT':>12}  {'Rally':>8}  "
-                  f"{'TP target':>12}  {'SL stop':>12}  {'Cancel by':>10}  {'Exit by':>10}  {'Signal $':>10}")
-            print(f"  {'─'*W}")
             for r in limit_trades:
                 c = r['close']
                 rally = r.get('dip_pct', 0) or 0
@@ -777,11 +849,11 @@ def print_dashboard(results, run_ts):
                 expire_ampm = "AM" if expire_h < 12 else "PM"
                 expire_h12 = expire_h if expire_h <= 12 else expire_h - 12
                 expire_str = f"{expire_h12}:{expire_min % 60:02d}{expire_ampm} PT"
-                print(f"  {r['ticker']:<6} {r['fold']:>1}  "
+                print(f"  {r['ticker']:<6} F{r['fold']}  "
                       f"\033[91m${lp:>9.2f}\033[0m  "
                       f"+{rally:.1%}  "
-                      f"${tp_price:>9.2f}  ${sl_price:>9.2f}  "
-                      f"{expire_str:>10}  {'1:00PM PT':>10}  ${c:>8.2f}")
+                      f"TP ${tp_price:>9.2f}  SL ${sl_price:>9.2f}  "
+                      f"{expire_str:>10}  {'1:00PM PT':>10}")
 
         market_trades = [r for r in signals if r['mode'] in ('static', 'grace', 'volscaled')]
         if market_trades:
@@ -799,31 +871,9 @@ def print_dashboard(results, run_ts):
                       f"[{r['horizon']} dump prob={r['prob']:.3f}]")
 
     print()
-    print(f"  {'─'*W}")
-    print(f"  ASSET CONFIGS (frozen from WF F7 Filt >=3.0%)")
-    print(f"  {'─'*W}")
-    print(f"  {'Ticker':<6} {'F':>1}  {'H':>3}  {'Mode':<12}  {'Thr':>5}  "
-          f"{'TP':>5}  {'SL':>5}  {'Rally':>5}  {'Wait':>5}")
-    print(f"  {'─'*W}")
-
-    for ticker in DEPLOY_TICKERS:
-        cfg = DEPLOY_CONFIGS[ticker]
-        mode_label = cfg['mode'].upper()
-        if cfg['mode'] == 'limit_entry':
-            mode_label = f"LIMIT r={cfg.get('dip_pct', 0):.1%}"
-        elif cfg['mode'] == 'grace':
-            mode_label = f"GRACE {cfg.get('grace_minutes', 0)}m"
-        rally_str = f"{cfg.get('dip_pct', 0):.1%}" if cfg['mode'] == 'limit_entry' else "  --"
-        wait_str = f"{cfg.get('max_wait', 0):>3}m" if cfg['mode'] == 'limit_entry' else "  --"
-        print(f"  {ticker:<6} {cfg['fold']:>1}  {HORIZON_LABELS[cfg['horizon']]:>3}  {mode_label:<12}  "
-              f"{cfg['prob_thresh']:>5.2f}  "
-              f"{cfg['tp_pct']:>4.0%}  {cfg['sl_pct']:>4.0%}  {rally_str:>5}  {wait_str:>5}")
-
-    print()
-    print(f"  Strategy: F7 Filt >=3.0%  |  "
-          f"Fold 7: {len(FOLD_TICKERS.get(7, []))} tickers")
-    print(f"  Score @ 6:15 AM  |  Entry @ 6:25 AM  |  "
-          f"No regime filter (FiLM conditioning instead)")
+    print(f"  Strategy: L5-2 HYB_F7_30 (22 regime features)  |  "
+          f"Score {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} -> Entry {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PST  |  "
+          f"FiLM conditioning")
     print(f"  {'='*W}")
 
 
@@ -846,7 +896,6 @@ _BQ_SCHEMA_DEFS = [
     ("close",          "FLOAT64"),
     ("filter_status",  "STRING"),
     ("tpsl_mode",      "STRING"),
-    ("atr_pct_entry",  "FLOAT64"),
     ("strategy",       "STRING"),
     ("model_version",  "STRING"),
 ]
@@ -869,7 +918,7 @@ def log_to_bigquery(results, run_ts):
             'run_timestamp': run_ts.isoformat(),
             'bar_timestamp': r['bar_ts'].isoformat(),
             'score_date': str(r['score_date']),
-            'experiment': f'spike_transformer_short_L5_1_fold{fold_id}_{r["horizon"]}',
+            'experiment': f'spike_transformer_short_L5_2_fold{fold_id}_{r["horizon"]}',
             'ticker': r['ticker'],
             'seed': 0,
             'prob': r['prob'],
@@ -881,8 +930,8 @@ def log_to_bigquery(results, run_ts):
             'close': r['close'],
             'filter_status': 'OK',
             'tpsl_mode': r['mode'],
-            'strategy': 'ST_SHORT_F7_FILT',
-            'model_version': f'spike_transformer_short_L5_1_fold{fold_id}',
+            'strategy': 'ST_SHORT_L5_2_HYB_F7_30',
+            'model_version': f'spike_transformer_short_L5_2_fold{fold_id}',
         })
     bq_client = bigquery.Client()
     _ensure_bq_schema(bq_client)
@@ -891,7 +940,7 @@ def log_to_bigquery(results, run_ts):
         if errors:
             print(f"   BigQuery errors: {errors}")
         else:
-            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_F7_FILT)")
+            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_L5_2_HYB_F7_30)")
     except Exception as e:
         print(f"   BigQuery failed: {e}")
 
@@ -921,41 +970,41 @@ def _check_stitch_freshness():
 # ==============================================================================
 # MAIN
 # ==============================================================================
-def main():
-    run_ts = datetime.now(pytz.utc)
-    pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
-    print(f"\n{'='*80}")
-    print(f"  SHORT SCORING — F7 Filt >=3.0%   {pst_str}")
-    print(f"{'='*80}")
+run_ts = datetime.now(pytz.utc)
+pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
+print(f"\n{'='*80}")
+print(f"  DAILY SCORING — ST SHORT L5-2 HYB_F7_30 — {pst_str}")
+print(f"{'='*80}")
 
-    _check_stitch_freshness()
+_check_stitch_freshness()
 
-    now_pst = run_ts.astimezone(PST)
-    now_minutes = now_pst.hour * 60 + now_pst.minute
-    if now_minutes < SCORE_MINUTE:
-        print(f"\n  SKIP — too early ({now_minutes} < {SCORE_MINUTE})")
-        return
+now_pst = run_ts.astimezone(PST)
+now_minutes = now_pst.hour * 60 + now_pst.minute
+if now_minutes < SCORE_MINUTE:
+    print(f"\n  SKIP — too early ({now_minutes} < {SCORE_MINUTE})")
+else:
+    print(f"\n  Loading deploy configs from BQ (HYB_F7_30)...")
+    DEPLOY_CONFIGS = load_deploy_configs()
 
-    print(f"\n  Deploy configs: {len(DEPLOY_CONFIGS)} tickers — "
-          f"F7({len(FOLD_TICKERS.get(7, []))})")
-
-    print(f"  Loading models and scaling stats...")
-    load_models_and_meta()
+    print(f"\n  Loading models and scaling stats...")
+    load_models_and_meta(DEPLOY_CONFIGS)
 
     print(f"  Building market context...")
     market_df = build_market_context()
     _master_cache.clear()
 
-    print(f"  Computing regime features...")
+    print(f"  Computing regime features (22 cols)...")
     regime_df = compute_regime_features(market_df)
 
+    fold_tickers = {}
+    for t, cfg in DEPLOY_CONFIGS.items():
+        fold_tickers.setdefault(cfg['fold'], []).append(t)
+
     results = []
-    for fold_id in FOLDS:
-        fold_tickers = FOLD_TICKERS.get(fold_id, [])
-        if not fold_tickers:
-            continue
-        print(f"\n  Scoring fold {fold_id} ({len(fold_tickers)} tickers)...")
-        for ticker in fold_tickers:
+    for fold_id in sorted(fold_tickers.keys()):
+        tickers = sorted(fold_tickers[fold_id])
+        print(f"\n  Scoring fold {fold_id} ({len(tickers)} tickers)...")
+        for ticker in tickers:
             cfg = DEPLOY_CONFIGS[ticker]
             df_feat = engineer_asset(ticker, market_df)
             if df_feat is None:
@@ -970,12 +1019,9 @@ def main():
     scored = [r['ticker'] for r in results]
     print(f"\n  Scored {len(scored)}/{len(DEPLOY_CONFIGS)}: {', '.join(scored)}")
 
-    print_dashboard(results, run_ts)
+    print_dashboard(results, DEPLOY_CONFIGS, run_ts)
     log_to_bigquery(results, run_ts)
 
     _master_cache.clear()
     tf.keras.backend.clear_session()
     gc.collect()
-
-
-main()

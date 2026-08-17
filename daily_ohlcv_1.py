@@ -1,12 +1,13 @@
 """
-daily_ohlcv_1.py — OHLCV Refresh (batch 1 of 2, A-K)
+daily_ohlcv_1.py — OHLCV Refresh (batch 1 of 2, A-F)
 =====================================================
 Fetches 1-min OHLCV from Polygon, appends to GCS parquets.
-Run in parallel with daily_ohlcv_2.py and daily_micro_all.py.
+Run in parallel with daily_ohlcv_2.py.
 Stitch step is handled separately by daily_stitch_master.py.
 
-Batch 1 (6 deploy tickers A-K + 4 context):
-  Deploy: ACHR, CAT, CLSK, HUT, KEEL, KTOS
+Batch 1 (20 deploy tickers A-F + 4 context):
+  Deploy: ACHR, AEHR, ALAB, AMD, APLD, ARM, ASTS, AVAV, BBAI, BE,
+          BTBT, CAT, CEG, CIFR, CLSK, COIN, CORZ, CVX, ETN, FLNC
   Context: I:VIX, TLT, IWM, SPY
 """
 
@@ -35,7 +36,8 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'ACHR', 'CAT', 'CLSK', 'HUT', 'KEEL', 'KTOS',
+    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'BBAI', 'BE',
+    'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN', 'FLNC',
 ]
 
 CONTEXT_ASSETS = ['I:VIX', 'TLT', 'IWM', 'SPY']

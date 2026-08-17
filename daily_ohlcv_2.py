@@ -1,13 +1,14 @@
 """
-daily_ohlcv_2.py — OHLCV Refresh (batch 2 of 2, L-X)
+daily_ohlcv_2.py — OHLCV Refresh (batch 2 of 2, G-X)
 =====================================================
 Fetches 1-min OHLCV from Polygon, appends to GCS parquets.
-Run in parallel with daily_ohlcv_1.py and daily_micro_all.py.
+Run in parallel with daily_ohlcv_1.py.
 Stitch step is handled separately by daily_stitch_master.py.
 
-Batch 2 (5 deploy tickers L-X + 2 sector proxies):
-  Deploy: MARA, ONDS, PL, RIOT, SOUN
-  Sector proxies: ITA, MSTR (OHLCV-only, for SHORT regime features)
+Batch 2 (20 deploy tickers G-X + 2 sector proxies):
+  Deploy: GEV, HUT, IREN, KEEL, KTOS, LUNR, MARA, ONDS, PL, PLTR,
+          RIOT, RKLB, SLS, SMCI, SMR, SOUN, VST, WOLF, WULF, XOM
+  Sector proxies: ITA, MSTR (OHLCV-only, for regime features)
 """
 
 import time
@@ -35,10 +36,11 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'ITA', 'MARA', 'MSTR', 'ONDS', 'PL', 'RIOT', 'SOUN',
+    'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'ONDS', 'PL', 'PLTR',
+    'RIOT', 'RKLB', 'SLS', 'SMCI', 'SMR', 'SOUN', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
-CONTEXT_ASSETS = []
+CONTEXT_ASSETS = ['ITA', 'MSTR']
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
 BUCKET_NAME     = "time-series-bucket-ys"

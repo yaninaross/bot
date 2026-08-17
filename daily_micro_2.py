@@ -1,8 +1,14 @@
 """
-daily_micro_2.py — DEPRECATED: all tickers now in daily_micro_all.py
-====================================================================
-No longer needed — daily_micro_all.py handles all 11 deploy tickers.
-Skip this script in the pipeline.
+daily_micro_2.py — Microstructure Bootstrapper (batch 2 of 2, G-X)
+===================================================================
+Downloads T&Q raw data from Polygon and computes microstructure
+parquets for 20 deploy tickers (G-X alphabetical split).
+
+Fully incremental and idempotent: already up-to-date tickers are skipped,
+gaps are filled from GCS cache or Polygon API.
+
+Batch 2: GEV, HUT, IREN, KEEL, KTOS, LUNR, MARA, ONDS, PL, PLTR,
+         RIOT, RKLB, SLS, SMCI, SMR, SOUN, VST, WOLF, WULF, XOM
 """
 
 import os
@@ -20,7 +26,10 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 # ⚙️  CONFIGURATION
 # ==============================================================================
-TARGET_TICKERS = []
+TARGET_TICKERS = [
+    'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'ONDS', 'PL', 'PLTR',
+    'RIOT', 'RKLB', 'SLS', 'SMCI', 'SMR', 'SOUN', 'VST', 'WOLF', 'WULF', 'XOM',
+]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
 BUCKET_NAME     = "time-series-bucket-ys"
