@@ -1,14 +1,14 @@
 """
-daily_micro_2.py — Microstructure Bootstrapper (batch 2 of 2, G-X)
-===================================================================
+daily_micro_2.py — Microstructure Bootstrapper (batch 2 of 3, CO-MX)
+=====================================================================
 Downloads T&Q raw data from Polygon and computes microstructure
-parquets for 20 deploy tickers (G-X alphabetical split).
+parquets for 16 deploy tickers (alphabetical split).
 
 Fully incremental and idempotent: already up-to-date tickers are skipped,
 gaps are filled from GCS cache or Polygon API.
 
-Batch 2: GEV, HUT, IREN, KEEL, KTOS, LUNR, MARA, ONDS, PL, PLTR,
-         RIOT, RKLB, SLS, SMCI, SMR, SOUN, VST, WOLF, WULF, XOM
+Batch 2: COIN, CORZ, CVX, ETN, FCEL, FLNC, GEV, HUT, IREN, KEEL,
+         KTOS, LUNR, MARA, MNTS, MSTR, MXL
 """
 
 import os
@@ -24,11 +24,11 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==============================================================================
-# ⚙️  CONFIGURATION
+# CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'ONDS', 'PL', 'PLTR',
-    'RIOT', 'RKLB', 'SLS', 'SMCI', 'SMR', 'SOUN', 'VST', 'WOLF', 'WULF', 'XOM',
+    'COIN', 'CORZ', 'CVX', 'ETN', 'FCEL', 'FLNC', 'GEV', 'HUT',
+    'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'MNTS', 'MSTR', 'MXL',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
@@ -45,7 +45,7 @@ poly_client = RESTClient(POLYGON_API_KEY)
 gcs_client  = gcs_storage.Client()
 
 # ==============================================================================
-# 🛠️  GCS HELPERS
+# GCS HELPERS
 # ==============================================================================
 def _blob_path(gcs_uri):
     return gcs_uri.replace(f"gs://{BUCKET_NAME}/", "")
@@ -110,7 +110,7 @@ def read_pipeline_status():
         return {}
 
 # ==============================================================================
-# 🛠️  SCHEMA NORMALIZATION
+# SCHEMA NORMALIZATION
 # ==============================================================================
 def normalize_raw_schema(df, kind):
     if df is None or df.empty:
@@ -141,12 +141,12 @@ def _valid_raw_file(fname, clean_ticker, kind):
     fname    = os.path.basename(fname)
     expected = f"{clean_ticker}_{kind}_"
     if not fname.startswith(expected):
-        print(f"      ⚠️  Skipping misnamed file: {fname}")
+        print(f"      Skipping misnamed file: {fname}")
         return False
     return True
 
 # ==============================================================================
-# 🛠️  POLYGON T&Q FETCH
+# POLYGON T&Q FETCH
 # ==============================================================================
 def fetch_polygon_trades(ticker, start_dt, end_dt):
     trades = []
@@ -168,7 +168,7 @@ def fetch_polygon_quotes(ticker, start_dt, end_dt):
     return pd.DataFrame(quotes)
 
 # ==============================================================================
-# 🧮  MICROSTRUCTURE ENGINE
+# MICROSTRUCTURE ENGINE
 # ==============================================================================
 def process_raw_to_microstructure(trades_df, quotes_df):
     if trades_df is not None and not trades_df.empty:
@@ -198,10 +198,10 @@ def process_raw_to_microstructure(trades_df, quotes_df):
     return daily_df
 
 # ==============================================================================
-# 🚀  MAIN LOOP
+# MAIN LOOP
 # ==============================================================================
 if __name__ == "__main__":
-    print("🚀 daily_micro_2.py — Microstructure Batch 2 (G-W)")
+    print("daily_micro_2.py — Microstructure Batch 2 of 3 (CO-MX)")
     run_ts    = datetime.now(pytz.utc)
     fetch_end = run_ts
     print(f"   Run time : {run_ts.strftime('%Y-%m-%d %H:%M UTC')}")
@@ -212,7 +212,7 @@ if __name__ == "__main__":
 
     for ticker in ALL_TICKERS:
         print(f"\n{'─'*52}")
-        print(f"🔄 {ticker}")
+        print(f"  {ticker}")
         clean_ticker = ticker.replace("I:", "").replace("X:", "")
         micro_uri    = f"{GCS_MICRO_DIR}/{clean_ticker}_1m_microstructure.parquet"
 
@@ -228,10 +228,10 @@ if __name__ == "__main__":
             print(f"   No existing micro — starting from {HISTORY_START}")
 
         if micro_start >= fetch_end:
-            print("   ✅ Already up to date — nothing to fetch")
+            print("   Already up to date — nothing to fetch")
             continue
 
-        print(f"   ⏳ Gap: {micro_start.date()} → {fetch_end.date()}...")
+        print(f"   Gap: {micro_start.date()} -> {fetch_end.date()}...")
         gap_dates       = pd.date_range(micro_start.date(), fetch_end.date(), freq='B')
         micro_chunks    = []
         days_disk, days_api, days_empty = 0, 0, 0
@@ -255,7 +255,7 @@ if __name__ == "__main__":
                     if _is_complete_trading_day(t_uri, 'trades'):
                         use_cache = True
                     else:
-                        print(f"      🔄 {date_str}: stale cache (pre-market only) — re-fetching")
+                        print(f"      {date_str}: stale cache (pre-market only) — re-fetching")
                 else:
                     use_cache = True
 
@@ -269,7 +269,7 @@ if __name__ == "__main__":
                     else:
                         raise ValueError("misnamed file")
                 except Exception as e:
-                    print(f"      ⚠️  {date_str}: disk read failed — {e}")
+                    print(f"      {date_str}: disk read failed — {e}")
                     continue
             else:
                 day_start = pd.Timestamp(gap_date, tz='UTC')
@@ -283,9 +283,9 @@ if __name__ == "__main__":
                         dq.to_parquet(q_uri, engine='pyarrow')
                     days_api += 1
                     if dt.empty and dq.empty and date_str in recent_dates:
-                        print(f"      ⚠️  {date_str}: Polygon returned empty — data may not be available yet")
+                        print(f"      {date_str}: Polygon returned empty — data may not be available yet")
                 except Exception as e:
-                    print(f"      ⚠️  {date_str}: API error — {e}")
+                    print(f"      {date_str}: API error — {e}")
                     continue
 
             if dt.empty and dq.empty:
@@ -305,10 +305,10 @@ if __name__ == "__main__":
             if not day_micro.empty:
                 micro_chunks.append(day_micro)
 
-        print(f"      📥 {days_disk} days from disk / {days_api} days from API / {days_empty} empty")
+        print(f"      {days_disk} days from disk / {days_api} days from API / {days_empty} empty")
 
         if not micro_chunks:
-            print("      ℹ️  No T&Q data in gap — micro unchanged")
+            print("      No T&Q data in gap — micro unchanged")
             continue
 
         new_micro = pd.concat(micro_chunks).sort_index()
@@ -318,13 +318,13 @@ if __name__ == "__main__":
             new_micro = new_micro[new_micro.index > df_micro.index.max()]
 
         if new_micro.empty:
-            print("      ⏭️  All new micro rows already covered — skipping")
+            print("      All new micro rows already covered — skipping")
             continue
 
         df_micro = pd.concat([df_micro, new_micro]).sort_index()
         df_micro = df_micro[~df_micro.index.duplicated(keep='last')]
         df_micro.to_parquet(micro_uri, engine='pyarrow')
-        print(f"      ✅ Appended {len(new_micro):,} rows  |  total: {len(df_micro):,} rows")
+        print(f"      Appended {len(new_micro):,} rows  |  total: {len(df_micro):,} rows")
 
     _write_pipeline_status('daily_micro_2', 'complete')
-    print("\n🎉 daily_micro_2.py COMPLETE (batch 2).")
+    print("\ndaily_micro_2.py COMPLETE (batch 2).")

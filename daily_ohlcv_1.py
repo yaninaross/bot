@@ -5,9 +5,10 @@ Fetches 1-min OHLCV from Polygon, appends to GCS parquets.
 Run in parallel with daily_ohlcv_2.py.
 Stitch step is handled separately by daily_stitch_master.py.
 
-Batch 1 (20 deploy tickers A-F + 4 context):
-  Deploy: ACHR, AEHR, ALAB, AMD, APLD, ARM, ASTS, AVAV, BBAI, BE,
-          BTBT, CAT, CEG, CIFR, CLSK, COIN, CORZ, CVX, ETN, FLNC
+Batch 1 (22 deploy tickers A-F + 4 context):
+  Deploy: ACHR, AEHR, ALAB, AMD, APLD, ARM, ASTS, AVAV, AXTI, BBAI,
+          BE, BTBT, CAT, CEG, CIFR, CLSK, COIN, CORZ, CVX, ETN,
+          FCEL, FLNC
   Context: I:VIX, TLT, IWM, SPY
 """
 
@@ -36,8 +37,9 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'BBAI', 'BE',
-    'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN', 'FLNC',
+    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'AXTI', 'BBAI',
+    'BE', 'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN',
+    'FCEL', 'FLNC',
 ]
 
 CONTEXT_ASSETS = ['I:VIX', 'TLT', 'IWM', 'SPY']

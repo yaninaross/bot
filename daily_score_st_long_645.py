@@ -1,11 +1,11 @@
-# %% ── Daily Scoring — ST LONG HYB_F7_25 645 (L5-1, 22 regime features) ──────
+# %% ── Daily Scoring — ST LONG NEWEST_FIRST 645 + M_AGREEMENT (L5-1 + ASL6) ──
 #
-# Spike Transformer LONG — Hybrid F5+F6+F7 (F7 filtered to val_b >= 2.5%)
 # 6:45 AM variant — same models and strategy as daily_score_st_long.py, scored 30 min later
 #
-#   - 3 models (fold 5/6/7), L5-1 architecture (22 regime features)
-#   - Per-ticker fold assignment from BQ (best val_b_avg_pnl per ticker)
-#   - F7 tickers only included if val_b_avg_pnl >= 2.5%
+#   - 6 models: L5-1 F5/F6/F7 + ASL6 F5/F6/F7
+#   - Newest First priority: F7 > F6 > F5, L5-1 preferred within same fold
+#   - M_AGREEMENT: score GO signals with ALL models, filter by spread < 0.15
+#   - MAX_TRADES cap: when signals exceed cap, prioritize by lowest spread
 #   - Score at minute 405 (6:45 AM PT), entry at minute 415 (6:55 AM PT)
 #   - FiLM regime conditioning (no separate regime filter)
 #
@@ -48,8 +48,6 @@ except Exception:
 # CONSTANTS
 # ==============================================================================
 BUCKET_NAME      = "time-series-bucket-ys"
-GCS_DATA_PREFIX  = 'Algos/RA_MoE/long_L5_1_data'
-GCS_MODEL_PREFIX = 'Algos/RA_MoE/long_L5_1_models'
 BQ_TABLE         = "ys-time-series.scoring_logs.live_predictions"
 WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
 INFERENCE_DIR    = "Data/Inference_v2"
@@ -57,10 +55,38 @@ TAIL_DAYS        = 25
 PST              = pytz.timezone('America/Los_Angeles')
 
 FOLDS            = [5, 6, 7]
-F7_VAL_B_THRESH  = 0.025
 BASE_PNL_THRESH  = 0.018
-SCORE_MINUTE     = 405
-ENTRY_MINUTE     = 415
+
+FAMILIES = {
+    'L5-1': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_1_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_1_models',
+        'bq_versions': {
+            5: 'spike_transformer_long_L5_1_fold5',
+            6: 'spike_transformer_long_L5_1_fold6',
+            7: 'spike_transformer_long_L5_1_fold7',
+        },
+    },
+    'ASL6': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_2_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_2_asl6_models',
+        'bq_versions': {
+            5: 'spike_transformer_long_L5_2_asl6_fold5',
+            6: 'spike_transformer_long_L5_2_asl6_fold6',
+            7: 'spike_transformer_long_L5_2_asl6_fold7',
+        },
+    },
+}
+
+NEWEST_FIRST_ORDER = [
+    ('L5-1', 7), ('ASL6', 7),
+    ('L5-1', 6), ('ASL6', 6),
+    ('L5-1', 5), ('ASL6', 5),
+]
+SCORE_MINUTE             = 405
+ENTRY_MINUTE             = 415
+MAX_TRADES               = 3
+AGREEMENT_SPREAD_THRESH  = 0.15
 TIME_STEPS       = 128
 D_MODEL          = 64
 N_HEADS          = 4
@@ -110,98 +136,82 @@ HORIZON_FROM_LABEL = {'15m': 0, '30m': 1, '60m': 2}
 
 EXCLUDE_TICKERS = {'SPY', 'VIX', 'TLT', 'IWM', 'XLE', 'ITA', 'BITF', 'MIGI', 'SMLR'}
 
-BQ_MODEL_VERSIONS = {
-    5: 'spike_transformer_long_L5_1_fold5',
-    6: 'spike_transformer_long_L5_1_fold6',
-    7: 'spike_transformer_long_L5_1_fold7',
-}
-
 gcs_client = gcs_storage.Client()
 
 
 # ==============================================================================
-# BQ CONFIG LOADING — HYB_F7_25 logic
+# BQ CONFIG LOADING — Newest First across L5-1 + ASL6
 # ==============================================================================
 def load_deploy_configs():
     if bigquery is None:
         raise RuntimeError("BigQuery not available — cannot load deploy configs")
     bq_client = bigquery.Client()
 
-    fold_cfgs = {}
-    for fold_id, model_version in BQ_MODEL_VERSIONS.items():
-        q = f"""
-        SELECT ticker, experiment, tpsl_mode, prob_thresh, tp_pct, sl_pct,
-               grace_minutes, dip_pct, max_wait_minutes,
-               val_b_avg_pnl, val_b_win_rate, val_b_count
-        FROM `{WF_BQ_TABLE}`
-        WHERE model_version = '{model_version}'
-          AND survived_a = TRUE
-          AND val_b_avg_pnl >= {BASE_PNL_THRESH}
-        """
-        rows = bq_client.query(q).to_dataframe()
-        if len(rows) == 0:
-            fold_cfgs[fold_id] = {}
-            continue
-        best = rows.loc[rows.groupby('ticker')['val_b_avg_pnl'].idxmax()]
-        cfgs = {}
-        for _, row in best.iterrows():
-            tk = row['ticker']
-            if tk in EXCLUDE_TICKERS:
+    family_fold_cfgs = {}
+    for family_name, fam in FAMILIES.items():
+        for fold_id, model_version in fam['bq_versions'].items():
+            q = f"""
+            SELECT ticker, experiment, tpsl_mode, prob_thresh, tp_pct, sl_pct,
+                   grace_minutes, dip_pct, max_wait_minutes,
+                   val_b_avg_pnl, val_b_win_rate, val_b_count
+            FROM `{WF_BQ_TABLE}`
+            WHERE model_version = '{model_version}'
+              AND survived_a = TRUE
+              AND val_b_avg_pnl >= {BASE_PNL_THRESH}
+            """
+            rows = bq_client.query(q).to_dataframe()
+            if len(rows) == 0:
+                family_fold_cfgs[(family_name, fold_id)] = {}
+                print(f"    {family_name} F{fold_id}: 0 tickers")
                 continue
-            exp = row['experiment']
-            h_part = exp.replace(f'{model_version}_', '').split('_')[0]
-            horizon_idx = HORIZON_FROM_LABEL.get(h_part, 1)
-            mode = row['tpsl_mode']
-            if pd.isna(mode) or mode == '':
-                if '_GRACE' in exp:
-                    mode = 'grace'
-                elif '_LIMIT' in exp:
-                    mode = 'limit_entry'
-                else:
-                    mode = 'static'
-            cfgs[tk] = {
-                'fold': fold_id,
-                'horizon': horizon_idx,
-                'prob_thresh': float(row['prob_thresh']),
-                'tp_pct': float(row['tp_pct']),
-                'sl_pct': float(row['sl_pct']),
-                'mode': mode,
-                'grace_minutes': int(row['grace_minutes']) if pd.notna(row['grace_minutes']) else 0,
-                'dip_pct': float(row['dip_pct']) if pd.notna(row['dip_pct']) else 0,
-                'max_wait': int(row['max_wait_minutes']) if pd.notna(row['max_wait_minutes']) else 0,
-                'val_b_avg_pnl': float(row['val_b_avg_pnl']),
-            }
-        fold_cfgs[fold_id] = cfgs
-        print(f"    F{fold_id}: {len(cfgs)} tickers — {', '.join(sorted(cfgs.keys()))}")
+            best = rows.loc[rows.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+            cfgs = {}
+            for _, row in best.iterrows():
+                tk = row['ticker']
+                if tk in EXCLUDE_TICKERS:
+                    continue
+                exp = row['experiment']
+                h_part = exp.replace(f'{model_version}_', '').split('_')[0]
+                horizon_idx = HORIZON_FROM_LABEL.get(h_part, 1)
+                mode = row['tpsl_mode']
+                if pd.isna(mode) or mode == '':
+                    if '_GRACE' in exp:
+                        mode = 'grace'
+                    elif '_LIMIT' in exp:
+                        mode = 'limit_entry'
+                    else:
+                        mode = 'static'
+                cfgs[tk] = {
+                    'family': family_name,
+                    'fold': fold_id,
+                    'horizon': horizon_idx,
+                    'prob_thresh': float(row['prob_thresh']),
+                    'tp_pct': float(row['tp_pct']),
+                    'sl_pct': float(row['sl_pct']),
+                    'mode': mode,
+                    'grace_minutes': int(row['grace_minutes']) if pd.notna(row['grace_minutes']) else 0,
+                    'dip_pct': float(row['dip_pct']) if pd.notna(row['dip_pct']) else 0,
+                    'max_wait': int(row['max_wait_minutes']) if pd.notna(row['max_wait_minutes']) else 0,
+                    'val_b_avg_pnl': float(row['val_b_avg_pnl']),
+                }
+            family_fold_cfgs[(family_name, fold_id)] = cfgs
+            print(f"    {family_name} F{fold_id}: {len(cfgs)} tickers — {', '.join(sorted(cfgs.keys()))}")
 
     deploy = {}
-    all_tickers = set()
-    for cfgs in fold_cfgs.values():
-        all_tickers |= set(cfgs.keys())
+    for family, fold in NEWEST_FIRST_ORDER:
+        for tk, cfg in family_fold_cfgs.get((family, fold), {}).items():
+            if tk not in deploy:
+                deploy[tk] = cfg
 
-    for tk in sorted(all_tickers):
-        best_fold, best_val, best_cfg = None, -999, None
-        for fold_id in FOLDS:
-            if tk not in fold_cfgs.get(fold_id, {}):
-                continue
-            cfg = fold_cfgs[fold_id][tk]
-            v = cfg['val_b_avg_pnl']
-            if fold_id == 7 and v < F7_VAL_B_THRESH:
-                continue
-            if v > best_val:
-                best_fold, best_val, best_cfg = fold_id, v, cfg
-        if best_cfg is not None:
-            deploy[tk] = best_cfg
-
-    fold_counts = {}
+    source_counts = {}
     for tk, cfg in deploy.items():
-        f = cfg['fold']
-        fold_counts.setdefault(f, []).append(tk)
-    for f in sorted(fold_counts):
-        tickers = sorted(fold_counts[f])
-        print(f"    Hybrid F{f}: {len(tickers)} — {', '.join(tickers)}")
-    print(f"    Total: {len(deploy)} tickers")
-    return deploy
+        key = f"{cfg['family']} F{cfg['fold']}"
+        source_counts.setdefault(key, []).append(tk)
+    for src in sorted(source_counts):
+        tickers = sorted(source_counts[src])
+        print(f"    {src}: {len(tickers)} — {', '.join(tickers)}")
+    print(f"    Total: {len(deploy)} tickers (Newest First)")
+    return deploy, family_fold_cfgs
 
 
 # ==============================================================================
@@ -226,7 +236,7 @@ def load_master(ticker, tail_days=None):
     clean = ticker.replace("I:", "").replace("X:", "")
     file_ticker = TICKER_FILE_MAP.get(clean, clean)
     blob_path = f"{INFERENCE_DIR}/{file_ticker}_master_inference.parquet"
-    local_path = f"/tmp/_st_long645_{file_ticker}_master.parquet"
+    local_path = f"/tmp/_st_long_{file_ticker}_master.parquet"
     try:
         gcs_client.bucket(BUCKET_NAME).blob(blob_path).download_to_filename(local_path)
         import pyarrow.parquet as pq
@@ -551,13 +561,12 @@ class SpikeTransformer(keras.Model):
 
 
 # ==============================================================================
-# MODEL LOADING — single model instance, swap weights per fold via h5py
+# MODEL LOADING — single model instance, swap weights per (family, fold) via h5py
 # ==============================================================================
 _model = None
 _fold_weights = {}
-_current_fold = None
-_scaling_stats = None
-_regime_stats = None
+_current_key = None
+_family_meta = {}
 
 
 def _load_keras3_weights(model, filepath):
@@ -610,21 +619,32 @@ def _ensure_file(gcs_path, local_path):
     return local_path
 
 
-def _ensure_fold_loaded(fold_id):
-    global _current_fold
-    if _current_fold != fold_id:
-        _load_keras3_weights(_model, _fold_weights[fold_id])
-        _current_fold = fold_id
+def _ensure_fold_loaded(family, fold_id):
+    global _current_key
+    key = (family, fold_id)
+    if _current_key != key:
+        _load_keras3_weights(_model, _fold_weights[key])
+        _current_key = key
 
 
-def load_models_and_meta(deploy_configs):
-    global _model, _fold_weights, _current_fold, _scaling_stats, _regime_stats
+def load_models_and_meta(deploy_configs, family_fold_cfgs=None):
+    global _model, _fold_weights, _current_key, _family_meta
 
-    meta_path = _ensure_file(
-        f'{GCS_DATA_PREFIX}/meta.npz', '/tmp/ra_moe_long_L5_1_meta.npz')
-    meta = np.load(meta_path, allow_pickle=True)
-    _scaling_stats = meta['scaling_stats'].item()
-    _regime_stats = meta['regime_stats'].item()
+    all_cfgs = list(deploy_configs.values())
+    if family_fold_cfgs:
+        for cfgs in family_fold_cfgs.values():
+            all_cfgs.extend(cfgs.values())
+    needed_families = sorted(set(cfg['family'] for cfg in all_cfgs))
+    for family_name in needed_families:
+        fam = FAMILIES[family_name]
+        local_meta = f'/tmp/ra_moe_long_{family_name}_meta.npz'
+        meta_path = _ensure_file(f"{fam['gcs_data']}/meta.npz", local_meta)
+        meta = np.load(meta_path, allow_pickle=True)
+        _family_meta[family_name] = {
+            'scaling_stats': meta['scaling_stats'].item(),
+            'regime_stats': meta['regime_stats'].item(),
+        }
+        print(f"   {family_name} meta loaded")
 
     keras.backend.clear_session()
     gc.collect()
@@ -634,25 +654,27 @@ def load_models_and_meta(deploy_configs):
     dummy_reg = tf.zeros((1, N_REGIME_F))
     _model({'seq_input': dummy_seq, 'regime_input': dummy_reg})
 
-    needed_folds = sorted(set(cfg['fold'] for cfg in deploy_configs.values()))
-    for fold_id in needed_folds:
-        local_dir = f'/tmp/ra_moe_long_L5_1_models/fold_{fold_id}'
+    needed_keys = sorted(set((cfg['family'], cfg['fold']) for cfg in all_cfgs))
+    for family_name, fold_id in needed_keys:
+        fam = FAMILIES[family_name]
+        local_dir = f'/tmp/ra_moe_long_{family_name}_models/fold_{fold_id}'
         weights_path = os.path.join(local_dir, 'model.weights.h5')
         if not os.path.exists(weights_path):
             os.makedirs(local_dir, exist_ok=True)
-            prefix = f'{GCS_MODEL_PREFIX}/fold_{fold_id}'
+            prefix = f"{fam['gcs_models']}/fold_{fold_id}"
             bucket = gcs_client.bucket(BUCKET_NAME)
             for blob in bucket.list_blobs(prefix=prefix):
                 fname = blob.name.split('/')[-1]
                 blob.download_to_filename(os.path.join(local_dir, fname))
-        _fold_weights[fold_id] = weights_path
-        n_tickers = sum(1 for c in deploy_configs.values() if c['fold'] == fold_id)
-        print(f"   Fold {fold_id} weights cached ({n_tickers} tickers): {weights_path}")
+        _fold_weights[(family_name, fold_id)] = weights_path
+        n_tickers = sum(1 for c in deploy_configs.values()
+                        if c['family'] == family_name and c['fold'] == fold_id)
+        print(f"   {family_name} F{fold_id} weights cached ({n_tickers} tickers)")
 
-    first_fold = needed_folds[0]
-    _load_keras3_weights(_model, _fold_weights[first_fold])
-    _current_fold = first_fold
-    print(f"   Model built: {_model.count_params():,} params, {len(needed_folds)} folds, "
+    first_key = needed_keys[0]
+    _load_keras3_weights(_model, _fold_weights[first_key])
+    _current_key = first_key
+    print(f"   Model built: {_model.count_params():,} params, {len(needed_keys)} (family,fold) combos, "
           f"{len(deploy_configs)} tickers")
 
 
@@ -665,6 +687,69 @@ def apply_scaling(df, stats, cols):
             df_s[col] = ((df_s[col] - stats[col]['med'])
                          / stats[col]['iqr']).clip(-10, 10).astype('float32')
     return df_s
+
+
+def compute_agreement(ticker, df_feat, regime_df, run_ts, deploy_cfg, family_fold_cfgs):
+    """Score a ticker with all available (family, fold) models, return agreement metrics."""
+    all_probs = {}
+    h_idx = deploy_cfg['horizon']
+
+    today = run_ts.astimezone(PST).date()
+    target_pst = PST.localize(datetime(today.year, today.month, today.day,
+                                       SCORE_MINUTE // 60, SCORE_MINUTE % 60))
+    target_utc = target_pst.astimezone(pytz.utc)
+
+    candidates = df_feat.index[df_feat.index <= target_utc]
+    if len(candidates) == 0:
+        return None
+    row_idx = df_feat.index.get_loc(candidates[-1])
+
+    if row_idx < TIME_STEPS:
+        return None
+
+    for (family_name, fold_id), cfgs in family_fold_cfgs.items():
+        if ticker not in cfgs:
+            continue
+        cfg = cfgs[ticker]
+
+        family = cfg['family']
+        scaling_stats = _family_meta[family]['scaling_stats']
+        regime_stats = _family_meta[family]['regime_stats']
+
+        df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
+        XA = df_scaled[ALL_COLS].values.astype(np.float32)
+        seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
+
+        regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
+            [df_feat.index[row_idx]], method='pad')[0]]
+        regime_scaled = np.zeros(N_REGIME_F, dtype=np.float32)
+        for i, col in enumerate(REGIME_COLS):
+            val = float(regime_at_entry[col]) if col in regime_at_entry.index else 0.0
+            if col in regime_stats:
+                s = regime_stats[col]
+                val = np.clip((val - s['med']) / s['iqr'], -10, 10)
+            regime_scaled[i] = val
+        regime_batch = regime_scaled[np.newaxis]
+
+        _ensure_fold_loaded(family_name, fold_id)
+        preds = _model(
+            {'seq_input': seq_batch, 'regime_input': regime_batch},
+            training=False
+        ).numpy().flatten()
+
+        all_probs[(family_name, fold_id)] = float(preds[h_idx])
+
+    if len(all_probs) <= 1:
+        return {'n_models': len(all_probs), 'spread': 0.0, 'all_probs': all_probs, 'agreed': True}
+
+    probs = list(all_probs.values())
+    spread = max(probs) - min(probs)
+    return {
+        'n_models': len(all_probs),
+        'spread': round(spread, 4),
+        'all_probs': all_probs,
+        'agreed': spread < AGREEMENT_SPREAD_THRESH,
+    }
 
 
 # ==============================================================================
@@ -697,7 +782,11 @@ def score_ticker(ticker, cfg, df_feat, regime_df, run_ts):
         print(f"      {ticker}: SKIP — no liquidity at {bar_ts_pst.strftime('%H:%M')} PST (Volume=0)")
         return None
 
-    df_scaled = apply_scaling(df_feat, _scaling_stats, ALL_COLS)
+    family = cfg['family']
+    scaling_stats = _family_meta[family]['scaling_stats']
+    regime_stats = _family_meta[family]['regime_stats']
+
+    df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
 
     XA = df_scaled[ALL_COLS].values.astype(np.float32)
     seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
@@ -707,14 +796,14 @@ def score_ticker(ticker, cfg, df_feat, regime_df, run_ts):
     regime_scaled = np.zeros(N_REGIME_F, dtype=np.float32)
     for i, col in enumerate(REGIME_COLS):
         val = float(regime_at_entry[col]) if col in regime_at_entry.index else 0.0
-        if col in _regime_stats:
-            s = _regime_stats[col]
+        if col in regime_stats:
+            s = regime_stats[col]
             val = np.clip((val - s['med']) / s['iqr'], -10, 10)
         regime_scaled[i] = val
     regime_batch = regime_scaled[np.newaxis]
 
     fold_id = cfg['fold']
-    _ensure_fold_loaded(fold_id)
+    _ensure_fold_loaded(family, fold_id)
     preds = _model(
         {'seq_input': seq_batch, 'regime_input': regime_batch},
         training=False
@@ -738,6 +827,7 @@ def score_ticker(ticker, cfg, df_feat, regime_df, run_ts):
 
     return {
         'ticker': ticker,
+        'family': family,
         'fold': fold_id,
         'horizon': HORIZON_LABELS[h_idx],
         'horizon_idx': h_idx,
@@ -771,21 +861,23 @@ def print_dashboard(results, deploy_configs, run_ts):
     W = 120
     pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %H:%M PST')
 
-    fold_counts = {}
+    source_counts = {}
     for cfg in deploy_configs.values():
-        fold_counts.setdefault(cfg['fold'], 0)
-        fold_counts[cfg['fold']] += 1
+        key = f"{cfg['family']} F{cfg['fold']}"
+        source_counts.setdefault(key, 0)
+        source_counts[key] += 1
 
     print()
     print(f"  {'='*W}")
-    print(f"  ST LONG 645 SIGNALS — HYB_F7_25 (L5-1)   {pst_str}")
+    print(f"  ST LONG 645 SIGNALS — NEWEST_FIRST + M_AGREEMENT (L5-1 + ASL6)   {pst_str}")
     print(f"  {'='*W}")
-    print(f"  Strategy: Hybrid F5+F6+F7 (F7>=2.5%)  |  "
+    print(f"  Strategy: Newest First + M_AGREEMENT (spread<{AGREEMENT_SPREAD_THRESH}, max={MAX_TRADES})  |  "
           f"Score: {SCORE_MINUTE // 60}:{SCORE_MINUTE % 60:02d} PST  |  "
           f"Entry: {ENTRY_MINUTE // 60}:{ENTRY_MINUTE % 60:02d} PST")
-    for f in sorted(fold_counts):
-        f_tickers = sorted(t for t, c in deploy_configs.items() if c['fold'] == f)
-        print(f"  F{f}: {', '.join(f_tickers)} ({len(f_tickers)})")
+    for src in sorted(source_counts):
+        src_tickers = sorted(t for t, c in deploy_configs.items()
+                             if f"{c['family']} F{c['fold']}" == src)
+        print(f"  {src}: {', '.join(src_tickers)} ({len(src_tickers)})")
 
     if not results:
         print(f"\n  No tickers scored.")
@@ -793,10 +885,11 @@ def print_dashboard(results, deploy_configs, run_ts):
         return
 
     print()
-    print(f"  {'Ticker':<6} {'F':>1}  {'H':>3}  {'SIG':<7}  "
+    print(f"  {'Ticker':<6} {'Src':<8} {'H':>3}  {'SIG':<7}  "
           f"{'Buy@':>10}  {'SL@':>10}  {'TP@':>10}  "
           f"{'Prob':>5} / {'Thr':>5}  {'Mode':<8}  "
-          f"{'Close':>8}  {'P(15m)':>6} {'P(30m)':>6} {'P(60m)':>6}")
+          f"{'Close':>8}  {'Agr':>5} {'Spr':>5}  "
+          f"{'P(15m)':>6} {'P(30m)':>6} {'P(60m)':>6}")
     print(f"  {'─'*W}")
 
     for r in results:
@@ -810,10 +903,16 @@ def print_dashboard(results, deploy_configs, run_ts):
         tp_str = f"${entry_price * (1 + r['tp_pct']):.2f}"
         mode_label = _MODE_LABELS.get(r['mode'], '??')
         hp = r['all_horizon_probs']
-        print(f"  {r['ticker']:<6} {r['fold']:>1}  {r['horizon']:>3}  {sig_str}  "
+        src_label = f"{r['family']}F{r['fold']}"
+        n_mod = r.get('n_models', 1)
+        spr = r.get('spread', 0)
+        agr_str = f"{n_mod}M" if r.get('agreed', True) else f"{n_mod}X"
+        spr_str = f"{spr:.2f}" if n_mod > 1 else "  —"
+        print(f"  {r['ticker']:<6} {src_label:<8} {r['horizon']:>3}  {sig_str}  "
               f"{buy_str:>10}  {sl_str:>10}  {tp_str:>10}  "
               f"{r['prob']:>5.3f} / {r['threshold']:>5.3f}  {mode_label:<8}  "
               f"{r['close']:>8.2f}  "
+              f"{agr_str:>5} {spr_str:>5}  "
               f"{hp.get('15m', 0):>5.3f}  {hp.get('30m', 0):>5.3f}  {hp.get('60m', 0):>5.3f}")
 
     signals = [r for r in results if r['signal']]
@@ -827,10 +926,10 @@ def print_dashboard(results, deploy_configs, run_ts):
           (f"  ({', '.join(r['ticker'] for r in signals)})" if signals else ""))
 
     if signals:
-        for fold_id in FOLDS:
-            fold_sigs = [r for r in signals if r['fold'] == fold_id]
+        for family, fold in NEWEST_FIRST_ORDER:
+            fold_sigs = [r for r in signals if r['family'] == family and r['fold'] == fold]
             if fold_sigs:
-                print(f"    F{fold_id}: {', '.join(r['ticker'] for r in fold_sigs)}")
+                print(f"    {family} F{fold}: {', '.join(r['ticker'] for r in fold_sigs)}")
 
         print()
         print(f"  \033[92mTRADE: {', '.join(r['ticker'] for r in signals)}"
@@ -843,6 +942,7 @@ def print_dashboard(results, deploy_configs, run_ts):
             print(f"  LIMIT ORDERS TO PLACE")
             print(f"  {'─'*W}")
             for r in limit_trades:
+                c = r['close']
                 dip = r.get('dip_pct', 0) or 0
                 lp = r['entry_price']
                 tp_price = lp * (1 + r['tp_pct'])
@@ -854,7 +954,7 @@ def print_dashboard(results, deploy_configs, run_ts):
                 expire_ampm = "AM" if expire_h < 12 else "PM"
                 expire_h12 = expire_h if expire_h <= 12 else expire_h - 12
                 expire_str = f"{expire_h12}:{expire_min % 60:02d}{expire_ampm} PT"
-                print(f"  {r['ticker']:<6} F{r['fold']}  "
+                print(f"  {r['ticker']:<6} {r['family']}F{r['fold']}  "
                       f"\033[92m${lp:>9.2f}\033[0m  "
                       f"-{dip:.1%}  "
                       f"TP ${tp_price:>9.2f}  SL ${sl_price:>9.2f}  "
@@ -870,13 +970,13 @@ def print_dashboard(results, deploy_configs, run_ts):
                 tp_price = r['entry_price'] * (1 + r['tp_pct'])
                 sl_price = r['entry_price'] * (1 - r['sl_pct'])
                 grace_str = f"  Grace={r['grace_minutes']}m" if r['mode'] == 'grace' else ""
-                print(f"  {r['ticker']:<6} F{r['fold']}  "
+                print(f"  {r['ticker']:<6} {r['family']}F{r['fold']}  "
                       f"\033[92mBUY @ ${r['close']:>9.2f}\033[0m  "
                       f"TP ${tp_price:>9.2f}  SL ${sl_price:>9.2f}{grace_str}  "
                       f"[{r['horizon']} spike prob={r['prob']:.3f}]")
 
     print()
-    print(f"  Strategy: HYB_F7_25 645 (L5-1, 22 regime features)  |  "
+    print(f"  Strategy: NEWEST_FIRST + M_AGREEMENT (spread<{AGREEMENT_SPREAD_THRESH}, max={MAX_TRADES})  |  "
           f"Score {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} -> Entry {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PST  |  "
           f"FiLM conditioning")
     print(f"  {'='*W}")
@@ -918,12 +1018,14 @@ def log_to_bigquery(results, run_ts):
         return
     rows = []
     for r in results:
+        family = r['family']
         fold_id = r['fold']
+        mv = FAMILIES[family]['bq_versions'][fold_id]
         rows.append({
             'run_timestamp': run_ts.isoformat(),
             'bar_timestamp': r['bar_ts'].isoformat(),
             'score_date': str(r['score_date']),
-            'experiment': f'spike_transformer_long_L5_1_fold{fold_id}_{r["horizon"]}',
+            'experiment': f'{mv}_{r["horizon"]}',
             'ticker': r['ticker'],
             'seed': 0,
             'prob': r['prob'],
@@ -935,8 +1037,8 @@ def log_to_bigquery(results, run_ts):
             'close': r['close'],
             'filter_status': 'OK',
             'tpsl_mode': r['mode'],
-            'strategy': 'ST_LONG_HYB_F7_25_645',
-            'model_version': f'spike_transformer_long_L5_1_fold{fold_id}',
+            'strategy': 'ST_LONG_NEWEST_FIRST_645_MAGR',
+            'model_version': mv,
         })
     bq_client = bigquery.Client()
     _ensure_bq_schema(bq_client)
@@ -945,7 +1047,7 @@ def log_to_bigquery(results, run_ts):
         if errors:
             print(f"   BigQuery errors: {errors}")
         else:
-            print(f"   Logged {len(rows)} rows to {BQ_TABLE} (strategy=ST_LONG_HYB_F7_25_645)")
+            print(f"   Logged {len(rows)} rows to {BQ_TABLE} (strategy=ST_LONG_NEWEST_FIRST_645_MAGR)")
     except Exception as e:
         print(f"   BigQuery failed: {e}")
 
@@ -978,7 +1080,7 @@ def _check_stitch_freshness():
 run_ts = datetime.now(pytz.utc)
 pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
 print(f"\n{'='*80}")
-print(f"  DAILY SCORING — ST LONG HYB_F7_25 645 (L5-1) — {pst_str}")
+print(f"  DAILY SCORING — ST LONG NEWEST_FIRST 645 + M_AGREEMENT — {pst_str}")
 print(f"{'='*80}")
 
 _check_stitch_freshness()
@@ -988,12 +1090,12 @@ now_minutes = now_pst.hour * 60 + now_pst.minute
 if now_minutes < SCORE_MINUTE:
     print(f"\n  SKIP — too early ({now_minutes} < {SCORE_MINUTE})")
 else:
-    print(f"\n  Loading deploy configs from BQ (HYB_F7_25)...")
-    DEPLOY_CONFIGS = load_deploy_configs()
+    print(f"\n  Loading deploy configs from BQ (Newest First)...")
+    DEPLOY_CONFIGS, FAMILY_FOLD_CFGS = load_deploy_configs()
     DEPLOY_TICKERS = sorted(DEPLOY_CONFIGS.keys())
 
     print(f"\n  Loading models and scaling stats...")
-    load_models_and_meta(DEPLOY_CONFIGS)
+    load_models_and_meta(DEPLOY_CONFIGS, FAMILY_FOLD_CFGS)
 
     print(f"  Building market context...")
     market_df = build_market_context()
@@ -1002,14 +1104,15 @@ else:
     print(f"  Computing regime features (22 cols)...")
     regime_df = compute_regime_features(market_df)
 
-    fold_tickers = {}
+    source_tickers = {}
     for t, cfg in DEPLOY_CONFIGS.items():
-        fold_tickers.setdefault(cfg['fold'], []).append(t)
+        key = (cfg['family'], cfg['fold'])
+        source_tickers.setdefault(key, []).append(t)
 
     results = []
-    for fold_id in sorted(fold_tickers.keys()):
-        tickers = sorted(fold_tickers[fold_id])
-        print(f"\n  Scoring fold {fold_id} ({len(tickers)} tickers)...")
+    for (family, fold_id) in sorted(source_tickers.keys()):
+        tickers = sorted(source_tickers[(family, fold_id)])
+        print(f"\n  Scoring {family} F{fold_id} ({len(tickers)} tickers)...")
         for ticker in tickers:
             cfg = DEPLOY_CONFIGS[ticker]
             df_feat = engineer_asset(ticker, market_df)
@@ -1024,6 +1127,56 @@ else:
     results.sort(key=lambda r: r['ticker'])
     scored = [r['ticker'] for r in results]
     print(f"\n  Scored {len(scored)}/{len(DEPLOY_CONFIGS)}: {', '.join(scored)}")
+
+    # --- M_AGREEMENT: score GO signals with all models ---
+    go_signals = [r for r in results if r['signal']]
+    print(f"\n  Computing agreement for {len(go_signals)} GO signals across all models...")
+
+    for r in results:
+        r['agreement'] = None
+        r['agreed'] = True
+        r['spread'] = 0.0
+        r['n_models'] = 1
+
+    for r in go_signals:
+        ticker = r['ticker']
+        df_feat = engineer_asset(ticker, market_df)
+        if df_feat is not None:
+            agr = compute_agreement(ticker, df_feat, regime_df, run_ts,
+                                    DEPLOY_CONFIGS[ticker], FAMILY_FOLD_CFGS)
+            if agr:
+                r['agreement'] = agr
+                r['agreed'] = agr['agreed']
+                r['spread'] = agr['spread']
+                r['n_models'] = agr['n_models']
+                status = "AGREED" if agr['agreed'] else "DISAGREE"
+                model_strs = [f"{f}F{fd}={p:.3f}" for (f, fd), p in agr['all_probs'].items()]
+                print(f"    {ticker}: {status} spread={agr['spread']:.3f} "
+                      f"({agr['n_models']} models: {', '.join(model_strs)})")
+            _master_cache.pop((ticker, TAIL_DAYS), None)
+
+    # --- Apply agreement filter + MAX_TRADES cap ---
+    agreed_signals = [r for r in go_signals if r['agreed']]
+    rejected_signals = [r for r in go_signals if not r['agreed']]
+
+    if rejected_signals:
+        print(f"\n  M_AGREEMENT filter: {len(rejected_signals)} rejected "
+              f"(spread >= {AGREEMENT_SPREAD_THRESH}): "
+              f"{', '.join(r['ticker'] for r in rejected_signals)}")
+        for r in rejected_signals:
+            r['signal'] = False
+
+    if len(agreed_signals) > MAX_TRADES:
+        agreed_signals.sort(key=lambda r: r['spread'])
+        kept = agreed_signals[:MAX_TRADES]
+        dropped = agreed_signals[MAX_TRADES:]
+        print(f"\n  MAX_TRADES cap ({MAX_TRADES}): keeping {', '.join(r['ticker'] for r in kept)}")
+        drop_strs = [f"{r['ticker']}(spread={r['spread']:.3f})" for r in dropped]
+        print(f"  Dropped: {', '.join(drop_strs)}")
+        for r in dropped:
+            r['signal'] = False
+    elif agreed_signals:
+        print(f"\n  {len(agreed_signals)} signals within MAX_TRADES={MAX_TRADES} cap")
 
     print_dashboard(results, DEPLOY_CONFIGS, run_ts)
     log_to_bigquery(results, run_ts)

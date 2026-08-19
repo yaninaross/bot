@@ -1,10 +1,12 @@
-# %% ── Daily Scoring — ST SHORT L5-2 HYB_F7_30 (22 regime features) ──────────
+# %% ── Daily Scoring — ST SHORT L5-2 HYB_F7_30 + M_AGREEMENT ──────────────────
 #
-# Spike Transformer SHORT — L5-2 Hybrid F5+F6+F7 (F7 filtered to val_b >= 3.0%)
+# Spike Transformer SHORT — L5-2 Hybrid + Multi-Fold Agreement filter
 #
 #   - 3 models (fold 5/6/7), L5-2 architecture (22 regime features)
 #   - Per-ticker fold assignment from BQ (best val_b_avg_pnl per ticker)
 #   - F7 tickers only included if val_b_avg_pnl >= 3.0%
+#   - M_AGREEMENT: score GO signals with ALL folds, filter by spread < 0.15
+#   - MAX_TRADES cap: when signals exceed cap, prioritize by lowest spread
 #   - Score at minute 375 (6:15 AM PT), entry at minute 385 (6:25 AM PT)
 #   - FiLM regime conditioning (no separate regime filter)
 #
@@ -73,6 +75,8 @@ F7_VAL_B_THRESH  = 0.030
 BASE_PNL_THRESH  = 0.018
 SCORE_MINUTE     = 375
 ENTRY_MINUTE     = 385
+MAX_TRADES              = 3
+AGREEMENT_SPREAD_THRESH = 0.15
 TIME_STEPS       = 128
 D_MODEL          = 64
 N_HEADS          = 4
@@ -213,7 +217,7 @@ def load_deploy_configs():
         tickers = sorted(fold_counts[f])
         print(f"    Hybrid F{f}: {len(tickers)} — {', '.join(tickers)}")
     print(f"    Total: {len(deploy)} tickers")
-    return deploy
+    return deploy, fold_cfgs
 
 
 # ==============================================================================
@@ -625,7 +629,7 @@ def load_models_and_meta(deploy_configs):
     dummy_reg = tf.zeros((1, N_REGIME_F))
     _model({'seq_input': dummy_seq, 'regime_input': dummy_reg})
 
-    needed_folds = sorted(set(cfg['fold'] for cfg in deploy_configs.values()))
+    needed_folds = FOLDS  # Load all 3 folds for M_AGREEMENT scoring
     for fold_id in needed_folds:
         local_dir = f'/tmp/ra_moe_short_L5_2_models/fold_{fold_id}'
         weights_path = os.path.join(local_dir, 'model.weights.h5')
@@ -656,6 +660,62 @@ def apply_scaling(df, stats, cols):
             df_s[col] = ((df_s[col] - stats[col]['med'])
                          / stats[col]['iqr']).clip(-10, 10).astype('float32')
     return df_s
+
+
+def compute_agreement(ticker, df_feat, regime_df, run_ts, deploy_cfg, fold_cfgs):
+    """Score a ticker with all available folds, return agreement metrics."""
+    all_probs = {}
+    h_idx = deploy_cfg['horizon']
+
+    today = run_ts.astimezone(PST).date()
+    target_pst = PST.localize(datetime(today.year, today.month, today.day,
+                                       SCORE_MINUTE // 60, SCORE_MINUTE % 60))
+    target_utc = target_pst.astimezone(pytz.utc)
+
+    candidates = df_feat.index[df_feat.index <= target_utc]
+    if len(candidates) == 0:
+        return None
+    row_idx = df_feat.index.get_loc(candidates[-1])
+
+    if row_idx < TIME_STEPS:
+        return None
+
+    df_scaled = apply_scaling(df_feat, _scaling_stats, ALL_COLS)
+    XA = df_scaled[ALL_COLS].values.astype(np.float32)
+    seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
+
+    regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
+        [df_feat.index[row_idx]], method='pad')[0]]
+    regime_scaled = np.zeros(N_REGIME_F, dtype=np.float32)
+    for i, col in enumerate(REGIME_COLS):
+        val = float(regime_at_entry[col]) if col in regime_at_entry.index else 0.0
+        if col in _regime_stats:
+            s = _regime_stats[col]
+            val = np.clip((val - s['med']) / s['iqr'], -10, 10)
+        regime_scaled[i] = val
+    regime_batch = regime_scaled[np.newaxis]
+
+    for fold_id in FOLDS:
+        if ticker not in fold_cfgs.get(fold_id, {}):
+            continue
+        _ensure_fold_loaded(fold_id)
+        preds = _model(
+            {'seq_input': seq_batch, 'regime_input': regime_batch},
+            training=False
+        ).numpy().flatten()
+        all_probs[fold_id] = float(preds[h_idx])
+
+    if len(all_probs) <= 1:
+        return {'n_models': len(all_probs), 'spread': 0.0, 'all_probs': all_probs, 'agreed': True}
+
+    probs = list(all_probs.values())
+    spread = max(probs) - min(probs)
+    return {
+        'n_models': len(all_probs),
+        'spread': round(spread, 4),
+        'all_probs': all_probs,
+        'agreed': spread < AGREEMENT_SPREAD_THRESH,
+    }
 
 
 # ==============================================================================
@@ -769,9 +829,9 @@ def print_dashboard(results, deploy_configs, run_ts):
 
     print()
     print(f"  {'='*W}")
-    print(f"  ST SHORT SIGNALS — L5-2 HYB_F7_30   {pst_str}")
+    print(f"  ST SHORT SIGNALS — L5-2 HYB_F7_30 + M_AGREEMENT   {pst_str}")
     print(f"  {'='*W}")
-    print(f"  Strategy: Hybrid F5+F6+F7 (F7>=3.0%)  |  "
+    print(f"  Strategy: Hybrid F5+F6+F7 + M_AGREEMENT (spread<{AGREEMENT_SPREAD_THRESH}, max={MAX_TRADES})  |  "
           f"Score: {SCORE_MINUTE // 60}:{SCORE_MINUTE % 60:02d} PST  |  "
           f"Entry: {ENTRY_MINUTE // 60}:{ENTRY_MINUTE % 60:02d} PST")
     for f in sorted(fold_counts):
@@ -787,7 +847,8 @@ def print_dashboard(results, deploy_configs, run_ts):
     print(f"  {'Ticker':<6} {'F':>1}  {'H':>3}  {'SIG':<7}  "
           f"{'Short@':>10}  {'TP@':>10}  {'SL@':>10}  "
           f"{'Prob':>5} / {'Thr':>5}  {'Mode':<8}  "
-          f"{'Close':>8}  {'P(15m)':>6} {'P(30m)':>6} {'P(60m)':>6}")
+          f"{'Close':>8}  {'Agr':>5} {'Spr':>5}  "
+          f"{'P(15m)':>6} {'P(30m)':>6} {'P(60m)':>6}")
     print(f"  {'─'*W}")
 
     for r in results:
@@ -804,10 +865,15 @@ def print_dashboard(results, deploy_configs, run_ts):
         mode_label = _MODE_LABELS.get(r['mode'], '??')
         hp = r['all_horizon_probs']
 
+        n_mod = r.get('n_models', 1)
+        spr = r.get('spread', 0)
+        agr_str = f"{n_mod}F" if r.get('agreed', True) else f"{n_mod}X"
+        spr_str = f"{spr:.2f}" if n_mod > 1 else "  —"
+
         print(f"  {r['ticker']:<6} {r['fold']:>1}  {r['horizon']:>3}  {sig_str}  "
               f"{short_str:>10}  {tp_str:>10}  {sl_str:>10}  "
               f"{r['prob']:>5.3f} / {r['threshold']:>5.3f}  {mode_label:<8}  "
-              f"{r['close']:>8.2f}  "
+              f"{r['close']:>8.2f}  {agr_str:>5} {spr_str:>5}  "
               f"{hp.get('15m', 0):>5.3f}  {hp.get('30m', 0):>5.3f}  {hp.get('60m', 0):>5.3f}")
 
     signals = [r for r in results if r['signal']]
@@ -871,7 +937,7 @@ def print_dashboard(results, deploy_configs, run_ts):
                       f"[{r['horizon']} dump prob={r['prob']:.3f}]")
 
     print()
-    print(f"  Strategy: L5-2 HYB_F7_30 (22 regime features)  |  "
+    print(f"  Strategy: L5-2 HYB_F7_30 + M_AGREEMENT (spread<{AGREEMENT_SPREAD_THRESH}, max={MAX_TRADES})  |  "
           f"Score {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} -> Entry {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PST  |  "
           f"FiLM conditioning")
     print(f"  {'='*W}")
@@ -930,7 +996,7 @@ def log_to_bigquery(results, run_ts):
             'close': r['close'],
             'filter_status': 'OK',
             'tpsl_mode': r['mode'],
-            'strategy': 'ST_SHORT_L5_2_HYB_F7_30',
+            'strategy': 'ST_SHORT_L5_2_HYB_F7_30_MAGR',
             'model_version': f'spike_transformer_short_L5_2_fold{fold_id}',
         })
     bq_client = bigquery.Client()
@@ -940,7 +1006,7 @@ def log_to_bigquery(results, run_ts):
         if errors:
             print(f"   BigQuery errors: {errors}")
         else:
-            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_L5_2_HYB_F7_30)")
+            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_L5_2_HYB_F7_30_MAGR)")
     except Exception as e:
         print(f"   BigQuery failed: {e}")
 
@@ -973,7 +1039,7 @@ def _check_stitch_freshness():
 run_ts = datetime.now(pytz.utc)
 pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
 print(f"\n{'='*80}")
-print(f"  DAILY SCORING — ST SHORT L5-2 HYB_F7_30 — {pst_str}")
+print(f"  DAILY SCORING — ST SHORT L5-2 HYB_F7_30 + M_AGREEMENT — {pst_str}")
 print(f"{'='*80}")
 
 _check_stitch_freshness()
@@ -984,7 +1050,7 @@ if now_minutes < SCORE_MINUTE:
     print(f"\n  SKIP — too early ({now_minutes} < {SCORE_MINUTE})")
 else:
     print(f"\n  Loading deploy configs from BQ (HYB_F7_30)...")
-    DEPLOY_CONFIGS = load_deploy_configs()
+    DEPLOY_CONFIGS, FOLD_CFGS = load_deploy_configs()
 
     print(f"\n  Loading models and scaling stats...")
     load_models_and_meta(DEPLOY_CONFIGS)
@@ -1018,6 +1084,56 @@ else:
     results.sort(key=lambda r: r['ticker'])
     scored = [r['ticker'] for r in results]
     print(f"\n  Scored {len(scored)}/{len(DEPLOY_CONFIGS)}: {', '.join(scored)}")
+
+    # --- M_AGREEMENT: score GO signals with all folds ---
+    go_signals = [r for r in results if r['signal']]
+    print(f"\n  Computing agreement for {len(go_signals)} GO signals across all folds...")
+
+    for r in results:
+        r['agreement'] = None
+        r['agreed'] = True
+        r['spread'] = 0.0
+        r['n_models'] = 1
+
+    for r in go_signals:
+        ticker = r['ticker']
+        df_feat = engineer_asset(ticker, market_df)
+        if df_feat is not None:
+            agr = compute_agreement(ticker, df_feat, regime_df, run_ts,
+                                    DEPLOY_CONFIGS[ticker], FOLD_CFGS)
+            if agr:
+                r['agreement'] = agr
+                r['agreed'] = agr['agreed']
+                r['spread'] = agr['spread']
+                r['n_models'] = agr['n_models']
+                status = "AGREED" if agr['agreed'] else "DISAGREE"
+                model_strs = [f"F{fid}={p:.3f}" for fid, p in agr['all_probs'].items()]
+                print(f"    {ticker}: {status} spread={agr['spread']:.3f} "
+                      f"({agr['n_models']} folds: {', '.join(model_strs)})")
+            _master_cache.pop((ticker, TAIL_DAYS), None)
+
+    # --- Apply agreement filter + MAX_TRADES cap ---
+    agreed_signals = [r for r in go_signals if r['agreed']]
+    rejected_signals = [r for r in go_signals if not r['agreed']]
+
+    if rejected_signals:
+        print(f"\n  M_AGREEMENT filter: {len(rejected_signals)} rejected "
+              f"(spread >= {AGREEMENT_SPREAD_THRESH}): "
+              f"{', '.join(r['ticker'] for r in rejected_signals)}")
+        for r in rejected_signals:
+            r['signal'] = False
+
+    if len(agreed_signals) > MAX_TRADES:
+        agreed_signals.sort(key=lambda r: r['spread'])
+        kept = agreed_signals[:MAX_TRADES]
+        dropped = agreed_signals[MAX_TRADES:]
+        print(f"\n  MAX_TRADES cap ({MAX_TRADES}): keeping {', '.join(r['ticker'] for r in kept)}")
+        drop_strs = [f"{r['ticker']}(spread={r['spread']:.3f})" for r in dropped]
+        print(f"  Dropped: {', '.join(drop_strs)}")
+        for r in dropped:
+            r['signal'] = False
+    elif agreed_signals:
+        print(f"\n  {len(agreed_signals)} signals within MAX_TRADES={MAX_TRADES} cap")
 
     print_dashboard(results, DEPLOY_CONFIGS, run_ts)
     log_to_bigquery(results, run_ts)

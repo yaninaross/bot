@@ -9,8 +9,8 @@ Checks pipeline_status.json, then for each ticker:
   4. Concats with head of existing master_inference
   5. Saves atomic master_inference parquet
 
-40 deploy tickers (ST LONG HYB_F7_25 + SHORT HYB_F7_30) + 6 context/proxy assets.
-Context assets (VIX, SPY, TLT, IWM, MSTR, ITA) get OHLCV-only masters.
+48 deploy tickers (ST LONG NEWEST_FIRST + SHORT L5-2 HYB_F7_30) + 5 context/proxy assets.
+Context assets (VIX, SPY, TLT, IWM, ITA) get OHLCV-only masters.
 Uses google.cloud.storage API + local /tmp reads to avoid gcsfs memory overhead.
 """
 
@@ -45,14 +45,15 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # ST LONG HYB_F7_25 (20) + ST SHORT HYB_F7_30 (21) = 40 unique deploy tickers
-    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'BBAI', 'BE',
-    'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN', 'FLNC',
-    'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'ONDS', 'PL', 'PLTR',
-    'RIOT', 'RKLB', 'SLS', 'SMCI', 'SMR', 'SOUN', 'VST', 'WOLF', 'WULF', 'XOM',
+    # ST LONG NEWEST_FIRST (L5-1+ASL6, ~30) + ST SHORT L5-2 HYB_F7_30 (26) = 48 unique deploy tickers
+    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'AXTI', 'BBAI',
+    'BE', 'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN',
+    'FCEL', 'FLNC', 'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'MNTS',
+    'MSTR', 'MXL', 'NBIS', 'NEE', 'ONDS', 'PL', 'PLTR', 'RIOT', 'RKLB', 'RXT',
+    'SLS', 'SMCI', 'SMR', 'SOUN', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
-CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY', 'MSTR', 'ITA']
+CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY', 'ITA']
 
 TICKER_DATA_START = {}
 DATA_START_DEFAULT = pd.Timestamp("2022-01-01", tz='UTC')

@@ -2,13 +2,14 @@
 daily_micro_all.py — Microstructure Bootstrapper (batch 1 of 2, A-F)
 =====================================================================
 Downloads T&Q raw data from Polygon and computes microstructure
-parquets for 20 deploy tickers (A-F alphabetical split).
+parquets for 22 deploy tickers (A-F alphabetical split).
 
 Fully incremental and idempotent: already up-to-date tickers are skipped,
 gaps are filled from GCS cache or Polygon API.
 
-Batch 1: ACHR, AEHR, ALAB, AMD, APLD, ARM, ASTS, AVAV, BBAI, BE,
-         BTBT, CAT, CEG, CIFR, CLSK, COIN, CORZ, CVX, ETN, FLNC
+Batch 1: ACHR, AEHR, ALAB, AMD, APLD, ARM, ASTS, AVAV, AXTI, BBAI,
+         BE, BTBT, CAT, CEG, CIFR, CLSK, COIN, CORZ, CVX, ETN,
+         FCEL, FLNC
 """
 
 import os
@@ -27,8 +28,9 @@ warnings.filterwarnings('ignore')
 # ⚙️  CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'BBAI', 'BE',
-    'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN', 'FLNC',
+    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'AXTI', 'BBAI',
+    'BE', 'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN',
+    'FCEL', 'FLNC',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
