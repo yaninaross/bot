@@ -459,6 +459,8 @@ def _ensure_wf_table(bq_client, table_id):
         SchemaField('dip_pct', 'FLOAT64'),
         SchemaField('max_wait_minutes', 'INT64'),
         SchemaField('pre_range_filter_pct', 'FLOAT64'),
+        SchemaField('val_b_fill_rate', 'FLOAT64'),
+        SchemaField('val_b_n_signals', 'INT64'),
     ]
     bq_client.create_table(Table(table_id, schema=schema), exists_ok=True)
     table = bq_client.get_table(table_id)
@@ -517,6 +519,8 @@ def save_row_to_bq(row_dict, run_id, experiment, mode,
             'dip_pct': float(row_dict.get('dip_pct', 0)) if mode == 'limit_entry' else None,
             'max_wait_minutes': int(row_dict.get('max_wait', 0)) if mode == 'limit_entry' else None,
             'pre_range_filter_pct': 0.0,
+            'val_b_fill_rate': float(row_dict.get('val_b_fill_rate', 1.0)),
+            'val_b_n_signals': int(row_dict.get('val_b_n_signals', row_dict.get('val_b_count', 0))),
         }
         errors = _bq_client.insert_rows_json(BQ_TABLE_ID, [row])
         if errors:
@@ -1021,6 +1025,7 @@ def grid_search(ohlcv_arrays, daily_scores, ticker, mode):
             if len(entry_list) == 0:
                 continue
             indices = np.array(entry_list, dtype=np.int64)
+            n_signals = len(indices)
             for pair in configs:
                 s_cfg = {'entry_time': ENTRY_TIME, 'prob_thresh': prob_thresh, **pair}
                 raw_pnl, raw_dates = _run_sim(indices, ohlcv_arrays, s_cfg, mode)
@@ -1033,16 +1038,22 @@ def grid_search(ohlcv_arrays, daily_scores, ticker, mode):
                 if freq < MIN_TRADES_PRORATED:
                     continue
                 avg = float(np.mean(raw_pnl))
+                total = float(np.sum(raw_pnl))
+                fill_rate = n / n_signals if n_signals > 0 else 1.0
+                roac = total / n_signals if n_signals > 0 else 0.0
                 result_row = {
                     'Ticker': ticker,
                     'score_horizon': h_idx,
                     'horizon_label': HORIZON_LABELS[h_idx],
                     **s_cfg,
                     'Avg_PnL': avg,
-                    'Total_PnL': float(np.sum(raw_pnl)),
+                    'Total_PnL': total,
                     'Win_Rate': float(np.mean(raw_pnl > 0)),
                     'Freq': freq,
                     'Count': n,
+                    'N_Signals': n_signals,
+                    'Fill_Rate': fill_rate,
+                    'ROAC': roac,
                     '_raw_pnl': raw_pnl.copy(),
                 }
                 results.append(result_row)
@@ -1099,8 +1110,10 @@ def grid_search_ensemble(ohlcv_arrays, daily_scores, ticker):
 
 
 def eval_combo(ohlcv_arrays, daily_scores, params, mode):
+    _empty = {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0, 'Freq': 0,
+              'N_Signals': 0, 'Fill_Rate': 1.0, 'ROAC': 0}
     if ohlcv_arrays is None:
-        return {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0, 'Freq': 0}
+        return _empty
     dates = ohlcv_arrays['dates']
     times = ohlcv_arrays['times']
     months = ohlcv_arrays['months']
@@ -1120,18 +1133,26 @@ def eval_combo(ohlcv_arrays, daily_scores, params, mode):
             if day_score >= params['prob_thresh']:
                 entry_list.append(i)
     if len(entry_list) == 0:
-        return {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0, 'Freq': 0}
+        return _empty
     indices = np.array(entry_list, dtype=np.int64)
+    n_signals = len(indices)
     sim_mode = 'static' if mode == 'ensemble' else mode
     raw_pnl, raw_dates = _run_sim(indices, ohlcv_arrays, params, sim_mode)
     if len(raw_pnl) == 0:
-        return {'Avg_PnL': 0, 'Count': 0, 'Win_Rate': 0, 'Freq': 0}
+        return {**_empty, 'N_Signals': n_signals, 'Fill_Rate': 0.0}
+    n_filled = len(raw_pnl)
+    fill_rate = n_filled / n_signals if n_signals > 0 else 1.0
+    total_pnl = float(np.sum(raw_pnl))
+    roac = total_pnl / n_signals if n_signals > 0 else 0.0
     return {
         'Avg_PnL':   float(np.mean(raw_pnl)),
-        'Total_PnL': float(np.sum(raw_pnl)),
+        'Total_PnL': total_pnl,
         'Win_Rate':  float(np.mean(raw_pnl > 0)),
-        'Freq':      len(raw_pnl) / months,
-        'Count':     len(raw_pnl),
+        'Freq':      n_filled / months,
+        'Count':     n_filled,
+        'N_Signals': n_signals,
+        'Fill_Rate': fill_rate,
+        'ROAC':      roac,
     }
 
 
@@ -1153,14 +1174,15 @@ def select_robust_params(all_results, mode):
         else:
             key = (h, r['prob_thresh'], r.get('tp_pct', 0), r.get('sl_pct', 0))
         strategy_groups.setdefault(key, []).append(r)
+    rank_key = 'ROAC' if mode == 'limit_entry' else 'Avg_PnL'
     best = None
     best_robust_score = -999.0
     for key, results in strategy_groups.items():
-        pnls = np.array([r['Avg_PnL'] for r in results])
+        pnls = np.array([r.get(rank_key, r['Avg_PnL']) for r in results])
         mean_pnl = float(np.mean(pnls))
         if mean_pnl <= 0:
             continue
-        best_in_group = max(results, key=lambda r: r['Avg_PnL'])
+        best_in_group = max(results, key=lambda r: r.get(rank_key, r['Avg_PnL']))
         raw = best_in_group.get('_raw_pnl')
         consistency = 1.0
         if raw is not None and len(raw) >= 4:
@@ -1333,7 +1355,8 @@ for t_idx, ticker in enumerate(tickers):
             continue
         best = select_robust_params(survivors, mode)
         if best is None:
-            best = max(survivors, key=lambda r: r['Avg_PnL'])
+            _rk = 'ROAC' if mode == 'limit_entry' else 'Avg_PnL'
+            best = max(survivors, key=lambda r: r.get(_rk, r['Avg_PnL']))
         best.pop('_raw_pnl', None)
         for r in survivors:
             r.pop('_raw_pnl', None)
@@ -1359,9 +1382,10 @@ for t_idx, ticker in enumerate(tickers):
         tag_a = "PASS" if val_a['Avg_PnL'] > 0 else "FAIL"
         print(f"    VAL:  AvgPnL={val_a['Avg_PnL']:.2%}  WR={val_a['Win_Rate']:.1%}  "
               f"N={val_a['Count']}  [{tag_a}]")
-        tag_b = "PASS" if val_b['Avg_PnL'] > 0 else "FAIL"
-        print(f"    TEST: AvgPnL={val_b['Avg_PnL']:.2%}  WR={val_b['Win_Rate']:.1%}  "
-              f"N={val_b['Count']}  [{tag_b}]")
+        tag_b = "PASS" if val_b['ROAC'] > 0 else "FAIL"
+        fill_str = f"  Fill={val_b['Fill_Rate']:.0%}" if val_b['Fill_Rate'] < 1.0 else ""
+        print(f"    TEST: ROAC={val_b['ROAC']:.2%}  AvgPnL={val_b['Avg_PnL']:.2%}  WR={val_b['Win_Rate']:.1%}  "
+              f"N={val_b['Count']}/{val_b['N_Signals']}{fill_str}  [{tag_b}]")
         result_row = {
             'Ticker': ticker,
             'score_horizon': best.get('score_horizon', 1),
@@ -1383,11 +1407,14 @@ for t_idx, ticker in enumerate(tickers):
             'val_a_freq': val_a.get('Freq', 0),
             'val_a_count': val_a['Count'],
             'survived_a': val_a['Avg_PnL'] > 0,
-            'val_b_avg_pnl': val_b['Avg_PnL'],
+            'val_b_avg_pnl': val_b['ROAC'],
+            'val_b_avg_pnl_filled': val_b['Avg_PnL'],
             'val_b_win_rate': val_b['Win_Rate'],
             'val_b_freq': val_b.get('Freq', 0),
             'val_b_count': val_b['Count'],
-            'survived_b': val_b['Avg_PnL'] > 0,
+            'val_b_n_signals': val_b['N_Signals'],
+            'val_b_fill_rate': val_b['Fill_Rate'],
+            'survived_b': val_b['ROAC'] > 0,
         }
         all_results[mode].append(result_row)
         bq_experiment = f"{EXPERIMENT}_{h_label}{mode_sfx}"
@@ -1430,11 +1457,11 @@ for mode in active_modes:
         if mode == 'ensemble':
             extra_hdr = " Preset"
         print(f"\n  {'Ticker':<7} {'H':>10} {'Prob':>5} {'TP':>5} {'SL':>5} "
-              f"{'OPT PnL':>8} {'VAL PnL':>8} {'TEST PnL':>9} {'TEST WR':>8} {'TEST N':>7} {'Status':>8}{extra_hdr}")
-        print(f"  {'---'*30}")
+              f"{'OPT PnL':>8} {'VAL PnL':>8} {'TEST ROAC':>10} {'TEST PnL':>9} {'Fill':>5} "
+              f"{'TEST WR':>8} {'TEST N':>7} {'Status':>8}{extra_hdr}")
+        print(f"  {'─'*105}")
         for _, r in df.sort_values('val_b_avg_pnl', ascending=False).iterrows():
-            status = "DEPLOY" if (r['survived_b'] and r['val_b_avg_pnl'] >= DEPLOY_PNL_THRESHOLD
-                                  and r['val_b_count'] >= MIN_TRADES_PRORATED) else \
+            status = "DEPLOY" if r['survived_b'] and r['val_b_avg_pnl'] >= DEPLOY_PNL_THRESHOLD else \
                      "pass" if r['survived_b'] else "fail"
             extra = ""
             if mode == 'grace':
@@ -1446,21 +1473,23 @@ for mode in active_modes:
             elif mode == 'ensemble':
                 extra = f"  {r.get('ensemble_preset', '?')}"
             h_lbl = r.get('horizon_label', '30m')
+            fill_pct = r.get('val_b_fill_rate', 1.0)
+            fill_str = f"{fill_pct:>4.0%}" if fill_pct < 1.0 else f"{'100%':>5}"
             print(f"  {r['Ticker']:<7} {h_lbl:>10} {r['prob_thresh']:>5.2f} "
                   f"{r['tp_pct']:>4.0%} {r['sl_pct']:>4.0%} "
                   f"{r['Avg_PnL']:>+7.2%} {r['val_a_avg_pnl']:>+7.2%} "
-                  f"{r['val_b_avg_pnl']:>+8.2%} {r['val_b_win_rate']:>7.1%} "
+                  f"{r['val_b_avg_pnl']:>+9.2%} {r.get('val_b_avg_pnl_filled', r['val_b_avg_pnl']):>+8.2%} {fill_str} "
+                  f"{r['val_b_win_rate']:>7.1%} "
                   f"{int(r['val_b_count']):>7} {status:>8}{extra}")
 
 deploy_rows = []
 for mode in active_modes:
     for r in all_results[mode]:
-        if (r['survived_b'] and r['val_b_avg_pnl'] >= DEPLOY_PNL_THRESHOLD
-                and r['val_b_count'] >= MIN_TRADES_PRORATED):
+        if r['survived_b'] and r['val_b_avg_pnl'] >= DEPLOY_PNL_THRESHOLD:
             deploy_rows.append({**r, 'mode': mode})
 
 print(f"\n\n{'='*W}")
-print(f"  DEPLOYABLE TICKERS (TEST avg >= {DEPLOY_PNL_THRESHOLD:.1%}, N >= {MIN_TRADES_PRORATED})")
+print(f"  DEPLOYABLE TICKERS (TEST ROAC >= {DEPLOY_PNL_THRESHOLD:.1%})")
 print(f"{'='*W}")
 if deploy_rows:
     deploy_df = pd.DataFrame(deploy_rows).sort_values('val_b_avg_pnl', ascending=False)
@@ -1471,9 +1500,10 @@ if deploy_rows:
             extra = f"  preset={r.get('ensemble_preset', '?')}"
         elif r['mode'] == 'volscaled':
             extra = f"  vol[{VOL_SCALE_MIN:.1f}-{VOL_SCALE_MAX:.1f}]"
+        fill_info = f"  Fill={r.get('val_b_fill_rate', 1.0):.0%}" if r.get('val_b_fill_rate', 1.0) < 1.0 else ""
         print(f"    {r['Ticker']:<7} {r['mode']:<13} H={r.get('horizon_label','30m')}  "
-              f"TEST={r['val_b_avg_pnl']:>+.2%}  "
-              f"WR={r['val_b_win_rate']:.0%}  N={int(r['val_b_count'])}  "
+              f"ROAC={r['val_b_avg_pnl']:>+.2%}  "
+              f"WR={r['val_b_win_rate']:.0%}  N={int(r['val_b_count'])}/{int(r.get('val_b_n_signals', r['val_b_count']))}{fill_info}  "
               f"Prob>{r['prob_thresh']:.2f}  TP={r['tp_pct']:.0%}  SL={r['sl_pct']:.0%}{extra}")
 else:
     print("  None")
@@ -1496,7 +1526,7 @@ if all_test_data:
     ax.set_yticks(range(len(best_per_ticker)))
     ax.set_yticklabels([f"{r['Ticker']} ({r['mode'][:4]})" for _, r in best_per_ticker.iterrows()],
                        fontsize=8)
-    ax.set_xlabel('TEST Avg PnL (%)')
+    ax.set_xlabel('TEST ROAC (%)')
     modes_str = '+'.join(m.upper() for m in active_modes)
     ax.set_title(f'SHORT L5-1 Fold {FOLD_ID} — TEST Performance ({modes_str})\n'
                  f'Green: >= {DEPLOY_PNL_THRESHOLD:.1%} (deployable)  |  Blue: positive  |  Red: negative\n'

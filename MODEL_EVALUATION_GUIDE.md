@@ -10,9 +10,9 @@ Before running any evaluation, ensure the data pipeline is current:
 
 | Step | Script | Runtime | What it does |
 |------|--------|---------|--------------|
-| 1. OHLCV | `daily_ohlcv_1.py` + `daily_ohlcv_2.py` | ~5 min | Pull 1-min bars from Polygon for all tickers + context assets |
-| 2. Microstructure | `daily_micro_all.py` | ~10 min | Build micro features (spread, OBI, volume delta) for 20 tickers |
-| 3. Stitch | `daily_stitch_master.py` | ~8 min | Combine OHLCV + micro + context → `master_inference.parquet` per ticker on GCS |
+| 1. OHLCV | `pipeline/daily_ohlcv_1.py` + `pipeline/daily_ohlcv_2.py` | ~5 min | Pull 1-min bars from Polygon for all tickers + context assets |
+| 2. Microstructure | `pipeline/daily_micro_{1,2,3}.py` | ~15 min | Build micro features (spread, OBI, volume delta) in 3 batches |
+| 3. Stitch | `pipeline/daily_stitch_master.py` | ~8 min | Combine OHLCV + micro + context → `master_inference.parquet` per ticker on GCS |
 
 All three are incremental — they only fetch/build new dates. Run them daily or whenever you need fresh data.
 
@@ -26,7 +26,7 @@ All three are incremental — they only fetch/build new dates. Run them daily or
 
 ## Step 1: Score All Experiments (GPU Required)
 
-**Script:** `score_all_experiments.py`
+**Script:** `scoring/score_all_experiments.py`
 **Runtime:** ~2-3 hours on T4 GPU (72 tickers × 5 experiments × 15 seeds)
 **When to re-run:** After updating master_inference data, or when extending to new tickers
 
@@ -58,7 +58,7 @@ print(f"CLSK exp-185 seeds scored: {len(blobs)}")  # expect 15
 
 ## Step 2: Baseline Strategy Comparison (No GPU)
 
-**Script:** `backtest_strategy_csv.py`
+**Script:** `archive/backtest_strategy_csv.py`
 **Runtime:** ~2-3 minutes
 **Purpose:** Establish the S3 Deployed benchmark and compare 5 basic strategies
 
@@ -98,7 +98,7 @@ print(f"CLSK exp-185 seeds scored: {len(blobs)}")  # expect 15
 
 ## Step 3: Composite Method Comparison (No GPU)
 
-**Script:** `backtest_composite_csv.py`
+**Script:** `archive/backtest_composite_csv.py`
 **Runtime:** ~1-2 minutes
 **Purpose:** Find the best signal-gating method across experiments
 
@@ -143,7 +143,7 @@ The winning composite method from this step feeds into Step 4. Currently: **Weig
 
 ## Step 4: Optimization Strategy Comparison (No GPU)
 
-**Script:** `backtest_optimization_csv.py`
+**Script:** `archive/backtest_optimization_csv.py`
 **Runtime:** ~5-10 minutes (grid search across 33 combos)
 **Purpose:** Find the best optimization strategy × composite combination
 
@@ -278,10 +278,10 @@ These scripts exist for specific investigations, not routine evaluation:
 
 | Script | Purpose |
 |--------|---------|
-| `backtest_deep_optimization.py` | 72-ticker universe version of Step 4 (TF-free, 11×2 matrix). Use when evaluating across the full scored universe, not just the 11-ticker S3 set |
-| `analyze_composite_scores.py` | 72-ticker composite analysis with BQ configs. Source code for composite gate logic |
-| `backtest_strategy_comparison.py` | Live TF-scoring version of Step 2 (requires GPU). Use to verify CSV scores match live inference |
-| `backtest_portfolio_v2.py` | Pipeline verification — confirms data loading, feature engineering, and scaling match training. Run after changing any data pipeline code |
-| `backtest_tier_comparison.py` | 6-family investigation with live TF. Use for deep-dive on experiment family performance |
-| `backtest_top5_composites.py` | Efficiency-frontier composites. Use for dip_pct / max_wait sensitivity analysis |
-| `daily_score_combined.py` | Production daily scorer for S3. Not an evaluation tool — this generates live trading signals |
+| `archive/backtest_deep_optimization.py` | 72-ticker universe version of Step 4 (TF-free, 11×2 matrix) |
+| `archive/analyze_composite_scores.py` | 72-ticker composite analysis with BQ configs |
+| `archive/backtest_strategy_comparison.py` | Live TF-scoring version of Step 2 (requires GPU) |
+| `archive/backtest_portfolio_v2.py` | Pipeline verification — confirms data loading matches training |
+| `archive/backtest_tier_comparison.py` | 6-family investigation with live TF |
+| `archive/backtest_top5_composites.py` | Efficiency-frontier composites |
+| `scoring/daily_score_s3.py` | Production daily scorer for S3 (live trading signals) |

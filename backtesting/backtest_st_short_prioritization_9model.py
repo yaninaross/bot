@@ -1,38 +1,23 @@
-# %% ── ST SHORT HYBRID — Trade Prioritization Comparison ──────────────────────
+# %% ── ST SHORT — 9-Model Trade Prioritization Comparison ─────────────────────
 #
-# When multiple SHORT signals fire on the same day and capital is limited to
-# MAX_TRADES concurrent positions, which selection strategy is best?
+# EXPANDED from 6-model to 9-model by adding Multi-Res v2 (MR-v2) F6/F7/F8.
 #
-# Approach:
-#   1. Score all tickers across all days (same engine as live backtest)
-#   2. Simulate ALL signals to get trade outcomes (SHORT direction)
-#   3. Group trades by date; on days with > MAX_TRADES signals, apply each
-#      prioritization strategy to select the top-K trades
-#   4. Compare portfolio metrics across strategies
+# 9 models:
+#   L5-1 F5/F6/F7  (standard SpikeTransformer, single backbone)
+#   L5-2 F5/F6/F7  (standard SpikeTransformer, single backbone)
+#   MR-v2 F6/F7/F8 (MultiResSpikeTransformer, dual backbone 1m+15m)
 #
-# Deploy strategy: Hybrid F5+F6+F7
-#   - 2 families: L5-1 + L5-2, each with folds 5/6/7
-#   - Per-ticker: best val_b fold wins; F7 gated at val_b >= 3.0%
-#   - L5-2 is deployed (upgraded 2026-08-16)
+# MR-v2 architecture: dual Transformer backbone (1m: 2 blocks + 15m: 1 block),
+# 153K params, late fusion concat(64,64)->Dense(64,gelu), FiLM conditioning.
+# Requires separate model object and 15-min feature engineering.
 #
-# Strategies tested:
-#   ALL_TRADES   — no cap (upper bound baseline)
-#   RANDOM       — uniform random, averaged over 50 iterations
-#   PROB_RAW     — highest raw model probability
-#   PROB_MARGIN  — highest (prob - threshold) / threshold
-#   EXPECTED_VAL — prob × tp - (1-prob) × sl
-#   VAL_B_BEST   — highest historical val_b_avg_pnl from WF optimizer
-#   COMPOSITE    — 0.4×prob_margin_norm + 0.3×EV_norm + 0.3×val_b_norm
-#   INVERSE_PROB — lowest prob above threshold (contrarian)
+# Phase 7: K sweep (1→9) — M_CONSENSUS (9) vs M_CONS_6NEWEST (6) vs M_CONS_5NEWEST (5)
+# Phase 10: Model overlap analysis (signal agreement, Jaccard, correlation)
 #
-# Multi-model strategies (Phase 5):
-#   M_CONSENSUS    — rank by # models firing, ties by max prob
-#   M_ENSEMBLE_AVG — rank by average prob across all models
-#   M_MAX_PROB     — rank by highest single-model prob
-#   M_NEWEST_FOLD  — prefer newest fold (F7>F6>F5), L5-2 preferred
-#   M_AGREEMENT    — only tickers where models agree (spread < 0.15)
-#
-# Phase 7: K sweep (1→6) for top 5 strategies
+# Model subsets:
+#   M_CONSENSUS   (9): all models
+#   M_CONS_6NEWEST(6): L5-1 F6/F7 + L5-2 F6/F7 + MR-v2 F7/F8 (drop F5s + MR-v2 F6)
+#   M_CONS_5NEWEST(5): L5-1 F7 + L5-2 F7 + MR-v2 F6/F7/F8 (newest per std family + all MR-v2)
 #
 # SHORT = price down is profit. TP hit when Low <= tp_price.
 # GPU recommended. Colab-ready.
@@ -101,7 +86,7 @@ INFERENCE_DIR    = "Data/Inference_v2"
 PST              = pytz.timezone('America/Los_Angeles')
 
 BACKTEST_START   = '2026-08-03'
-BACKTEST_END     = '2026-08-18'
+BACKTEST_END     = '2026-08-24'
 
 TAIL_DAYS        = 45
 
@@ -132,6 +117,7 @@ FAMILIES = {
     'L5-1': {
         'gcs_data':   'Algos/RA_MoE/short_L5_1_data',
         'gcs_models': 'Algos/RA_MoE/short_L5_1_models',
+        'arch': 'standard',
         'bq_versions': {
             5: 'spike_transformer_short_L5_1_fold5',
             6: 'spike_transformer_short_L5_1_fold6',
@@ -141,20 +127,41 @@ FAMILIES = {
     'L5-2': {
         'gcs_data':   'Algos/RA_MoE/short_L5_2_data',
         'gcs_models': 'Algos/RA_MoE/short_L5_2_models',
+        'arch': 'standard',
         'bq_versions': {
             5: 'spike_transformer_short_L5_2_fold5',
             6: 'spike_transformer_short_L5_2_fold6',
             7: 'spike_transformer_short_L5_2_fold7',
         },
     },
+    'MR-v2': {
+        'gcs_data':   'Algos/RA_MoE/short_L5_2_multires_v2_data',
+        'gcs_models': 'Algos/RA_MoE/short_L5_2_multires_v2_models',
+        'arch': 'multires',
+        'bq_versions': {
+            6: 'spike_transformer_short_L5_2_multires_v2_fold6',
+            7: 'spike_transformer_short_L5_2_multires_v2_fold7',
+            8: 'spike_transformer_short_L5_2_multires_v2_fold8',
+        },
+    },
 }
 
-FOLDS = [5, 6, 7]
+FOLDS = [5, 6, 7, 8]
 HORIZON_LABELS = {0: '15m', 1: '30m', 2: '60m'}
 HORIZON_FROM_LABEL = {'15m': 0, '30m': 1, '60m': 2}
 
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
-EXCLUDE_TICKERS = {'SPY', 'VIX', 'TLT', 'IWM', 'XLE', 'ITA', 'BITF', 'MIGI', 'SMLR'}
+EXCLUDE_TICKERS = {'SPY', 'VIX', 'TLT', 'IWM', 'XLE', 'ITA', 'BITF', 'MIGI', 'SMLR', 'BTCUSD', 'ETHUSD'}
+
+N_BLOCKS_15M     = 1
+TIME_STEPS_15M   = 128
+N_LOWRES_F       = 12
+
+LOWRES_COLS = [
+    'lr_Close_ret', 'lr_High_ret', 'lr_Low_ret', 'lr_Volume_norm',
+    'lr_Range', 'lr_RSI_14', 'lr_RVOL', 'lr_ROC_4', 'lr_ROC_8',
+    'lr_ROC_16', 'lr_Bar_Is_Real', 'lr_Time_Pos',
+]
 
 MICRO_COLS = ['Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
               'bsize', 'asize', 'Total_Vol']
@@ -272,7 +279,7 @@ def load_deploy_configs():
                 continue
             cfg = cfgs[tk]
             v = cfg['val_b_avg_pnl']
-            if fold_id == 7 and v < F7_VAL_B_THRESH:
+            if fold_id >= 7 and v < F7_VAL_B_THRESH:
                 continue
             if v > best_val:
                 best_fold_key = (family_name, fold_id)
@@ -288,7 +295,7 @@ def load_deploy_configs():
     for src in sorted(source_counts):
         tickers = sorted(source_counts[src])
         print(f"    Hybrid {src}: {len(tickers)} — {', '.join(tickers)}")
-    print(f"    Total: {len(deploy)} tickers (Hybrid F5+F6+F7)")
+    print(f"    Total: {len(deploy)} tickers (Hybrid F5+F6+F7+F8)")
     return deploy, family_fold_cfgs
 
 
@@ -423,6 +430,34 @@ def engineer_asset(ticker, market_df):
     df['Time_Pos'] = np.clip((mins - 390) / 390, 0, 1)
     df['Bar_Is_Real'] = (df['Volume'] > 0).astype(float)
     return df.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+
+def build_15min_features(df_1m):
+    ohlcv_15 = df_1m[['Open', 'High', 'Low', 'Close', 'Volume']].resample('15min').agg({
+        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+    }).ffill()
+    lr = pd.DataFrame(index=ohlcv_15.index)
+    lr['lr_Close_ret'] = ohlcv_15['Close'].pct_change(1)
+    lr['lr_High_ret'] = (ohlcv_15['High'] - ohlcv_15['Open']) / ohlcv_15['Open'].clip(lower=1e-8)
+    lr['lr_Low_ret'] = (ohlcv_15['Low'] - ohlcv_15['Open']) / ohlcv_15['Open'].clip(lower=1e-8)
+    vol_real = ohlcv_15['Volume'].where(ohlcv_15['Volume'] > 0)
+    vol_mean = vol_real.rolling(50, min_periods=5).mean().ffill().clip(lower=1e-9)
+    lr['lr_Volume_norm'] = (ohlcv_15['Volume'] / vol_mean).fillna(1.0)
+    lr['lr_Range'] = (ohlcv_15['High'] - ohlcv_15['Low']) / ohlcv_15['Close'].clip(lower=1e-8)
+    lr['lr_RSI_14'] = ta.rsi(ohlcv_15['Close'], length=14)
+    lr['lr_RVOL'] = lr['lr_Volume_norm']
+    lr['lr_ROC_4'] = ohlcv_15['Close'].pct_change(4)
+    lr['lr_ROC_8'] = ohlcv_15['Close'].pct_change(8)
+    lr['lr_ROC_16'] = ohlcv_15['Close'].pct_change(16)
+    lr['lr_Bar_Is_Real'] = (ohlcv_15['Volume'] > 0).astype(float)
+    try:
+        idx_pst = ohlcv_15.index.tz_convert(PST)
+    except Exception:
+        idx_pst = ohlcv_15.index
+    mins = idx_pst.hour * 60 + idx_pst.minute
+    lr['lr_Time_Pos'] = np.clip((mins - 390) / 390, 0, 1)
+    lr = lr.replace([np.inf, -np.inf], np.nan).fillna(0)
+    return lr[LOWRES_COLS]
 
 
 def compute_regime_features(market_df):
@@ -617,10 +652,36 @@ class SpikeTransformer(keras.Model):
         return self.head(self.drop(h, training=training))
 
 
+class MultiResSpikeTransformer(keras.Model):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.backbone_1m = TransformerBackbone(
+            D_MODEL, N_HEADS, D_FF, N_BLOCKS,
+            TIME_STEPS, DROPOUT_RATE, name='backbone_1m')
+        self.pool_1m = _AttentionPooling(D_MODEL, name='pool_1m')
+        self.backbone_15m = TransformerBackbone(
+            D_MODEL, N_HEADS, D_FF, N_BLOCKS_15M,
+            TIME_STEPS_15M, DROPOUT_RATE, name='backbone_15m')
+        self.pool_15m = _AttentionPooling(D_MODEL, name='pool_15m')
+        self.fusion = Dense(D_MODEL, activation='gelu', name='fusion')
+        self.film = _FiLMConditioner(D_MODEL, FILM_HIDDEN, name='film')
+        self.drop = Dropout(DROPOUT_RATE)
+        self.head = Dense(N_HORIZONS, activation='sigmoid', name='spike_head')
+    def call(self, inputs, training=False):
+        h_1m = self.backbone_1m(inputs['seq_input'], training=training)
+        h_1m = self.pool_1m(h_1m, training=training)
+        h_15m = self.backbone_15m(inputs['seq_15m_input'], training=training)
+        h_15m = self.pool_15m(h_15m, training=training)
+        h = self.fusion(tf.concat([h_1m, h_15m], axis=-1))
+        h = self.film(h, inputs['regime_input'], training=training)
+        return self.head(self.drop(h, training=training))
+
+
 # ==============================================================================
 # MODEL LOADING (h5py weight loader)
 # ==============================================================================
-_model = None
+_model_std = None
+_model_mr = None
 _fold_weights = {}
 _current_key = None
 _family_meta = {}
@@ -674,15 +735,20 @@ def _ensure_file(gcs_path, local_path):
     gcs_client.bucket(BUCKET_NAME).blob(gcs_path).download_to_filename(local_path)
     return local_path
 
+def _get_model_for_family(family):
+    arch = FAMILIES[family].get('arch', 'standard')
+    return _model_mr if arch == 'multires' else _model_std
+
 def _ensure_fold_loaded(family, fold_id):
     global _current_key
     key = (family, fold_id)
     if _current_key != key:
-        _load_keras3_weights(_model, _fold_weights[key])
+        model = _get_model_for_family(family)
+        _load_keras3_weights(model, _fold_weights[key])
         _current_key = key
 
 def load_models_and_meta(deploy_configs, all_model_configs=None):
-    global _model, _fold_weights, _current_key, _family_meta
+    global _model_std, _model_mr, _fold_weights, _current_key, _family_meta
     all_cfgs = list(deploy_configs.values())
     if all_model_configs:
         for cfg_list in all_model_configs.values():
@@ -693,19 +759,35 @@ def load_models_and_meta(deploy_configs, all_model_configs=None):
         local_meta = f'/tmp/ra_moe_short_{family_name}_meta.npz'
         meta_path = _ensure_file(f"{fam['gcs_data']}/meta.npz", local_meta)
         meta = np.load(meta_path, allow_pickle=True)
-        _family_meta[family_name] = {
+        meta_dict = {
             'scaling_stats': meta['scaling_stats'].item(),
             'regime_stats': meta['regime_stats'].item(),
         }
+        if 'scaling_stats_15m' in meta:
+            meta_dict['scaling_stats_15m'] = meta['scaling_stats_15m'].item()
+        _family_meta[family_name] = meta_dict
         print(f"   {family_name} meta loaded")
 
     keras.backend.clear_session()
     gc.collect()
 
-    _model = SpikeTransformer(name='spike_transformer')
-    dummy_seq = tf.zeros((1, TIME_STEPS, N_ASSET_F))
-    dummy_reg = tf.zeros((1, N_REGIME_F))
-    _model({'seq_input': dummy_seq, 'regime_input': dummy_reg})
+    need_std = any(FAMILIES[f].get('arch', 'standard') == 'standard' for f in needed_families)
+    need_mr  = any(FAMILIES[f].get('arch', 'standard') == 'multires' for f in needed_families)
+
+    if need_std:
+        _model_std = SpikeTransformer(name='spike_transformer')
+        dummy_seq = tf.zeros((1, TIME_STEPS, N_ASSET_F))
+        dummy_reg = tf.zeros((1, N_REGIME_F))
+        _model_std({'seq_input': dummy_seq, 'regime_input': dummy_reg})
+        print(f"   Standard SpikeTransformer: {_model_std.count_params():,} params")
+
+    if need_mr:
+        _model_mr = MultiResSpikeTransformer(name='multires_spike_transformer')
+        dummy_seq = tf.zeros((1, TIME_STEPS, N_ASSET_F))
+        dummy_15m = tf.zeros((1, TIME_STEPS_15M, N_LOWRES_F))
+        dummy_reg = tf.zeros((1, N_REGIME_F))
+        _model_mr({'seq_input': dummy_seq, 'seq_15m_input': dummy_15m, 'regime_input': dummy_reg})
+        print(f"   MultiResSpikeTransformer: {_model_mr.count_params():,} params")
 
     needed_keys = sorted(set((cfg['family'], cfg['fold']) for cfg in all_cfgs))
     for family_name, fold_id in needed_keys:
@@ -725,10 +807,10 @@ def load_models_and_meta(deploy_configs, all_model_configs=None):
         print(f"   {family_name} F{fold_id} weights cached ({n_tickers} tickers)")
 
     first_key = needed_keys[0]
-    _load_keras3_weights(_model, _fold_weights[first_key])
+    first_model = _get_model_for_family(first_key[0])
+    _load_keras3_weights(first_model, _fold_weights[first_key])
     _current_key = first_key
-    print(f"   Model built: {_model.count_params():,} params, {len(needed_keys)} (family,fold) combos, "
-          f"{len(deploy_configs)} tickers")
+    print(f"   {len(needed_keys)} (family,fold) combos, {len(deploy_configs)} tickers")
 
 
 def apply_scaling(df, stats, cols):
@@ -940,12 +1022,21 @@ def _run_sim(indices, ohlcv, cfg, include_nofills=False):
 # ==============================================================================
 # SCORING + TRADE SIM — enriched with signal metadata for prioritization
 # ==============================================================================
-def score_and_backtest_ticker(ticker, cfg, df_feat, regime_df):
+def score_and_backtest_ticker(ticker, cfg, df_feat, regime_df, df_15m=None):
     family = cfg['family']
     scaling_stats = _family_meta[family]['scaling_stats']
     regime_stats = _family_meta[family]['regime_stats']
+    is_multires = FAMILIES[family].get('arch', 'standard') == 'multires'
 
     df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
+
+    if is_multires and df_15m is not None:
+        scaling_stats_15m = _family_meta[family].get('scaling_stats_15m')
+        if scaling_stats_15m:
+            df_15m_scaled = apply_scaling(df_15m, scaling_stats_15m, LOWRES_COLS)
+        else:
+            df_15m_scaled = df_15m.copy()
+        XL = df_15m_scaled[LOWRES_COLS].values.astype(np.float32)
 
     bt_start = pd.Timestamp(BACKTEST_START, tz='UTC')
     bt_end = pd.Timestamp(BACKTEST_END, tz='UTC') + pd.Timedelta(days=1)
@@ -968,6 +1059,7 @@ def score_and_backtest_ticker(ticker, cfg, df_feat, regime_df):
 
     fold_id = cfg['fold']
     _ensure_fold_loaded(family, fold_id)
+    model = _get_model_for_family(family)
 
     XA = df_scaled[ALL_COLS].values.astype(np.float32)
     h_idx = cfg['horizon']
@@ -988,10 +1080,25 @@ def score_and_backtest_ticker(ticker, cfg, df_feat, regime_df):
             regime_scaled[ri] = val
         regime_batch = regime_scaled[np.newaxis]
 
-        preds = _model(
-            {'seq_input': seq_batch, 'regime_input': regime_batch},
-            training=False
-        ).numpy().flatten()
+        if is_multires and df_15m is not None:
+            ts_1m = df_feat.index[row_idx]
+            lr_idx = df_15m_scaled.index.get_indexer([ts_1m], method='pad')[0]
+            lr_end = lr_idx + 1
+            lr_start = max(0, lr_end - TIME_STEPS_15M)
+            lr_window = XL[lr_start:lr_end]
+            if len(lr_window) < TIME_STEPS_15M:
+                pad = np.zeros((TIME_STEPS_15M - len(lr_window), N_LOWRES_F), dtype=np.float32)
+                lr_window = np.concatenate([pad, lr_window], axis=0)
+            lr_batch = lr_window[np.newaxis]
+            preds = model(
+                {'seq_input': seq_batch, 'seq_15m_input': lr_batch, 'regime_input': regime_batch},
+                training=False
+            ).numpy().flatten()
+        else:
+            preds = model(
+                {'seq_input': seq_batch, 'regime_input': regime_batch},
+                training=False
+            ).numpy().flatten()
 
         prob = float(preds[h_idx])
         if prob >= cfg['prob_thresh']:
@@ -1256,7 +1363,7 @@ print(f"  Score: {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} PT | Entry: {ENTRY_MIN
 print(f"  Slippage: {2*SLIPPAGE_PCT:.2%} RT | Deploy threshold: >{BASE_PNL_THRESH:.1%}")
 print(f"{'='*W}")
 
-print(f"\n  Loading deploy configs from BQ (Hybrid F5+F6+F7)...")
+print(f"\n  Loading deploy configs from BQ (Hybrid F5+F6+F7+F8, 3 families)...")
 DEPLOY_CONFIGS, FAMILY_FOLD_CFGS = load_deploy_configs()
 DEPLOY_TICKERS = sorted(DEPLOY_CONFIGS.keys())
 
@@ -1284,6 +1391,7 @@ regime_df = compute_regime_features(market_df)
 # ==============================================================================
 print(f"\n  Phase 1: Scoring and simulating ALL {len(DEPLOY_TICKERS)} tickers...")
 all_trades = []
+_15m_cache = {}
 for ticker in DEPLOY_TICKERS:
     cfg = DEPLOY_CONFIGS[ticker]
     print(f"    {ticker} ({cfg['family']} F{cfg['fold']}, {cfg['mode']}, "
@@ -1292,7 +1400,13 @@ for ticker in DEPLOY_TICKERS:
     if df_feat is None:
         print(" SKIP (load failed)")
         continue
-    trades = score_and_backtest_ticker(ticker, cfg, df_feat, regime_df)
+    df_15m = None
+    is_mr = FAMILIES[cfg['family']].get('arch', 'standard') == 'multires'
+    if is_mr:
+        if ticker not in _15m_cache:
+            _15m_cache[ticker] = build_15min_features(df_feat)
+        df_15m = _15m_cache[ticker]
+    trades = score_and_backtest_ticker(ticker, cfg, df_feat, regime_df, df_15m=df_15m)
     if trades:
         n_filled = sum(1 for t in trades if t.get('Filled', True))
         n_nofill = len(trades) - n_filled
@@ -1574,7 +1688,7 @@ else:
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
     plt.tight_layout()
-    chart_path = '/tmp/backtest_st_short_prioritization.png'
+    chart_path = '/tmp/backtest_st_short_prioritization_9model.png'
     plt.savefig(chart_path, dpi=150, bbox_inches='tight')
     print(f"\n  Chart saved: {chart_path}")
     if _IN_COLAB:
@@ -1592,6 +1706,7 @@ else:
 
     multi_trades = []
     ticker_model_counts = {}
+    _15m_cache_p5 = {}
     for ticker in DEPLOY_TICKERS:
         available = ALL_MODEL_CONFIGS.get(ticker, [])
         if not available:
@@ -1601,7 +1716,13 @@ else:
             continue
         n_models_scored = 0
         for cfg in available:
-            trades = score_and_backtest_ticker(ticker, cfg, df_feat, regime_df)
+            df_15m = None
+            is_mr = FAMILIES[cfg['family']].get('arch', 'standard') == 'multires'
+            if is_mr:
+                if ticker not in _15m_cache_p5:
+                    _15m_cache_p5[ticker] = build_15min_features(df_feat)
+                df_15m = _15m_cache_p5[ticker]
+            trades = score_and_backtest_ticker(ticker, cfg, df_feat, regime_df, df_15m=df_15m)
             for t in trades:
                 t['Model_Source'] = f"{cfg['family']} F{cfg['fold']}"
             if trades:
@@ -1652,8 +1773,8 @@ else:
             elif method == 'best_val_b':
                 return max(candidates, key=lambda c: c['Val_B'])
             elif method == 'newest_fold':
-                fold_order = {'F7': 0, 'F6': 1, 'F5': 2}
-                family_order = {'L5-2': 0, 'L5-1': 1}
+                fold_order = {'F8': 0, 'F7': 1, 'F6': 2, 'F5': 3}
+                family_order = {'MR-v2': 0, 'L5-2': 1, 'L5-1': 2}
                 def fold_key(c):
                     src = c.get('Model_Source', c.get('Family', ''))
                     parts = src.split()
@@ -1732,8 +1853,50 @@ else:
             resolved.sort(key=lambda t: -t.get('Avg_Prob_Multi', t['Prob']))
             return resolved[:max_k]
 
+        OLD_FAMILIES = {'L5-1', 'L5-2'}
+        NEW_FAMILIES = {'MR-v2'}
+
+        def _filter_by_families(day_trades, families):
+            return [t for t in day_trades
+                    if t.get('Model_Source', '').split()[0] in families]
+
+        def select_consensus_6old(day_trades_multi, max_k, rng=None):
+            return select_multi_consensus(
+                _filter_by_families(day_trades_multi, OLD_FAMILIES), max_k, rng)
+
+        def select_consensus_3new(day_trades_multi, max_k, rng=None):
+            return select_multi_consensus(
+                _filter_by_families(day_trades_multi, NEW_FAMILIES), max_k, rng)
+
+        def select_consensus_5newest(day_trades_multi, max_k, rng=None):
+            newest_versions = {
+                ('L5-1', 'F7'), ('L5-2', 'F7'),
+                ('MR-v2', 'F6'), ('MR-v2', 'F7'), ('MR-v2', 'F8'),
+            }
+            def _is_newest(t):
+                parts = t.get('Model_Source', '').split()
+                return (parts[0], parts[1]) in newest_versions if len(parts) >= 2 else False
+            filtered = [t for t in day_trades_multi if _is_newest(t)]
+            return select_multi_consensus(filtered, max_k, rng)
+
+        def select_consensus_6newest(day_trades_multi, max_k, rng=None):
+            newest_6 = {
+                ('L5-1', 'F6'), ('L5-1', 'F7'),
+                ('L5-2', 'F6'), ('L5-2', 'F7'),
+                ('MR-v2', 'F7'), ('MR-v2', 'F8'),
+            }
+            def _is_in_6(t):
+                parts = t.get('Model_Source', '').split()
+                return (parts[0], parts[1]) in newest_6 if len(parts) >= 2 else False
+            filtered = [t for t in day_trades_multi if _is_in_6(t)]
+            return select_multi_consensus(filtered, max_k, rng)
+
         MULTI_STRATEGIES = {
             'M_CONSENSUS':    select_multi_consensus,
+            'M_CONS_6OLD':    select_consensus_6old,
+            'M_CONS_3NEW':    select_consensus_3new,
+            'M_CONS_6NEWEST': select_consensus_6newest,
+            'M_CONS_5NEWEST': select_consensus_5newest,
             'M_ENSEMBLE_AVG': select_multi_ensemble_avg,
             'M_MAX_PROB':     select_multi_max_prob,
             'M_NEWEST_FOLD':  select_multi_newest_fold,
@@ -1857,17 +2020,18 @@ else:
         # ==================================================================
         # PHASE 7: MAX_TRADES SWEEP (1-6) — TOP 5 STRATEGIES
         # ==================================================================
-        SWEEP_RANGE = range(1, 7)
+        SWEEP_RANGE = range(1, 10)
         TOP5_STRATS = {
             'M_CONSENSUS':    ('multi',  select_multi_consensus),
-            'M_MAX_PROB':     ('multi',  select_multi_max_prob),
-            'M_NEWEST_FOLD':  ('multi',  select_multi_newest_fold),
-            'M_ENSEMBLE_AVG': ('multi',  select_multi_ensemble_avg),
-            'EXPECTED_VAL':   ('single', select_expected_value),
+            'M_CONS_6NEWEST': ('multi',  select_consensus_6newest),
+            'M_CONS_5NEWEST': ('multi',  select_consensus_5newest),
+            'M_CONS_6OLD':    ('multi',  select_consensus_6old),
+            'M_CONS_3NEW':    ('multi',  select_consensus_3new),
+            'M_AGREEMENT':    ('multi',  select_multi_agreement),
         }
 
         print(f"\n\n{'='*W}")
-        print(f"  PHASE 7: MAX_TRADES SWEEP (1 → 6) — TOP 5 STRATEGIES")
+        print(f"  PHASE 7: MAX_TRADES SWEEP (1 → 9) — CONSENSUS VARIANTS + TOP")
         print(f"{'='*W}\n")
 
         sweep_results = {}
@@ -1973,16 +2137,17 @@ else:
 
         # Sweep chart
         fig3, axes3 = plt.subplots(2, 2, figsize=(20, 14))
-        fig3.suptitle(f'ST SHORT — MAX_TRADES Sweep (1→6) — Top 5 Strategies\n'
+        fig3.suptitle(f'ST SHORT — MAX_TRADES Sweep (1→9) — Consensus Variants\n'
                       f'{BACKTEST_START} → {BACKTEST_END}',
                       fontsize=13, fontweight='bold')
 
         sweep_colors = {
             'M_CONSENSUS': '#D81B60',
-            'M_MAX_PROB': '#1E88E5',
-            'M_NEWEST_FOLD': '#00ACC1',
-            'M_ENSEMBLE_AVG': '#8E24AA',
-            'EXPECTED_VAL': '#E65100',
+            'M_CONS_6NEWEST': '#8E24AA',
+            'M_CONS_5NEWEST': '#FF6F00',
+            'M_CONS_6OLD': '#1E88E5',
+            'M_CONS_3NEW': '#00ACC1',
+            'M_AGREEMENT': '#43A047',
         }
 
         ks = list(SWEEP_RANGE)
@@ -2037,7 +2202,7 @@ else:
         ax.invert_yaxis()
 
         plt.tight_layout()
-        chart3_path = '/tmp/backtest_st_short_prioritization_sweep.png'
+        chart3_path = '/tmp/backtest_st_short_prioritization_9model_sweep.png'
         plt.savefig(chart3_path, dpi=150, bbox_inches='tight')
         print(f"\n  Sweep chart saved: {chart3_path}")
         if _IN_COLAB:
@@ -2127,9 +2292,13 @@ else:
 
         multi_colors = {
             'M_CONSENSUS': '#D81B60',
-            'M_ENSEMBLE_AVG': '#8E24AA',
-            'M_MAX_PROB': '#1E88E5',
-            'M_NEWEST_FOLD': '#00ACC1',
+            'M_CONS_6OLD': '#1E88E5',
+            'M_CONS_3NEW': '#00ACC1',
+            'M_CONS_6NEWEST': '#8E24AA',
+            'M_CONS_5NEWEST': '#FF6F00',
+            'M_ENSEMBLE_AVG': '#FFB300',
+            'M_MAX_PROB': '#5C6BC0',
+            'M_NEWEST_FOLD': '#78909C',
             'M_AGREEMENT': '#43A047',
         }
         all_colors = {**colors_map, **multi_colors}
@@ -2208,7 +2377,7 @@ else:
         ax.grid(alpha=0.3)
 
         plt.tight_layout()
-        chart2_path = '/tmp/backtest_st_short_prioritization_combined.png'
+        chart2_path = '/tmp/backtest_st_short_prioritization_9model_combined.png'
         plt.savefig(chart2_path, dpi=150, bbox_inches='tight')
         print(f"\n  Combined chart saved: {chart2_path}")
         if _IN_COLAB:
@@ -2343,8 +2512,10 @@ else:
             'PROB_RAW': '#2E7D32', 'PROB_MARGIN': '#00838F',
             'EXPECTED_VAL': '#E65100', 'VAL_B_BEST': '#6A1B9A',
             'COMPOSITE': '#C62828', 'INVERSE_PROB': '#F9A825',
-            'M_CONSENSUS': '#D81B60', 'M_ENSEMBLE_AVG': '#8E24AA',
-            'M_MAX_PROB': '#1E88E5', 'M_NEWEST_FOLD': '#00ACC1',
+            'M_CONSENSUS': '#D81B60', 'M_CONS_6OLD': '#1E88E5',
+            'M_CONS_3NEW': '#00ACC1', 'M_CONS_6NEWEST': '#8E24AA',
+            'M_CONS_5NEWEST': '#FF6F00', 'M_ENSEMBLE_AVG': '#FFB300',
+            'M_MAX_PROB': '#5C6BC0', 'M_NEWEST_FOLD': '#78909C',
             'M_AGREEMENT': '#43A047',
         }
 
@@ -2432,12 +2603,1012 @@ else:
         ax.grid(alpha=0.3)
 
         plt.tight_layout()
-        chart_cu_path = '/tmp/backtest_st_short_capital_utilization.png'
+        chart_cu_path = '/tmp/backtest_st_short_capital_utilization_9model.png'
         plt.savefig(chart_cu_path, dpi=150, bbox_inches='tight')
         print(f"\n  Capital utilization chart saved: {chart_cu_path}")
         if _IN_COLAB:
             plt.show()
         plt.close()
+
+
+    # ==========================================================================
+    # PHASE 8b: DEPLOYED STRATEGY — EW vs ROAC HEAD-TO-HEAD
+    # Isolates M_AGREEMENT (deployed) and shows the exact impact of
+    # accounting for unfilled limit orders
+    # ==========================================================================
+    DEPLOYED_STRATEGY = 'M_AGREEMENT'
+    deploy_stats = (multi_strategy_results.get(DEPLOYED_STRATEGY, {})
+                    if multi_trades else strategy_results.get(DEPLOYED_STRATEGY, {}))
+    deploy_daily = (multi_strategy_daily.get(DEPLOYED_STRATEGY, [])
+                    if multi_trades else strategy_daily.get(DEPLOYED_STRATEGY, []))
+
+    if deploy_stats and deploy_daily:
+        print(f"\n\n{'='*W}")
+        print(f"  PHASE 8b: DEPLOYED STRATEGY HEAD-TO-HEAD — {DEPLOYED_STRATEGY}")
+        print(f"  EW (ignoring unfilled orders) vs ROAC (penalizing unfilled slots)")
+        print(f"{'='*W}\n")
+
+        ds = deploy_stats
+        cum_ew = ds.get('cum_ew', 0)
+        cum_roac = ds.get('cum_roac', cum_ew)
+        avg_ew = ds.get('avg_daily', 0)
+        avg_roac = ds.get('avg_daily_roac', avg_ew)
+        sh_ew = ds.get('sharpe', 0)
+        sh_roac = ds.get('sharpe_roac', sh_ew)
+        cap_util = ds.get('cap_util', 1.0)
+        total_t = ds.get('total_trades', 0)
+        total_f = ds.get('total_filled', total_t)
+        drag_cum = cum_ew - cum_roac
+        drag_avg = avg_ew - avg_roac
+        drag_sh = sh_ew - sh_roac
+
+        print(f"  {'Metric':<22} {'EW (filled only)':>18} {'ROAC (capital-adj)':>20} {'Drag':>10}")
+        print(f"  {'─'*75}")
+        print(f"  {'Cumulative PnL':<22} {cum_ew:>+17.2%} {cum_roac:>+19.2%} {drag_cum:>+9.2%}")
+        print(f"  {'Avg Daily PnL':<22} {avg_ew:>+17.2%} {avg_roac:>+19.2%} {drag_avg:>+9.2%}")
+        print(f"  {'Sharpe Ratio':<22} {sh_ew:>17.1f} {sh_roac:>19.1f} {drag_sh:>+9.1f}")
+        print(f"  {'Trades':<22} {total_f:>17.0f} {total_t:>19.0f}")
+        print(f"  {'Capital Utilization':<22} {'':>17} {cap_util:>18.0%}")
+
+        if drag_cum > 0:
+            pct_overstated = (drag_cum / cum_roac * 100) if cum_roac != 0 else 0
+            print(f"\n  EW overstates cumulative returns by {drag_cum:+.2%} "
+                  f"({pct_overstated:.1f}% relative)")
+        else:
+            print(f"\n  No overstatement — all trades filled.")
+
+        print(f"\n  Per-Day Breakdown:")
+        print(f"    {'Date':<12} {'Selected':>8} {'Filled':>7} {'Unfilled':>8} "
+              f"{'EW':>9} {'ROAC':>9} {'Drag':>8} {'Tickers'}")
+        print(f"    {'─'*100}")
+
+        for d in deploy_daily:
+            n_sel = d['N']
+            n_filled = d.get('N_Filled', n_sel)
+            n_unfilled = n_sel - n_filled
+            ew_val = d['EW']
+            roac_val = d.get('ROAC', ew_val)
+            drag_d = ew_val - roac_val
+            tickers = ', '.join(d.get('Tickers', []))
+            nf_marker = ' **' if n_unfilled > 0 else ''
+            print(f"    {d['Date']:<12} {n_sel:>8.0f} {n_filled:>7.0f} {n_unfilled:>8.0f} "
+                  f"{ew_val:>+8.2%} {roac_val:>+8.2%} {drag_d:>+7.2%} "
+                  f"{tickers}{nf_marker}")
+
+        nf_days = sum(1 for d in deploy_daily
+                      if d.get('N_Filled', d['N']) < d['N'])
+        total_days_deploy = len(deploy_daily)
+        print(f"\n  ** = day with unfilled limit orders "
+              f"({nf_days}/{total_days_deploy} days affected)")
+
+        # Mini equity curve chart
+        fig8b, ax8b = plt.subplots(1, 1, figsize=(14, 6))
+        dates_dt = pd.to_datetime([d['Date'] for d in deploy_daily])
+        cum_ew_arr = np.cumsum([d['EW'] for d in deploy_daily]) * 100
+        cum_roac_arr = np.cumsum([d.get('ROAC', d['EW']) for d in deploy_daily]) * 100
+
+        ax8b.fill_between(dates_dt, cum_roac_arr, cum_ew_arr,
+                          alpha=0.2, color='#C62828', label='Drag (unfilled capital)')
+        ax8b.plot(dates_dt, cum_ew_arr, 'o-', color='#2E7D32', linewidth=2.5,
+                  markersize=7, label=f'EW (filled only): {cum_ew:+.2%}')
+        ax8b.plot(dates_dt, cum_roac_arr, 's--', color='#1565C0', linewidth=2.5,
+                  markersize=7, label=f'ROAC (capital-adjusted): {cum_roac:+.2%}')
+
+        for i, d in enumerate(deploy_daily):
+            if d.get('N_Filled', d['N']) < d['N']:
+                ax8b.axvline(dates_dt[i], color='#C62828', alpha=0.15, linewidth=8)
+
+        ax8b.axhline(0, color='black', linewidth=0.8)
+        ax8b.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+        ax8b.set_ylabel('Cumulative PnL (%)')
+        ax8b.set_title(f'{DEPLOYED_STRATEGY} — EW vs ROAC Equity Curve\n'
+                       f'Red shading = capital drag from unfilled limit orders | '
+                       f'Red bars = days with unfills',
+                       fontsize=11)
+        ax8b.legend(fontsize=10, loc='upper left')
+        ax8b.grid(alpha=0.3)
+        plt.setp(ax8b.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+        plt.tight_layout()
+        chart8b_path = '/tmp/backtest_st_short_deploy_ew_vs_roac_9model.png'
+        plt.savefig(chart8b_path, dpi=150, bbox_inches='tight')
+        print(f"\n  Deploy EW vs ROAC chart saved: {chart8b_path}")
+        if _IN_COLAB:
+            plt.show()
+        plt.close()
+
+
+    # ==========================================================================
+    # PHASE 9: MODE OVERRIDE ANALYSIS
+    # For each limit_entry ticker, simulate static entry with same TP/SL
+    # and compare ROAC to determine if limit_entry is actually optimal
+    # ==========================================================================
+    limit_tickers_phase9 = {tk: cfg for tk, cfg in DEPLOY_CONFIGS.items()
+                            if cfg['mode'] == 'limit_entry'}
+
+    if limit_tickers_phase9:
+        print(f"\n\n{'='*W}")
+        print(f"  PHASE 9: MODE OVERRIDE ANALYSIS")
+        print(f"  For each limit_entry ticker: simulate static entry with same TP/SL")
+        print(f"  Question: would switching to static improve ROAC?")
+        print(f"{'='*W}\n")
+
+        print(f"  Re-simulating {len(limit_tickers_phase9)} limit_entry tickers "
+              f"with static override...\n")
+
+        mode_comparison = []
+
+        for ticker in sorted(limit_tickers_phase9.keys()):
+            cfg_limit = limit_tickers_phase9[ticker]
+            cfg_static = dict(cfg_limit)
+            cfg_static['mode'] = 'static'
+            cfg_static['dip_pct'] = 0
+            cfg_static['max_wait'] = 0
+
+            df_feat = engineer_asset(ticker, market_df)
+            if df_feat is None:
+                print(f"    {ticker}: SKIP (load failed)")
+                continue
+
+            family = cfg_limit['family']
+            fold_id = cfg_limit['fold']
+            is_mr = FAMILIES[family].get('arch', 'standard') == 'multires'
+            _ensure_fold_loaded(family, fold_id)
+
+            scaling_stats = _family_meta[family]['scaling_stats']
+            regime_stats_local = _family_meta[family]['regime_stats']
+            df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
+
+            df_15m_scaled = None
+            if is_mr:
+                df_15m = build_15min_features(df_feat)
+                scaling_stats_15m = _family_meta[family].get('scaling_stats_15m')
+                if scaling_stats_15m:
+                    df_15m_scaled = apply_scaling(df_15m, scaling_stats_15m, LOWRES_COLS)
+                else:
+                    df_15m_scaled = df_15m.copy()
+
+            bt_start = pd.Timestamp(BACKTEST_START, tz='UTC')
+            bt_end = pd.Timestamp(BACKTEST_END, tz='UTC') + pd.Timedelta(days=1)
+
+            score_bars = []
+            for i in range(TIME_STEPS, len(df_feat)):
+                ts = df_feat.index[i]
+                if ts < bt_start or ts >= bt_end:
+                    continue
+                bar_pst = ts.tz_convert(PST)
+                bar_min = bar_pst.hour * 60 + bar_pst.minute
+                if bar_min != SCORE_MINUTE:
+                    continue
+                if 'Volume' in df_feat.columns and float(df_feat['Volume'].iloc[i]) == 0:
+                    continue
+                score_bars.append(i)
+
+            if not score_bars:
+                print(f"    {ticker}: no score bars")
+                continue
+
+            XA = df_scaled[ALL_COLS].values.astype(np.float32)
+            if is_mr:
+                XL = df_15m_scaled[LOWRES_COLS].values.astype(np.float32)
+            h_idx = cfg_limit['horizon']
+            signal_dates = []
+            model = _get_model_for_family(family)
+
+            for row_idx in score_bars:
+                seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
+                regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
+                    [df_feat.index[row_idx]], method='pad')[0]]
+                regime_scaled = np.zeros(N_REGIME_F, dtype=np.float32)
+                for ri, col in enumerate(REGIME_COLS):
+                    val = float(regime_at_entry[col]) if col in regime_at_entry.index else 0.0
+                    if col in regime_stats_local:
+                        s = regime_stats_local[col]
+                        val = np.clip((val - s['med']) / s['iqr'], -10, 10)
+                    regime_scaled[ri] = val
+                regime_batch = regime_scaled[np.newaxis]
+
+                inputs = {'seq_input': seq_batch, 'regime_input': regime_batch}
+                if is_mr:
+                    ts_1m = df_feat.index[row_idx]
+                    lr_idx = df_15m_scaled.index.get_indexer([ts_1m], method='pad')[0]
+                    lr_start = max(0, lr_idx - TIME_STEPS_15M + 1)
+                    lr_slice = XL[lr_start:lr_idx + 1]
+                    if len(lr_slice) < TIME_STEPS_15M:
+                        pad = np.zeros((TIME_STEPS_15M - len(lr_slice), N_LOWRES_F), dtype=np.float32)
+                        lr_slice = np.concatenate([pad, lr_slice], axis=0)
+                    inputs['seq_15m_input'] = lr_slice[np.newaxis]
+
+                preds = model(inputs, training=False).numpy().flatten()
+
+                prob = float(preds[h_idx])
+                if prob >= cfg_limit['prob_thresh']:
+                    bar_pst_local = df_feat.index[row_idx].tz_convert(PST)
+                    date_int = bar_pst_local.year * 10000 + bar_pst_local.month * 100 + bar_pst_local.day
+                    signal_dates.append((row_idx, date_int, prob))
+
+            if not signal_dates:
+                print(f"    {ticker}: no signals above threshold")
+                continue
+
+            df_bt = df_feat[(df_feat.index >= bt_start) & (df_feat.index < bt_end)].copy()
+            df_bt_pst = df_bt.index.tz_convert(PST)
+
+            ohlcv = {
+                'prices': df_bt['Close'].values.copy(),
+                'highs': df_bt['High'].values.copy(),
+                'lows': df_bt['Low'].values.copy(),
+                'dates': (df_bt_pst.year * 10000 + df_bt_pst.month * 100 + df_bt_pst.day).values.astype(np.int64),
+                'times': (df_bt_pst.hour * 60 + df_bt_pst.minute).values,
+            }
+
+            entry_indices = []
+            for row_idx, date_int, prob in signal_dates:
+                for j in range(len(df_bt)):
+                    bt_pst_j = df_bt_pst[j]
+                    bt_date_int = bt_pst_j.year * 10000 + bt_pst_j.month * 100 + bt_pst_j.day
+                    bt_min = bt_pst_j.hour * 60 + bt_pst_j.minute
+                    if bt_date_int == date_int and bt_min == ENTRY_MINUTE:
+                        entry_indices.append(j)
+                        break
+
+            if not entry_indices:
+                print(f"    {ticker}: no entry bars found")
+                continue
+
+            n_signals = len(entry_indices)
+            idx_arr = np.array(entry_indices, dtype=np.int64)
+
+            pnl_lim, dates_lim, _, _, outcomes_lim, filled_lim = _run_sim(
+                idx_arr, ohlcv, cfg_limit, include_nofills=True)
+
+            pnl_sta, dates_sta, _, _, outcomes_sta, filled_sta = _run_sim(
+                idx_arr, ohlcv, cfg_static, include_nofills=False)
+
+            n_filled_lim = int(np.sum(filled_lim)) if len(filled_lim) > 0 else 0
+            n_filled_sta = int(np.sum(filled_sta)) if len(filled_sta) > 0 else n_signals
+
+            fill_rate_lim = n_filled_lim / n_signals if n_signals > 0 else 0
+            fill_rate_sta = 1.0
+
+            filled_pnl_lim = pnl_lim[filled_lim == 1] if len(filled_lim) > 0 else pnl_lim
+            avg_pnl_lim = float(np.mean(filled_pnl_lim)) if len(filled_pnl_lim) > 0 else 0
+            avg_pnl_sta = float(np.mean(pnl_sta)) if len(pnl_sta) > 0 else 0
+
+            total_pnl_lim = float(np.sum(pnl_lim))
+            total_pnl_sta = float(np.sum(pnl_sta))
+
+            roac_lim = total_pnl_lim / n_signals if n_signals > 0 else 0
+            roac_sta = total_pnl_sta / n_signals if n_signals > 0 else 0
+
+            winner = 'STATIC' if roac_sta > roac_lim else 'LIMIT'
+            delta_roac = roac_sta - roac_lim
+
+            alt_cfgs = []
+            for (fam_name, fld), cfgs_dict in FAMILY_FOLD_CFGS.items():
+                if ticker in cfgs_dict:
+                    alt_cfg = cfgs_dict[ticker]
+                    if alt_cfg['mode'] != 'limit_entry':
+                        alt_cfgs.append(alt_cfg)
+
+            mode_comparison.append({
+                'Ticker': ticker,
+                'Family': f"{cfg_limit['family']} F{cfg_limit['fold']}",
+                'Signals': n_signals,
+                'Lim_Filled': n_filled_lim,
+                'Lim_FillRate': fill_rate_lim,
+                'Lim_AvgPnL': avg_pnl_lim,
+                'Lim_TotalPnL': total_pnl_lim,
+                'Lim_ROAC': roac_lim,
+                'Sta_Filled': n_filled_sta,
+                'Sta_AvgPnL': avg_pnl_sta,
+                'Sta_TotalPnL': total_pnl_sta,
+                'Sta_ROAC': roac_sta,
+                'Winner': winner,
+                'Delta_ROAC': delta_roac,
+                'TP': cfg_limit['tp_pct'],
+                'SL': cfg_limit['sl_pct'],
+                'Dip': cfg_limit.get('dip_pct', 0),
+                'MaxWait': cfg_limit.get('max_wait', 0),
+                'Alt_NonLimit_Cfgs': len(alt_cfgs),
+            })
+
+            print(f"    {ticker} ({cfg_limit['family']} F{cfg_limit['fold']}): "
+                  f"{n_signals} signals | "
+                  f"LIMIT: {n_filled_lim}/{n_signals} filled ({fill_rate_lim:.0%}), "
+                  f"avg={avg_pnl_lim:+.2%}, ROAC={roac_lim:+.2%} | "
+                  f"STATIC: {n_filled_sta}/{n_signals}, "
+                  f"avg={avg_pnl_sta:+.2%}, ROAC={roac_sta:+.2%} | "
+                  f"-> {winner} ({delta_roac:+.2%})")
+
+            _master_cache.pop((ticker, TAIL_DAYS), None)
+
+        _master_cache.clear()
+
+        if mode_comparison:
+            df_mc = pd.DataFrame(mode_comparison)
+
+            print(f"\n\n  {'─'*W}")
+            print(f"  MODE OVERRIDE SUMMARY — Limit Entry vs Static (same TP/SL)")
+            print(f"  {'─'*W}\n")
+            print(f"    {'Ticker':<7} {'Source':<10} {'Sig':>4} "
+                  f"{'L.Fill':>6} {'L.Rate':>6} {'L.AvgPnL':>9} {'L.ROAC':>8} "
+                  f"{'S.AvgPnL':>9} {'S.ROAC':>8} "
+                  f"{'Winner':>7} {'ΔROAC':>8} {'Dip%':>6} {'Wait':>5}")
+            print(f"    {'─'*110}")
+
+            for _, row in df_mc.sort_values('Delta_ROAC', ascending=False).iterrows():
+                print(f"    {row['Ticker']:<7} {row['Family']:<10} {row['Signals']:>4} "
+                      f"{row['Lim_Filled']:>4}/{row['Signals']:<1} {row['Lim_FillRate']:>5.0%} "
+                      f"{row['Lim_AvgPnL']:>+8.2%} {row['Lim_ROAC']:>+7.2%} "
+                      f"{row['Sta_AvgPnL']:>+8.2%} {row['Sta_ROAC']:>+7.2%} "
+                      f"{row['Winner']:>7} {row['Delta_ROAC']:>+7.2%} "
+                      f"{row['Dip']:>5.1%} {row['MaxWait']:>4}m")
+
+            n_static_wins = (df_mc['Winner'] == 'STATIC').sum()
+            n_limit_wins = (df_mc['Winner'] == 'LIMIT').sum()
+            avg_delta = df_mc['Delta_ROAC'].mean()
+            override_tickers = df_mc[df_mc['Winner'] == 'STATIC']['Ticker'].tolist()
+
+            print(f"\n  Results: STATIC wins {n_static_wins}/{len(df_mc)}, "
+                  f"LIMIT wins {n_limit_wins}/{len(df_mc)}")
+            print(f"  Avg ΔROAC (static - limit): {avg_delta:+.2%}")
+
+            if override_tickers:
+                print(f"\n  RECOMMENDED OVERRIDES (switch to static):")
+                for tk in override_tickers:
+                    row = df_mc[df_mc['Ticker'] == tk].iloc[0]
+                    print(f"    {tk}: ROAC {row['Lim_ROAC']:+.2%} -> {row['Sta_ROAC']:+.2%} "
+                          f"({row['Delta_ROAC']:+.2%}), "
+                          f"fill rate was {row['Lim_FillRate']:.0%}")
+            else:
+                print(f"\n  No overrides recommended — limit_entry wins for all tickers.")
+
+            still_limit = df_mc[df_mc['Winner'] == 'LIMIT']
+            if len(still_limit) > 0:
+                print(f"\n  KEEP LIMIT ENTRY:")
+                for _, row in still_limit.iterrows():
+                    print(f"    {row['Ticker']}: limit ROAC {row['Lim_ROAC']:+.2%} > "
+                          f"static ROAC {row['Sta_ROAC']:+.2%} "
+                          f"(fill rate {row['Lim_FillRate']:.0%}, "
+                          f"but filled PnL {row['Lim_AvgPnL']:+.2%} compensates)")
+
+            # Portfolio impact: what if we override all STATIC-winning tickers?
+            if override_tickers:
+                orig_limit_pnl = df_mc['Lim_TotalPnL'].sum()
+                override_pnl = 0.0
+                for _, row in df_mc.iterrows():
+                    if row['Winner'] == 'STATIC':
+                        override_pnl += row['Sta_TotalPnL']
+                    else:
+                        override_pnl += row['Lim_TotalPnL']
+
+                total_sigs = df_mc['Signals'].sum()
+                orig_roac = orig_limit_pnl / total_sigs if total_sigs > 0 else 0
+                new_roac = override_pnl / total_sigs if total_sigs > 0 else 0
+
+                print(f"\n  PORTFOLIO IMPACT (limit_entry tickers only):")
+                print(f"    Original (all limit):  Total PnL {orig_limit_pnl:+.2%}, "
+                      f"ROAC {orig_roac:+.2%} across {total_sigs} signal-days")
+                print(f"    With overrides:        Total PnL {override_pnl:+.2%}, "
+                      f"ROAC {new_roac:+.2%} across {total_sigs} signal-days")
+                print(f"    Delta:                 {override_pnl - orig_limit_pnl:+.2%} total, "
+                      f"{new_roac - orig_roac:+.2%} ROAC")
+
+            # Chart: per-ticker ROAC comparison
+            fig9, axes9 = plt.subplots(1, 2, figsize=(18, 8))
+            fig9.suptitle(f'ST SHORT — Mode Override Analysis: Limit Entry vs Static\n'
+                          f'{BACKTEST_START} -> {BACKTEST_END}',
+                          fontsize=13, fontweight='bold')
+
+            ax = axes9[0]
+            tickers_sorted = df_mc.sort_values('Delta_ROAC', ascending=True)['Ticker'].values
+            y_pos = np.arange(len(tickers_sorted))
+            roac_lim_vals = [float(df_mc[df_mc['Ticker']==tk]['Lim_ROAC'].iloc[0]) * 100
+                             for tk in tickers_sorted]
+            roac_sta_vals = [float(df_mc[df_mc['Ticker']==tk]['Sta_ROAC'].iloc[0]) * 100
+                             for tk in tickers_sorted]
+
+            bar_h = 0.35
+            bars1 = ax.barh(y_pos - bar_h/2, roac_lim_vals, bar_h,
+                           label='Limit Entry ROAC', color='#E65100', alpha=0.8)
+            bars2 = ax.barh(y_pos + bar_h/2, roac_sta_vals, bar_h,
+                           label='Static ROAC', color='#1565C0', alpha=0.8)
+
+            for i, tk in enumerate(tickers_sorted):
+                row = df_mc[df_mc['Ticker'] == tk].iloc[0]
+                winner_marker = ' *' if row['Winner'] == 'STATIC' else ''
+                fill_str = f" ({row['Lim_FillRate']:.0%})"
+                ax.annotate(f"{tk}{fill_str}{winner_marker}",
+                           xy=(0, y_pos[i]), fontsize=7,
+                           va='center', ha='right',
+                           xytext=(-5, 0), textcoords='offset points')
+
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels([''] * len(tickers_sorted))
+            ax.set_xlabel('ROAC per signal-day (%)')
+            ax.set_title('ROAC: Limit Entry vs Static Override\n(* = static wins, % = limit fill rate)')
+            ax.legend(fontsize=8, loc='lower right')
+            ax.axvline(0, color='black', linewidth=0.8)
+            ax.grid(axis='x', alpha=0.3)
+
+            ax = axes9[1]
+            fill_rates = df_mc['Lim_FillRate'].values * 100
+            delta_roacs = df_mc['Delta_ROAC'].values * 100
+            colors9 = ['#1565C0' if w == 'STATIC' else '#E65100'
+                       for w in df_mc['Winner'].values]
+            ax.scatter(fill_rates, delta_roacs, c=colors9, s=80, alpha=0.8, zorder=5)
+            for _, row in df_mc.iterrows():
+                ax.annotate(row['Ticker'],
+                           (row['Lim_FillRate'] * 100, row['Delta_ROAC'] * 100),
+                           fontsize=7, xytext=(4, 4), textcoords='offset points')
+            ax.axhline(0, color='black', linewidth=1, linestyle='--')
+            ax.set_xlabel('Limit Entry Fill Rate (%)')
+            ax.set_ylabel('ΔROAC: Static minus Limit (%)')
+            ax.set_title('Fill Rate vs Mode Override Benefit\n'
+                         '(blue = switch to static, orange = keep limit)')
+            ax.grid(alpha=0.3)
+
+            plt.tight_layout()
+            chart9_path = '/tmp/backtest_st_short_mode_override_9model.png'
+            plt.savefig(chart9_path, dpi=150, bbox_inches='tight')
+            print(f"\n  Mode override chart saved: {chart9_path}")
+            if _IN_COLAB:
+                plt.show()
+            plt.close()
+    else:
+        print(f"\n  Phase 9 skipped — no limit_entry tickers in deploy configs.")
+
+
+    # ==========================================================================
+    # PHASE 10: MODEL OVERLAP / SIGNAL AGREEMENT ANALYSIS
+    # ==========================================================================
+    if multi_trades:
+        print(f"\n\n{'='*W}")
+        print(f"  PHASE 10: MODEL OVERLAP & SIGNAL AGREEMENT")
+        print(f"  Analyzing signal overlap across all 9 models")
+        print(f"{'='*W}")
+
+        df_overlap = pd.DataFrame(multi_trades)
+        model_names = sorted(df_overlap['Model_Source'].unique())
+        n_models_total = len(model_names)
+        print(f"\n  Models found: {n_models_total}")
+        for mn in model_names:
+            cnt = len(df_overlap[df_overlap['Model_Source'] == mn])
+            print(f"    {mn}: {cnt} signals")
+
+        model_signal_sets = {}
+        model_prob_maps = {}
+        for mn in model_names:
+            sub = df_overlap[df_overlap['Model_Source'] == mn]
+            sig_keys = set(zip(sub['Ticker'], sub['Date']))
+            model_signal_sets[mn] = sig_keys
+            model_prob_maps[mn] = {(r['Ticker'], r['Date']): r['Prob']
+                                   for _, r in sub.iterrows()}
+
+        print(f"\n  --- Pairwise Jaccard Similarity (signals as ticker-date pairs) ---")
+        jaccard_matrix = np.zeros((n_models_total, n_models_total))
+        for i, m1 in enumerate(model_names):
+            for j, m2 in enumerate(model_names):
+                s1, s2 = model_signal_sets[m1], model_signal_sets[m2]
+                union = len(s1 | s2)
+                inter = len(s1 & s2)
+                jaccard_matrix[i, j] = inter / union if union > 0 else 0.0
+
+        header = f"{'':>12s}" + ''.join(f"  {mn:>10s}" for mn in model_names)
+        print(f"  {header}")
+        for i, mn in enumerate(model_names):
+            row_str = f"  {mn:>12s}"
+            for j in range(n_models_total):
+                row_str += f"  {jaccard_matrix[i,j]:>10.3f}"
+            print(row_str)
+
+        off_diag = []
+        for i in range(n_models_total):
+            for j in range(i + 1, n_models_total):
+                off_diag.append(jaccard_matrix[i, j])
+        print(f"\n  Avg pairwise Jaccard: {np.mean(off_diag):.3f} "
+              f"(min={np.min(off_diag):.3f}, max={np.max(off_diag):.3f})")
+
+        print(f"\n  --- Pairwise Prob Correlation (where both models fire) ---")
+        corr_matrix = np.full((n_models_total, n_models_total), np.nan)
+        for i, m1 in enumerate(model_names):
+            for j, m2 in enumerate(model_names):
+                if i == j:
+                    corr_matrix[i, j] = 1.0
+                    continue
+                common = model_signal_sets[m1] & model_signal_sets[m2]
+                if len(common) < 5:
+                    continue
+                p1 = [model_prob_maps[m1][k] for k in common]
+                p2 = [model_prob_maps[m2][k] for k in common]
+                corr_matrix[i, j] = float(np.corrcoef(p1, p2)[0, 1])
+
+        header2 = f"{'':>12s}" + ''.join(f"  {mn:>10s}" for mn in model_names)
+        print(f"  {header2}")
+        for i, mn in enumerate(model_names):
+            row_str = f"  {mn:>12s}"
+            for j in range(n_models_total):
+                v = corr_matrix[i, j]
+                row_str += f"  {v:>10.3f}" if not np.isnan(v) else f"  {'N/A':>10s}"
+            print(row_str)
+
+        off_corr = [corr_matrix[i, j] for i in range(n_models_total)
+                     for j in range(i + 1, n_models_total)
+                     if not np.isnan(corr_matrix[i, j])]
+        if off_corr:
+            print(f"\n  Avg pairwise prob correlation: {np.mean(off_corr):.3f} "
+                  f"(min={np.min(off_corr):.3f}, max={np.max(off_corr):.3f})")
+
+        print(f"\n  --- Family-Level Overlap ---")
+        family_sets = {}
+        for mn in model_names:
+            fam = mn.split()[0]
+            if fam not in family_sets:
+                family_sets[fam] = set()
+            family_sets[fam] |= model_signal_sets[mn]
+        fam_names = sorted(family_sets.keys())
+        for i, f1 in enumerate(fam_names):
+            for j, f2 in enumerate(fam_names):
+                if j <= i:
+                    continue
+                s1, s2 = family_sets[f1], family_sets[f2]
+                union = len(s1 | s2)
+                inter = len(s1 & s2)
+                jacc = inter / union if union > 0 else 0
+                only1 = len(s1 - s2)
+                only2 = len(s2 - s1)
+                print(f"    {f1} vs {f2}: Jaccard={jacc:.3f}, "
+                      f"overlap={inter}, {f1}-only={only1}, {f2}-only={only2}")
+
+        print(f"\n  --- Signal Breadth Distribution ---")
+        signal_keys_all = set()
+        for s in model_signal_sets.values():
+            signal_keys_all |= s
+        breadth_counts = {}
+        for key in signal_keys_all:
+            n = sum(1 for mn in model_names if key in model_signal_sets[mn])
+            breadth_counts[n] = breadth_counts.get(n, 0) + 1
+        total_uniq = len(signal_keys_all)
+        for n_agree in sorted(breadth_counts.keys()):
+            cnt = breadth_counts[n_agree]
+            pct = cnt / total_uniq * 100
+            print(f"    {n_agree} model(s) agree: {cnt} signals ({pct:.1f}%)")
+
+        solo_signals = [k for k in signal_keys_all
+                        if sum(1 for mn in model_names if k in model_signal_sets[mn]) == 1]
+        if solo_signals:
+            solo_by_model = defaultdict(int)
+            for k in solo_signals:
+                for mn in model_names:
+                    if k in model_signal_sets[mn]:
+                        solo_by_model[mn] += 1
+            print(f"\n  Unique-only signals by model:")
+            for mn in model_names:
+                if mn in solo_by_model:
+                    print(f"    {mn}: {solo_by_model[mn]} unique signals")
+
+        fig10, axes10 = plt.subplots(1, 3, figsize=(22, 7))
+
+        ax = axes10[0]
+        mask = np.zeros_like(jaccard_matrix, dtype=bool)
+        im = ax.imshow(jaccard_matrix, cmap='YlOrRd', vmin=0, vmax=1, aspect='auto')
+        ax.set_xticks(range(n_models_total))
+        ax.set_xticklabels(model_names, rotation=45, ha='right', fontsize=8)
+        ax.set_yticks(range(n_models_total))
+        ax.set_yticklabels(model_names, fontsize=8)
+        for i in range(n_models_total):
+            for j in range(n_models_total):
+                ax.text(j, i, f"{jaccard_matrix[i,j]:.2f}",
+                        ha='center', va='center', fontsize=7,
+                        color='white' if jaccard_matrix[i,j] > 0.5 else 'black')
+        plt.colorbar(im, ax=ax, shrink=0.8)
+        ax.set_title('Jaccard Similarity\n(signal overlap)')
+
+        ax = axes10[1]
+        corr_plot = np.where(np.isnan(corr_matrix), 0, corr_matrix)
+        im2 = ax.imshow(corr_plot, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+        ax.set_xticks(range(n_models_total))
+        ax.set_xticklabels(model_names, rotation=45, ha='right', fontsize=8)
+        ax.set_yticks(range(n_models_total))
+        ax.set_yticklabels(model_names, fontsize=8)
+        for i in range(n_models_total):
+            for j in range(n_models_total):
+                v = corr_matrix[i, j]
+                txt = f"{v:.2f}" if not np.isnan(v) else "N/A"
+                ax.text(j, i, txt, ha='center', va='center', fontsize=7,
+                        color='white' if abs(corr_plot[i,j]) > 0.5 else 'black')
+        plt.colorbar(im2, ax=ax, shrink=0.8)
+        ax.set_title('Probability Correlation\n(where both fire)')
+
+        ax = axes10[2]
+        breadth_x = sorted(breadth_counts.keys())
+        breadth_y = [breadth_counts[x] for x in breadth_x]
+        bars = ax.bar(breadth_x, breadth_y, color='#1565C0', alpha=0.8,
+                      edgecolor='white', linewidth=0.5)
+        for bar, cnt in zip(bars, breadth_y):
+            pct = cnt / total_uniq * 100
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                    f"{cnt}\n({pct:.0f}%)", ha='center', va='bottom', fontsize=8)
+        ax.set_xlabel('Number of Models Agreeing')
+        ax.set_ylabel('Number of Signals')
+        ax.set_title(f'Signal Breadth Distribution\n({total_uniq} unique ticker-day signals)')
+        ax.set_xticks(breadth_x)
+        ax.grid(axis='y', alpha=0.3)
+
+        plt.suptitle('Phase 10: Model Overlap & Signal Agreement (9 Models)', fontsize=14, y=1.02)
+        plt.tight_layout()
+        chart10_path = '/tmp/backtest_st_short_model_overlap.png'
+        plt.savefig(chart10_path, dpi=150, bbox_inches='tight')
+        print(f"\n  Overlap chart saved: {chart10_path}")
+        if _IN_COLAB:
+            plt.show()
+        plt.close()
+    else:
+        print(f"\n  Phase 10 skipped — no multi_trades data available.")
+
+
+    # ==========================================================================
+    # PHASE 11: PER-MODEL TEMPORAL DEGRADATION ANALYSIS
+    # Do newer folds (F7, F8) outperform older folds (F5, F6)?
+    # Does each model degrade over the backtest window?
+    # ==========================================================================
+    if multi_trades:
+        print(f"\n\n{'='*W}")
+        print(f"  PHASE 11: MODEL TEMPORAL DEGRADATION ANALYSIS")
+        print(f"  Does training on more recent data produce better models?")
+        print(f"  Does each model degrade over the backtest window?")
+        print(f"{'='*W}")
+
+        df_temporal = pd.DataFrame(multi_trades)
+        df_temporal['Date_dt'] = pd.to_datetime(df_temporal['Date'])
+        df_temporal_filled = df_temporal[df_temporal['Filled'] == True].copy() if 'Filled' in df_temporal.columns else df_temporal.copy()
+
+        model_names_t = sorted(df_temporal_filled['Model_Source'].unique())
+
+        # --- 11a: Per-model aggregate stats ---
+        print(f"\n  --- 11a: Per-Model Aggregate Performance ---\n")
+        print(f"  {'Model':<14} {'Signals':>8} {'Filled':>7} {'AvgPnL':>8} {'WinRate':>8} "
+              f"{'CumPnL':>8} {'Sharpe':>7} {'AvgProb':>8} {'Tickers':>8}")
+        print(f"  {'─'*90}")
+
+        model_agg = {}
+        for mn in model_names_t:
+            sub = df_temporal[df_temporal['Model_Source'] == mn]
+            sub_f = df_temporal_filled[df_temporal_filled['Model_Source'] == mn]
+            n_total = len(sub)
+            n_filled = len(sub_f)
+            if n_filled == 0:
+                model_agg[mn] = {'avg_pnl': 0, 'cum_pnl': 0, 'win_rate': 0,
+                                 'sharpe': 0, 'n_filled': 0, 'n_total': 0}
+                continue
+            pnls = sub_f['PnL'].values
+            avg_pnl = float(np.mean(pnls))
+            cum_pnl = float(np.sum(pnls))
+            win_rate = float(np.mean(pnls > 0))
+            std_pnl = float(np.std(pnls)) if len(pnls) > 1 else 0
+            sharpe = (avg_pnl / std_pnl * np.sqrt(252)) if std_pnl > 0 else 0
+            avg_prob = float(sub_f['Prob'].mean())
+            n_tickers = sub_f['Ticker'].nunique()
+
+            parts = mn.split()
+            family = parts[0] if parts else ''
+            fold = int(parts[1].replace('F', '')) if len(parts) > 1 else 0
+
+            model_agg[mn] = {
+                'avg_pnl': avg_pnl, 'cum_pnl': cum_pnl, 'win_rate': win_rate,
+                'sharpe': sharpe, 'n_filled': n_filled, 'n_total': n_total,
+                'avg_prob': avg_prob, 'n_tickers': n_tickers,
+                'family': family, 'fold': fold,
+            }
+            print(f"  {mn:<14} {n_total:>8} {n_filled:>7} {avg_pnl:>+7.2%} "
+                  f"{win_rate:>7.0%} {cum_pnl:>+7.2%} {sharpe:>7.1f} "
+                  f"{avg_prob:>7.3f} {n_tickers:>8}")
+
+        # --- 11b: Fold-age analysis (within each family) ---
+        print(f"\n  --- 11b: Fold-Age Analysis (newer fold = more recent training data) ---\n")
+
+        families_in_data = sorted(set(m['family'] for m in model_agg.values() if m.get('family')))
+        for family in families_in_data:
+            fam_models = [(mn, m) for mn, m in model_agg.items()
+                          if m.get('family') == family and m['n_filled'] > 0]
+            fam_models.sort(key=lambda x: x[1]['fold'])
+            if len(fam_models) < 2:
+                continue
+            print(f"  {family}:")
+            folds = [m['fold'] for _, m in fam_models]
+            pnls = [m['avg_pnl'] for _, m in fam_models]
+            for mn, m in fam_models:
+                trend_marker = ''
+                print(f"    F{m['fold']}: avg={m['avg_pnl']:+.2%}, "
+                      f"win={m['win_rate']:.0%}, n={m['n_filled']}, "
+                      f"sharpe={m['sharpe']:.1f}")
+            if len(folds) >= 2:
+                fold_corr = float(np.corrcoef(folds, pnls)[0, 1]) if np.std(pnls) > 0 else 0
+                newest = fam_models[-1]
+                oldest = fam_models[0]
+                delta = newest[1]['avg_pnl'] - oldest[1]['avg_pnl']
+                print(f"    Fold-PnL correlation: r={fold_corr:+.3f} "
+                      f"({'newer=better' if fold_corr > 0.1 else 'newer=worse' if fold_corr < -0.1 else 'no trend'})")
+                print(f"    Newest vs oldest delta: {delta:+.2%} "
+                      f"(F{newest[1]['fold']} vs F{oldest[1]['fold']})")
+            print()
+
+        # --- 11c: Per-model daily PnL over time (degradation within window) ---
+        print(f"  --- 11c: Per-Model Daily Performance Over Time ---\n")
+
+        all_bt_dates = sorted(df_temporal_filled['Date'].unique())
+
+        model_daily_pnl = {}
+        for mn in model_names_t:
+            sub = df_temporal_filled[df_temporal_filled['Model_Source'] == mn]
+            daily = sub.groupby('Date')['PnL'].agg(['mean', 'count', 'sum']).reset_index()
+            daily.columns = ['Date', 'avg_pnl', 'n_trades', 'total_pnl']
+            model_daily_pnl[mn] = daily
+
+        print(f"  {'Date':<12}", end="")
+        for mn in model_names_t:
+            label = mn.replace(' ', '')
+            print(f"  {label:>12}", end="")
+        print()
+        print(f"  {'─'*14 + '─'*14*len(model_names_t)}")
+
+        for date in all_bt_dates:
+            print(f"  {date:<12}", end="")
+            for mn in model_names_t:
+                daily = model_daily_pnl[mn]
+                day_row = daily[daily['Date'] == date]
+                if len(day_row) > 0:
+                    avg = day_row['avg_pnl'].iloc[0]
+                    n = int(day_row['n_trades'].iloc[0])
+                    print(f"  {avg:>+6.2%}({n:>2}t)", end="")
+                else:
+                    print(f"  {'—':>12}", end="")
+            print()
+
+        # --- 11d: Per-model rolling cumulative PnL ---
+        print(f"\n  --- 11d: Per-Model Cumulative PnL ---\n")
+        for mn in model_names_t:
+            daily = model_daily_pnl[mn]
+            if len(daily) == 0:
+                continue
+            cum = daily['avg_pnl'].cumsum()
+            daily_vals = daily['avg_pnl'].values
+            n_pos = sum(1 for v in daily_vals if v > 0)
+            n_neg = sum(1 for v in daily_vals if v < 0)
+
+            if len(daily_vals) >= 3:
+                half = len(daily_vals) // 2
+                first_half_avg = np.mean(daily_vals[:half])
+                second_half_avg = np.mean(daily_vals[half:])
+                trend = second_half_avg - first_half_avg
+                trend_label = "DEGRADING" if trend < -0.005 else "IMPROVING" if trend > 0.005 else "STABLE"
+            else:
+                first_half_avg = np.mean(daily_vals)
+                second_half_avg = first_half_avg
+                trend = 0
+                trend_label = "TOO FEW DAYS"
+
+            print(f"  {mn:<14} cum={cum.iloc[-1]:+.2%}, "
+                  f"days +{n_pos}/-{n_neg}, "
+                  f"1st half avg={first_half_avg:+.2%}, "
+                  f"2nd half avg={second_half_avg:+.2%}, "
+                  f"trend={trend:+.2%} [{trend_label}]")
+
+        # --- 11e: Cross-family newest-vs-oldest summary ---
+        print(f"\n  --- 11e: OVERALL — Does More Recent Training Data Help? ---\n")
+
+        oldest_pnls = []
+        newest_pnls = []
+        for family in families_in_data:
+            fam_models = [(mn, m) for mn, m in model_agg.items()
+                          if m.get('family') == family and m['n_filled'] > 0]
+            fam_models.sort(key=lambda x: x[1]['fold'])
+            if len(fam_models) < 2:
+                continue
+            oldest_pnls.append(fam_models[0][1]['avg_pnl'])
+            newest_pnls.append(fam_models[-1][1]['avg_pnl'])
+
+        if oldest_pnls and newest_pnls:
+            avg_oldest = np.mean(oldest_pnls)
+            avg_newest = np.mean(newest_pnls)
+            delta_overall = avg_newest - avg_oldest
+            print(f"  Avg across families:")
+            print(f"    Oldest fold avg PnL:  {avg_oldest:+.2%}")
+            print(f"    Newest fold avg PnL:  {avg_newest:+.2%}")
+            print(f"    Delta (newest-oldest): {delta_overall:+.2%}")
+            if delta_overall > 0.002:
+                print(f"    -> NEWER DATA HELPS: retraining on recent data adds {delta_overall:+.2%} per trade")
+                print(f"    -> Supports frequent retraining (every 4-6 weeks)")
+            elif delta_overall < -0.002:
+                print(f"    -> NEWER DATA HURTS: older folds outperform by {-delta_overall:+.2%}")
+                print(f"    -> Retraining may not be needed; older patterns still valid")
+            else:
+                print(f"    -> INCONCLUSIVE: no meaningful difference between old and new folds")
+                print(f"    -> Consider extending backtest window for more data points")
+
+        # --- 11f: Degradation within window (slope of daily PnL) ---
+        print(f"\n  --- 11f: Within-Window Degradation (is each model getting worse over time?) ---\n")
+        print(f"  {'Model':<14} {'Slope':>9} {'R²':>6} {'Verdict':<14} "
+              f"{'Days':>5} {'LastDay':>12}")
+        print(f"  {'─'*70}")
+
+        for mn in model_names_t:
+            daily = model_daily_pnl[mn]
+            if len(daily) < 3:
+                print(f"  {mn:<14} {'N/A':>9} {'N/A':>6} {'TOO FEW DAYS':<14} "
+                      f"{len(daily):>5}")
+                continue
+            x = np.arange(len(daily), dtype=np.float64)
+            y = daily['avg_pnl'].values.astype(np.float64)
+            slope, intercept = np.polyfit(x, y, 1)
+            y_hat = slope * x + intercept
+            ss_res = np.sum((y - y_hat) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+            if slope < -0.002 and r2 > 0.1:
+                verdict = "DEGRADING"
+            elif slope > 0.002 and r2 > 0.1:
+                verdict = "IMPROVING"
+            else:
+                verdict = "STABLE"
+
+            last_date = daily['Date'].iloc[-1]
+            print(f"  {mn:<14} {slope:>+8.4f} {r2:>5.2f} {verdict:<14} "
+                  f"{len(daily):>5} {last_date:>12}")
+
+        # --- Charts ---
+        n_chart_models = len(model_names_t)
+        fig11, axes11 = plt.subplots(2, 2, figsize=(22, 16))
+        fig11.suptitle(f'Phase 11: Model Temporal Degradation Analysis\n'
+                       f'{BACKTEST_START} → {BACKTEST_END} | 9 Models',
+                       fontsize=14, fontweight='bold')
+
+        model_colors_11 = {}
+        cmap = plt.cm.tab10
+        for i, mn in enumerate(model_names_t):
+            model_colors_11[mn] = cmap(i / max(n_chart_models - 1, 1))
+
+        # Chart 1: Per-model cumulative equity curves
+        ax = axes11[0, 0]
+        for mn in model_names_t:
+            daily = model_daily_pnl[mn]
+            if len(daily) == 0:
+                continue
+            dates_dt = pd.to_datetime(daily['Date'])
+            cum = daily['avg_pnl'].cumsum() * 100
+            parts = mn.split()
+            fold = int(parts[1].replace('F', '')) if len(parts) > 1 else 0
+            lw = 2.5 if fold >= 7 else 1.2
+            ls = '-' if fold >= 7 else '--'
+            ax.plot(dates_dt, cum, color=model_colors_11[mn], linewidth=lw,
+                    linestyle=ls, label=mn, alpha=0.85)
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+        ax.set_ylabel('Cumulative Avg PnL (%)')
+        ax.set_title('Per-Model Equity Curves\n(solid/thick = newest folds F7+F8)')
+        ax.legend(fontsize=7, ncol=2, loc='best')
+        ax.grid(alpha=0.3)
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+        # Chart 2: Fold-age vs avg PnL (scatter, grouped by family)
+        ax = axes11[0, 1]
+        family_markers = {'L5-1': 'o', 'L5-2': 's', 'MR-v2': 'D'}
+        family_colors_11 = {'L5-1': '#1565C0', 'L5-2': '#2E7D32', 'MR-v2': '#D81B60'}
+        for mn, m in model_agg.items():
+            if m['n_filled'] == 0:
+                continue
+            fam = m.get('family', '')
+            fold = m.get('fold', 0)
+            marker = family_markers.get(fam, 'o')
+            color = family_colors_11.get(fam, '#333')
+            ax.scatter(fold, m['avg_pnl'] * 100, s=120 + m['n_filled'] * 8,
+                      marker=marker, color=color, alpha=0.8, zorder=5,
+                      edgecolors='black', linewidth=0.5)
+            ax.annotate(mn, (fold, m['avg_pnl'] * 100),
+                       fontsize=7, xytext=(6, 6), textcoords='offset points')
+
+        for fam in families_in_data:
+            fam_pts = [(m['fold'], m['avg_pnl'] * 100)
+                       for m in model_agg.values()
+                       if m.get('family') == fam and m['n_filled'] > 0]
+            if len(fam_pts) >= 2:
+                fam_pts.sort()
+                xs, ys = zip(*fam_pts)
+                ax.plot(xs, ys, '--', color=family_colors_11.get(fam, '#333'),
+                        alpha=0.4, linewidth=1.5)
+
+        ax.set_xlabel('Fold Number (higher = more recent training data)')
+        ax.set_ylabel('Avg PnL per Trade (%)')
+        ax.set_title('Fold Age vs Performance\n(size = # trades; dashed = family trend)')
+        from matplotlib.lines import Line2D
+        legend_elements = [Line2D([0], [0], marker=family_markers[f],
+                                  color=family_colors_11[f], linestyle='None',
+                                  markersize=10, label=f)
+                           for f in families_in_data if f in family_markers]
+        ax.legend(handles=legend_elements, fontsize=9)
+        ax.grid(alpha=0.3)
+
+        # Chart 3: First-half vs second-half per model (degradation check)
+        ax = axes11[1, 0]
+        mn_labels = []
+        first_halves = []
+        second_halves = []
+        for mn in model_names_t:
+            daily = model_daily_pnl[mn]
+            if len(daily) < 2:
+                continue
+            vals = daily['avg_pnl'].values
+            half = len(vals) // 2
+            first_halves.append(np.mean(vals[:half]) * 100)
+            second_halves.append(np.mean(vals[half:]) * 100)
+            mn_labels.append(mn)
+
+        if mn_labels:
+            y_pos = np.arange(len(mn_labels))
+            bar_h = 0.35
+            ax.barh(y_pos - bar_h/2, first_halves, bar_h, label='1st Half',
+                    color='#1565C0', alpha=0.8)
+            ax.barh(y_pos + bar_h/2, second_halves, bar_h, label='2nd Half',
+                    color='#E65100', alpha=0.8)
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(mn_labels, fontsize=8)
+            for i in range(len(mn_labels)):
+                delta = second_halves[i] - first_halves[i]
+                arrow = '↑' if delta > 0.1 else '↓' if delta < -0.1 else '→'
+                ax.annotate(f" {arrow}{delta:+.1f}%",
+                           xy=(max(first_halves[i], second_halves[i]), y_pos[i]),
+                           fontsize=7, va='center')
+        ax.axvline(0, color='black', linewidth=0.8)
+        ax.set_xlabel('Avg Daily PnL (%)')
+        ax.set_title('1st Half vs 2nd Half of Backtest Window\n(orange worse = degradation)')
+        ax.legend(fontsize=9)
+        ax.grid(axis='x', alpha=0.3)
+
+        # Chart 4: Family-level fold comparison (bar chart)
+        ax = axes11[1, 1]
+        bar_data = {}
+        for mn, m in model_agg.items():
+            if m['n_filled'] == 0:
+                continue
+            fam = m.get('family', '')
+            fold = m.get('fold', 0)
+            bar_data.setdefault(fam, []).append((fold, m['avg_pnl'] * 100, m['n_filled']))
+
+        x_offset = 0
+        x_ticks = []
+        x_labels = []
+        for fam in sorted(bar_data.keys()):
+            entries = sorted(bar_data[fam], key=lambda e: e[0])
+            for fold, pnl, n in entries:
+                color = family_colors_11.get(fam, '#333')
+                alpha = 0.4 + 0.2 * (fold - min(e[0] for e in entries))
+                bar = ax.bar(x_offset, pnl, color=color, alpha=min(alpha, 1.0),
+                             edgecolor='black', linewidth=0.5, width=0.7)
+                ax.text(x_offset, pnl + (0.1 if pnl >= 0 else -0.3),
+                        f"n={n}", ha='center', fontsize=7)
+                x_ticks.append(x_offset)
+                x_labels.append(f"{fam}\nF{fold}")
+                x_offset += 1
+            x_offset += 0.5
+
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels(x_labels, fontsize=7)
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.set_ylabel('Avg PnL per Trade (%)')
+        ax.set_title('Per-Family Fold Comparison\n(darker = newer fold)')
+        ax.grid(axis='y', alpha=0.3)
+
+        plt.tight_layout()
+        chart11_path = '/tmp/backtest_st_short_temporal_degradation_9model.png'
+        plt.savefig(chart11_path, dpi=150, bbox_inches='tight')
+        print(f"\n  Temporal degradation chart saved: {chart11_path}")
+        if _IN_COLAB:
+            plt.show()
+        plt.close()
+    else:
+        print(f"\n  Phase 11 skipped — no multi_trades data available.")
 
 
 # ==============================================================================

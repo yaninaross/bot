@@ -1,15 +1,16 @@
 """
-daily_ohlcv_1.py — OHLCV Refresh (batch 1 of 2, A-F)
+daily_ohlcv_2.py — OHLCV Refresh (batch 2 of 2, G-X)
 =====================================================
 Fetches 1-min OHLCV from Polygon, appends to GCS parquets.
-Run in parallel with daily_ohlcv_2.py.
+Run in parallel with daily_ohlcv_1.py.
 Stitch step is handled separately by daily_stitch_master.py.
 
-Batch 1 (22 deploy tickers A-F + 4 context):
-  Deploy: ACHR, AEHR, ALAB, AMD, APLD, ARM, ASTS, AVAV, AXTI, BBAI,
-          BE, BTBT, CAT, CEG, CIFR, CLSK, COIN, CORZ, CVX, ETN,
-          FCEL, FLNC
-  Context: I:VIX, TLT, IWM, SPY
+Batch 2 (34 deploy tickers G-X + 1 sector proxy):
+  Deploy: GEV, HUT, IREN, KEEL, KTOS, LUNR, MARA, MNTS, MSTR, MXL,
+          NBIS, NEE, NTLA, ONDS, PL, PLTR, PLUG, RCAT, RDW, RIOT,
+          RKLB, RXT, SLS, SMCI, SMR, SNDK, SOUN, TSLA, VOYG, VRT,
+          VST, WOLF, WULF, XOM
+  Sector proxy: ITA (OHLCV-only, for regime features)
 """
 
 import time
@@ -37,12 +38,13 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'AXTI', 'BBAI',
-    'BE', 'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN',
-    'FCEL', 'FLNC',
+    'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'MNTS', 'MSTR', 'MXL',
+    'NBIS', 'NEE', 'NTLA', 'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT', 'RDW', 'RIOT',
+    'RKLB', 'RXT', 'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA', 'VOYG', 'VRT',
+    'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
-CONTEXT_ASSETS = ['I:VIX', 'TLT', 'IWM', 'SPY']
+CONTEXT_ASSETS = ['ITA']
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
 BUCKET_NAME     = "time-series-bucket-ys"
@@ -114,7 +116,7 @@ def fetch_polygon_aggs(ticker, start_dt, end_dt, chunk_months=1, sleep_secs=2):
 # ==============================================================================
 # MAIN LOOP
 # ==============================================================================
-print("🚀 daily_ohlcv_1.py — OHLCV Batch 1 of 2")
+print("🚀 daily_ohlcv_2.py — OHLCV Batch 2")
 fetch_end = pd.Timestamp.now(tz='UTC')
 print(f"   Run time      : {fetch_end.strftime('%Y-%m-%d %H:%M UTC')}")
 print(f"   Scored Assets : {len(TARGET_TICKERS)}")
@@ -156,5 +158,5 @@ for ticker, is_context in ALL_ASSETS:
     del df_ohlcv
     _release_memory()
 
-_write_pipeline_status('ohlcv_1', 'complete')
-print("\n🎉 daily_ohlcv_1.py COMPLETE.")
+_write_pipeline_status('ohlcv_2', 'complete')
+print("\n🎉 daily_ohlcv_2.py COMPLETE.")

@@ -1,20 +1,25 @@
 # %% ── Bulk Micro Download + Rebuild — ALL Assets ─────────────────────────────
 #
 # Downloads missing T&Q from Polygon, rebuilds microstructure parquets,
-# and stitches master_inference for ALL 89 tradable tickers.
+# and stitches master_inference for ALL tradable tickers.
 #
 # Per-ticker pipeline:
 #   1. Scan GCS for existing raw T&Q → find missing dates
 #   2. Download missing dates from Polygon (skip cached)
 #   3. If new T&Q downloaded OR no master exists: rebuild micro + master
 #
+# Staleness-aware: scans master_inference last-data dates on GCS, prioritizes
+# most stale tickers first. Skips known dead tickers (delisted/renamed).
+#
 # Gap-aware and resumable — restarting skips already-downloaded dates.
 # Uses google.cloud.storage API (not FUSE).
 # Colab-ready.
 #
 # Usage:
-#   python bulk_micro_all.py                          # all 89 tickers
+#   python bulk_micro_all.py --sa                     # stale tickers, service account (long runs)
 #   python bulk_micro_all.py MARA KEEL ASTS           # specific tickers
+#   python bulk_micro_all.py --all --sa               # force all, service account
+#   --sa uses VM compute service account (never expires, safe for multi-day runs)
 #   Set SKIP_DOWNLOAD = True to rebuild from existing raw T&Q only
 
 import os, io, time, gc, ctypes, sys, subprocess, warnings
@@ -81,7 +86,49 @@ ALL_TICKERS = [
     'ACMR', 'BEAM', 'CLF', 'CRDO', 'MRNA', 'MXL', 'NEOV', 'NNE', 'NTLA', 'TWST', 'UCTT',
     # ── Other scoring pool ──
     'BABA',
+    # ── New-50 expansion (Aug 2026) ──
+    'AXTI', 'BLZE', 'BNY', 'BUUU', 'CRNG', 'MGRT', 'ROMA', 'RXT', 'SIF', 'SNDK',
+    # ── Context / sector proxies (need master for scoring) ──
+    'SPY', 'VIX', 'TLT', 'IWM', 'ITA',
+    # ── Crypto lead-lag (24/7, need master) ──
+    'BTCUSD', 'ETHUSD',
+    # ── Additional scoring pool ──
+    'DELL', 'ZTG',
+    # ── Mega-cap tech ──
+    'AAPL', 'AMZN', 'MSFT', 'META',
+    # ── EV / consumer cyclical ──
+    'RIVN', 'NIO', 'XPEV', 'LI', 'NKLA',
+    # ── Meme / high-vol ──
+    'GME', 'DJT',
+    # ── Financials ──
+    'BAC',
+    # ── Delisted / leveraged ETF (may have limited data) ──
+    'FSR', 'SQQQ',
+    # ── Semiconductors & AI hardware ──
+    'AVGO', 'LRCX', 'AMAT', 'KLAC', 'SNPS', 'CDNS', 'MRVL', 'ANET',
+    'INTC', 'QCOM', 'ADI', 'NXPI', 'MPWR', 'AMKR',
+    # ── AI, data & enterprise software ──
+    'SNOW', 'DDOG', 'DT', 'MDB', 'CRM', 'NOW', 'ADBE', 'WDAY',
+    'AI', 'PATH', 'TWLO', 'HUBS',
+    # ── Cybersecurity ──
+    'CRWD', 'PANW', 'ZS', 'S', 'FTNT', 'OKTA', 'NET', 'CYBR',
+    # ── Data center & cloud infra ──
+    'CIEN',
+    # ── High-growth / high-vol tech ──
+    'APP', 'RBLX', 'SQ', 'SHOP', 'TTD',
 ]
+
+SKIP_TICKERS = {
+    'SMLR',   # delisted Jan 2026
+    'BITF',   # renamed to KEEL
+    'MIGI',   # renamed to BGDE
+    'XLE',    # sector ETF, not traded — stale is OK
+    'BTCUSD', # crypto — OHLCV-only, no T&Q on Polygon; refreshed via bulk_ohlcv
+    'ETHUSD', # crypto — OHLCV-only, no T&Q on Polygon; refreshed via bulk_ohlcv
+    'SQQQ',   # leveraged ETF — OHLCV-only, T&Q not useful
+}
+
+STALENESS_THRESHOLD_DAYS = 1
 
 HISTORY_START   = pd.Timestamp("2022-01-01", tz='UTC')
 FETCH_END       = pd.Timestamp.now(tz='UTC').normalize()
@@ -90,8 +137,70 @@ POLYGON_SLEEP   = 0.35
 SKIP_DOWNLOAD   = False
 FORCE_REBUILD   = False
 
-gcs_client = gcs_storage.Client()
+USE_SERVICE_ACCOUNT = '--sa' in sys.argv or os.environ.get('USE_SERVICE_ACCOUNT', '') == '1'
+
+def _init_gcs_client():
+    if USE_SERVICE_ACCOUNT:
+        from google.auth import compute_engine
+        creds = compute_engine.Credentials()
+        client = gcs_storage.Client(credentials=creds, project='yanina-everything')
+        print("  Auth: VM compute service account (never expires)")
+    else:
+        client = gcs_storage.Client()
+        print("  Auth: Application Default Credentials (may expire)")
+    return client
+
+gcs_client = _init_gcs_client()
 bucket     = gcs_client.bucket(BUCKET_NAME)
+
+_last_refresh = time.time()
+_REFRESH_INTERVAL = 1800  # refresh GCS client every 30 min
+
+def _refresh_bucket():
+    """Refresh GCS client/bucket periodically to avoid token expiry."""
+    global gcs_client, bucket, _last_refresh
+    if time.time() - _last_refresh > _REFRESH_INTERVAL:
+        gcs_client = _init_gcs_client()
+        bucket = gcs_client.bucket(BUCKET_NAME)
+        _last_refresh = time.time()
+
+
+# ==============================================================================
+# STALENESS SCANNER
+# ==============================================================================
+def scan_master_staleness(tickers, today=None):
+    """Scan GCS master_inference files and return (ticker, days_stale) sorted most-stale first."""
+    if today is None:
+        today = pd.Timestamp.now(tz='UTC').normalize()
+
+    print("  Scanning master_inference staleness on GCS...", flush=True)
+    blobs = list(bucket.list_blobs(prefix=f"{GCS_MASTER_DIR}/"))
+    master_blobs = {
+        os.path.basename(b.name).replace('_master_inference.parquet', ''): b
+        for b in blobs if 'master_inference' in b.name and b.name.endswith('.parquet')
+    }
+
+    staleness = []
+    for ticker in tickers:
+        if ticker in SKIP_TICKERS:
+            continue
+        blob = master_blobs.get(ticker)
+        if blob is None:
+            staleness.append((ticker, 9999, 'NO_MASTER'))
+            continue
+        gcs_updated = blob.updated.replace(tzinfo=pytz.UTC) if blob.updated.tzinfo is None else blob.updated
+        days_since_upload = (today - gcs_updated.replace(hour=0, minute=0, second=0, microsecond=0)).days
+        staleness.append((ticker, days_since_upload, blob.updated.strftime('%Y-%m-%d')))
+
+    staleness.sort(key=lambda x: -x[1])
+    return staleness
+
+
+def filter_stale_tickers(staleness, threshold_days=STALENESS_THRESHOLD_DAYS):
+    """Return tickers that are stale (days > threshold), sorted most-stale first."""
+    stale = [(t, d, info) for t, d, info in staleness if d > threshold_days]
+    fresh = [(t, d, info) for t, d, info in staleness if d <= threshold_days]
+    return stale, fresh
 
 
 # ==============================================================================
@@ -435,6 +544,8 @@ def rebuild_master(ticker):
 # PER-TICKER PIPELINE
 # ==============================================================================
 def process_one_ticker(ticker, idx, total):
+    _refresh_bucket()
+
     print(f"\n{'─'*60}", flush=True)
     print(f"  [{idx}/{total}] {ticker}", flush=True)
     print(f"{'─'*60}", flush=True)
@@ -481,28 +592,56 @@ def process_one_ticker(ticker, idx, total):
 # ==============================================================================
 _t0 = time.time()
 
-cli_args = [a.upper() for a in sys.argv[1:]
-            if not a.startswith('-') and not a.endswith('.json')]
-if cli_args:
-    TARGET_TICKERS = [t for t in cli_args if t in ALL_TICKERS]
-    unknown = [t for t in cli_args if t not in ALL_TICKERS]
+cli_args = [a for a in sys.argv[1:] if not a.endswith('.json')]
+force_all = '--all' in cli_args
+ticker_args = [a.upper() for a in cli_args if not a.startswith('-')]
+
+if ticker_args:
+    TARGET_TICKERS = [t for t in ticker_args if t in ALL_TICKERS]
+    unknown = [t for t in ticker_args if t not in ALL_TICKERS]
     if unknown:
         print(f"  Warning: {unknown} not in ALL_TICKERS, downloading anyway")
         TARGET_TICKERS += unknown
+    staleness_info = None
+elif force_all:
+    TARGET_TICKERS = [t for t in dict.fromkeys(ALL_TICKERS) if t not in SKIP_TICKERS]
+    staleness_info = None
 else:
-    TARGET_TICKERS = list(dict.fromkeys(ALL_TICKERS))
+    all_candidates = [t for t in dict.fromkeys(ALL_TICKERS) if t not in SKIP_TICKERS]
+    staleness = scan_master_staleness(all_candidates)
+    stale, fresh = filter_stale_tickers(staleness, STALENESS_THRESHOLD_DAYS)
+    staleness_info = (stale, fresh)
+    TARGET_TICKERS = [t for t, _, _ in stale]
+
+    print(f"\n  Staleness scan results:")
+    print(f"    Total assets:      {len(staleness)}")
+    print(f"    Up to date (<={STALENESS_THRESHOLD_DAYS}d): {len(fresh)}")
+    print(f"    Stale (>{STALENESS_THRESHOLD_DAYS}d):       {len(stale)}")
+    print(f"    Skipped (dead):    {len(SKIP_TICKERS)} ({', '.join(sorted(SKIP_TICKERS))})")
+    if stale:
+        print(f"\n  Priority queue (most stale first):")
+        print(f"  {'#':>4} {'Ticker':<8} {'Stale':>6} {'Last Upload':>12}")
+        print(f"  {'─'*4} {'─'*8} {'─'*6} {'─'*12}")
+        for i, (t, d, info) in enumerate(stale, 1):
+            label = f"{d}d" if d < 9999 else "NEW"
+            print(f"  {i:>4} {t:<8} {label:>6} {info:>12}")
 
 bdays = len(pd.bdate_range(HISTORY_START, FETCH_END))
 
-print("=" * 60)
-print("  BULK MICRO DOWNLOAD + REBUILD — ALL ASSETS")
+print(f"\n{'='*60}")
+print("  BULK MICRO DOWNLOAD + REBUILD — STALENESS-PRIORITIZED")
 print(f"  {datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M UTC')}")
 print(f"  Tickers: {len(TARGET_TICKERS)}")
 print(f"  Range: {HISTORY_START.strftime('%Y-%m-%d')} -> "
       f"{FETCH_END.strftime('%Y-%m-%d')} ({bdays} bdays)")
+print(f"  Mode: {'explicit list' if ticker_args else ('all (--all)' if force_all else 'auto-stale')}")
 print(f"  SKIP_DOWNLOAD: {SKIP_DOWNLOAD}")
 print(f"  FORCE_REBUILD: {FORCE_REBUILD}")
 print("=" * 60)
+
+if not TARGET_TICKERS:
+    print("\n  All tickers up to date — nothing to do.")
+    sys.exit(0)
 
 results = []
 for idx, ticker in enumerate(TARGET_TICKERS, 1):
@@ -545,5 +684,15 @@ if rebuilt:
 
 if failed:
     print(f"\n  FAILED: {[r['ticker'] for r in failed]}")
+
+# ── Still-stale check ──
+if not ticker_args and not force_all and staleness_info:
+    stale_set = {t for t, _, _ in staleness_info[0]}
+    rebuilt_set = {r['ticker'] for r in rebuilt}
+    failed_set = {r['ticker'] for r in failed}
+    still_stale = stale_set - rebuilt_set - {r['ticker'] for r in skipped}
+    if still_stale:
+        print(f"\n  WARNING: {len(still_stale)} tickers still stale after run:")
+        print(f"    {', '.join(sorted(still_stale))}")
 
 print("=" * 60)

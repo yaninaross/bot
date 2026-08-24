@@ -1,7 +1,7 @@
 """
-daily_stitch_master.py — Atomic OHLCV + Micro tail-join to master_inference
-============================================================================
-Run AFTER daily_micro_all.py + daily_ohlcv_1.py + daily_ohlcv_2.py complete.
+daily_stitch_master_2.py — Atomic OHLCV + Micro tail-join to master_inference (batch 2 of 2)
+=============================================================================================
+Run AFTER daily_micro + daily_ohlcv scripts complete.
 Checks pipeline_status.json, then for each ticker:
   1. Loads OHLCV tail (last TAIL_DAYS)
   2. Loads micro tail (last TAIL_DAYS) — skipped for context assets
@@ -9,8 +9,7 @@ Checks pipeline_status.json, then for each ticker:
   4. Concats with head of existing master_inference
   5. Saves atomic master_inference parquet
 
-48 deploy tickers (ST LONG NEWEST_FIRST + SHORT L5-2 HYB_F7_30) + 5 context/proxy assets.
-Context assets (VIX, SPY, TLT, IWM, ITA) get OHLCV-only masters.
+Batch 2: 32 deploy tickers (M-X), no context assets (handled by batch 1).
 Uses google.cloud.storage API + local /tmp reads to avoid gcsfs memory overhead.
 """
 
@@ -45,15 +44,14 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # ST LONG NEWEST_FIRST (L5-1+ASL6, ~30) + ST SHORT L5-2 HYB_F7_30 (26) = 48 unique deploy tickers
-    'ACHR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'AXTI', 'BBAI',
-    'BE', 'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX', 'ETN',
-    'FCEL', 'FLNC', 'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'MNTS',
-    'MSTR', 'MXL', 'NBIS', 'NEE', 'ONDS', 'PL', 'PLTR', 'RIOT', 'RKLB', 'RXT',
-    'SLS', 'SMCI', 'SMR', 'SOUN', 'VST', 'WOLF', 'WULF', 'XOM',
+    # Batch 2: 32 deploy tickers M-X
+    'MARA', 'MNTS', 'MRNA', 'MSTR', 'MU', 'MVIS', 'MXL', 'NBIS', 'NEE', 'NNE',
+    'NTLA', 'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT', 'RDW', 'RIOT', 'RKLB', 'RXT',
+    'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA', 'VOYG', 'VRT', 'VST', 'WOLF',
+    'WULF', 'XOM',
 ]
 
-CONTEXT_ASSETS = ['VIX', 'TLT', 'IWM', 'SPY', 'ITA']
+CONTEXT_ASSETS = []
 
 TICKER_DATA_START = {}
 DATA_START_DEFAULT = pd.Timestamp("2022-01-01", tz='UTC')
@@ -165,7 +163,7 @@ def _check_prerequisites():
     status = _read_pipeline_status()
     today = pd.Timestamp.now(tz='UTC').normalize()
     missing = []
-    for stage in ['daily_micro_1', 'daily_micro_2', 'ohlcv_1', 'ohlcv_2']:
+    for stage in ['daily_micro_1', 'daily_micro_2', 'daily_micro_3', 'ohlcv_1', 'ohlcv_2']:
         info = status.get(stage, {})
         if info.get('status') != 'complete':
             missing.append(f"{stage}: not complete")
@@ -346,7 +344,7 @@ def stitch_ticker(ticker, is_context=False):
 # ==============================================================================
 import time as _time
 
-print("🚀 daily_stitch_master.py — Parallel OHLCV + Micro Stitch")
+print("🚀 daily_stitch_master_2.py — Parallel OHLCV + Micro Stitch (Batch 2)")
 print(f"   Run time : {pd.Timestamp.now(tz='UTC').strftime('%Y-%m-%d %H:%M UTC')}")
 print(f"   Tickers  : {len(TARGET_TICKERS)} + {len(CONTEXT_ASSETS)} context")
 print(f"   Workers  : {MAX_WORKERS}")
@@ -358,7 +356,7 @@ if missing:
         print(f"      - {m}")
     print(f"   Proceeding anyway — master files may use stale source data.\n")
 
-_write_pipeline_status('stitch', 'running')
+_write_pipeline_status('stitch_2', 'running')
 _t0 = _time.time()
 
 success = 0
@@ -386,11 +384,11 @@ for b_idx, batch in enumerate(batches, 1):
                 failed += 1
     _release_memory()
 
-_write_pipeline_status('stitch', 'complete')
+_write_pipeline_status('stitch_2', 'complete')
 elapsed = _time.time() - _t0
 
 print(f"\n{'═'*52}")
-print(f"🎉 daily_stitch_master.py COMPLETE")
+print(f"🎉 daily_stitch_master_2.py COMPLETE (Batch 2)")
 print(f"   Success: {success}  |  Failed: {failed}")
 print(f"   Elapsed: {elapsed:.0f}s  ({elapsed/60:.1f}m)")
 print(f"{'═'*52}")
