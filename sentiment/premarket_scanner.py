@@ -80,7 +80,7 @@ GCP_LOCATION = "us-central1"
 GEMINI_MODEL = "gemini-2.5-flash"
 
 CLAUDE_REGION  = "us-east5"
-CLAUDE_MODEL   = "claude-sonnet-4-5-20241022"
+CLAUDE_MODEL   = "claude-sonnet-4-6"
 
 BUCKET_NAME = "time-series-bucket-ys"
 OUTPUT_DIR  = "Data/Scanner"
@@ -114,7 +114,7 @@ SCAN_TICKERS = TEST_TICKERS if TEST_MODE else DEPLOY_TICKERS
 
 MAX_WORKERS_SCAN   = 5
 TOP_N_DEEP         = 15
-MAX_NEWS_AGE_HOURS = 24
+MAX_NEWS_AGE_HOURS = 16
 SCANNER_VERSION    = 'V1'
 FINAL_LONG         = 5
 FINAL_SHORT        = 5
@@ -142,7 +142,7 @@ bucket = gcs_client.bucket(BUCKET_NAME)
 # ==============================================================================
 SCAN_SYSTEM = """You are a stock news analyst. Your job is to find the MOST RECENT news about a stock that could cause significant price movement.
 
-Search for the most recent news about the given ticker. Prioritize the FRESHEST news first — something from 2 hours ago is far more valuable than something from 16 hours ago. Include news from the last 24 hours: today's market hours, pre-market today, after-hours yesterday, or overnight.
+Search for the most recent news about the given ticker. Prioritize the FRESHEST news first — something from 2 hours ago is far more valuable than something from 12 hours ago. Include news from the last 16 hours only. Do not include catalysts older than 16 hours.
 
 Return ONLY a JSON object with these fields:
 {
@@ -830,6 +830,17 @@ if market_ctx:
     print(f"    Theme:     {market_ctx.get('overnight_theme', 'N/A')}")
     print(f"    Risk:      {market_ctx.get('risk_sentiment', 'N/A')}")
 
+def _extract_timeline_time(deep_result):
+    timeline = deep_result.get('news_timeline', [])
+    if not timeline:
+        return ''
+    for ev in reversed(timeline):
+        if isinstance(ev, dict):
+            t = ev.get('time', '')
+            if t and t not in ('unknown', 'N/A', '?'):
+                return str(t)
+    return ''
+
 # Separate LONG and SHORT candidates
 longs = []
 shorts = []
@@ -865,7 +876,7 @@ for ticker, r in deep_results.items():
         'scan_score': scan_data.get('catalyst_score', 0),
         'scan_headline': scan_data.get('headline', ''),
         'scan_summary': scan_data.get('summary', ''),
-        'news_time': scan_data.get('news_time', r.get('news_time', '')),
+        'news_time': scan_data.get('news_time', '') or _extract_timeline_time(r),
         'sources': scan_data.get('_sources', []),
         'key_articles': scan_data.get('key_articles', []),
         'composite': int(r.get('confidence', 0)) * abs(_remaining),
@@ -1006,19 +1017,23 @@ def _freshness_multiplier(entry):
     news_time_raw = str(entry.get('news_time', ''))
     news_dt = _parse_news_time(news_time_raw)
     if not news_dt:
-        return 0.3
+        return 0.2
     age_hours = (now_pst - news_dt.astimezone(PST)).total_seconds() / 3600
     if age_hours < 0:
-        return 1.0
+        return 1.5
+    if age_hours <= 2:
+        return 1.5
     if age_hours <= 4:
+        return 1.2
+    if age_hours <= 6:
         return 1.0
     if age_hours <= 8:
-        return 0.7
+        return 0.5
     if age_hours <= 12:
-        return 0.4
-    if age_hours <= 18:
-        return 0.15
-    return 0.05
+        return 0.2
+    if age_hours <= 16:
+        return 0.08
+    return 0.02
 
 
 def _print_summary_table(entries, direction_label):

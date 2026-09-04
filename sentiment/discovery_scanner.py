@@ -76,7 +76,7 @@ GCP_LOCATION = "us-central1"
 GEMINI_MODEL = "gemini-2.5-flash"
 
 CLAUDE_REGION  = "us-east5"
-CLAUDE_MODEL   = "claude-sonnet-4-5-20241022"
+CLAUDE_MODEL   = "claude-sonnet-4-6"
 
 BUCKET_NAME = "time-series-bucket-ys"
 OUTPUT_DIR  = "Data/Scanner"
@@ -88,7 +88,7 @@ TODAY_STR = NOW_PT.strftime('%Y-%m-%d')
 TIME_STR = NOW_PT.strftime('%H:%M')
 
 MIN_MOVE_PCT       = 5.0
-MAX_NEWS_AGE_HOURS = 24
+MAX_NEWS_AGE_HOURS = 16
 SCANNER_VERSION    = 'V1'
 FINAL_LONG         = 5
 FINAL_SHORT        = 5
@@ -196,7 +196,7 @@ bucket = gcs_client.bucket(BUCKET_NAME)
 # ==============================================================================
 DISCOVER_SYSTEM = """You are a stock screener. Your job is to extract specific stock tickers and their expected moves from search results about today's biggest movers.
 
-From the search results, identify individual stocks that are likely to move MORE THAN 5%. Prioritize the FRESHEST news — something from 2 hours ago is far more valuable than 16 hours ago. Include events from the last 24 hours: today's market hours, pre-market, after-hours yesterday, or overnight. Do not include catalysts older than 24 hours.
+From the search results, identify individual stocks that are likely to move MORE THAN 5%. Prioritize the FRESHEST news — something from 2 hours ago is far more valuable than 12 hours ago. Include events from the last 16 hours only. Do not include catalysts older than 16 hours.
 
 Return ONLY a JSON object:
 {
@@ -780,6 +780,17 @@ if market_ctx:
     print(f"    Theme:     {market_ctx.get('overnight_theme', 'N/A')}")
     print(f"    Risk:      {market_ctx.get('risk_sentiment', 'N/A')}")
 
+def _extract_timeline_time(deep_result):
+    timeline = deep_result.get('news_timeline', [])
+    if not timeline:
+        return ''
+    for ev in reversed(timeline):
+        if isinstance(ev, dict):
+            t = ev.get('time', '')
+            if t and t not in ('unknown', 'N/A', '?'):
+                return str(t)
+    return ''
+
 # Build final ranked lists
 longs = []
 shorts = []
@@ -818,7 +829,7 @@ for ticker, r in deep_results.items():
         'pre_market': r.get('pre_market_action', ''),
         'market_cap_tier': disc.get('market_cap_tier', 'unknown'),
         'sources': disc.get('_sources', []),
-        'news_time': disc.get('news_time', ''),
+        'news_time': disc.get('news_time', '') or _extract_timeline_time(r),
         'theme': disc.get('_theme', ''),
         'in_deploy': disc.get('in_deploy', False),
         'scan_move_score': disc.get('move_score', 0),
@@ -948,19 +959,23 @@ def _freshness_multiplier(entry):
     news_time_raw = str(entry.get('news_time', ''))
     news_dt = _parse_news_time(news_time_raw)
     if not news_dt:
-        return 0.3
+        return 0.2
     age_hours = (now_pst - news_dt.astimezone(PST)).total_seconds() / 3600
     if age_hours < 0:
-        return 1.0
+        return 1.5
+    if age_hours <= 2:
+        return 1.5
     if age_hours <= 4:
+        return 1.2
+    if age_hours <= 6:
         return 1.0
     if age_hours <= 8:
-        return 0.7
+        return 0.5
     if age_hours <= 12:
-        return 0.4
-    if age_hours <= 18:
-        return 0.15
-    return 0.05
+        return 0.2
+    if age_hours <= 16:
+        return 0.08
+    return 0.02
 
 
 def _print_summary_table(entries, direction_label):
