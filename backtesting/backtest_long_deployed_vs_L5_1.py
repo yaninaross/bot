@@ -435,7 +435,7 @@ def engineer_asset(ticker, market_df):
     return df.replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
-def compute_regime_features(market_df):
+def compute_regime_features(market_df, universe_returns=None):
     """Computes all 22 regime features. Callers select 16 or 22 via regime_cols."""
     rf = pd.DataFrame(index=market_df.index)
     spy_ret = market_df['SPY_Anchor_ROC'].fillna(0)
@@ -458,7 +458,10 @@ def compute_regime_features(market_df):
             if sx > 1e-12 and sy > 1e-12:
                 autocorr[i] = ((x - mx) * (y - my)).mean() / (sx * sy)
     rf['regime_autocorr_60'] = autocorr
-    rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        rf['regime_xsect_disp'] = universe_returns.std(axis=1).fillna(0)
+    else:
+        rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
     vix_col = 'VIX_Anchor_ROC'
     if vix_col in market_df.columns:
         vix_cum = market_df[vix_col].cumsum()
@@ -484,7 +487,11 @@ def compute_regime_features(market_df):
                else pd.Series(0.0, index=market_df.index))
     rf['regime_spy_tlt_corr'] = spy_ret.rolling(
         60, min_periods=30).corr(tlt_ret).fillna(0).clip(-1, 1)
-    rf['regime_breadth'] = 0.5
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        cum_rets_60 = universe_returns.rolling(60, min_periods=30).sum()
+        rf['regime_breadth'] = (cum_rets_60 > 0).mean(axis=1).fillna(0.5)
+    else:
+        rf['regime_breadth'] = 0.5
     rolling_mean = spy_ret.rolling(60, min_periods=30).mean()
     rolling_std = spy_ret.rolling(60, min_periods=30).std().clip(lower=1e-12)
     standardized = (spy_ret - rolling_mean) / rolling_std

@@ -442,7 +442,7 @@ def engineer_asset(ticker, market_df):
     return df.replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
-def compute_regime_features(market_df):
+def compute_regime_features(market_df, universe_returns=None):
     rf = pd.DataFrame(index=market_df.index)
     spy_ret = market_df['SPY_Anchor_ROC'].fillna(0)
     for w, name in [(15, 'regime_rvol_15'), (60, 'regime_rvol_60'),
@@ -464,7 +464,10 @@ def compute_regime_features(market_df):
             if sx > 1e-12 and sy > 1e-12:
                 autocorr[i] = ((x - mx) * (y - my)).mean() / (sx * sy)
     rf['regime_autocorr_60'] = autocorr
-    rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        rf['regime_xsect_disp'] = universe_returns.std(axis=1).fillna(0)
+    else:
+        rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
     vix_col = 'VIX_Anchor_ROC'
     if vix_col in market_df.columns:
         vix_cum = market_df[vix_col].cumsum()

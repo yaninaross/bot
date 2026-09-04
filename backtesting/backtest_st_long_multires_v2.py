@@ -1,0 +1,2253 @@
+# %% ── ST LONG — 9-Model Trade Prioritization Comparison (+ Multi-Res v2) ─────
+#
+# EXPANDED from 6-model to 9-model by adding LONG Multi-Res v2 (MR-v2) F6/F7/F8.
+#
+# 9 models:
+#   L5-1 F5/F6/F7  (standard SpikeTransformer, single backbone)
+#   ASL6 F5/F6/F7  (standard SpikeTransformer, single backbone)
+#   MR-v2 F6/F7/F8 (MultiResSpikeTransformer, dual backbone 1m+15m)
+#
+# MR-v2 architecture: dual Transformer backbone (1m: 2 blocks + 15m: 1 block),
+# 153K params, late fusion concat(64,64)->Dense(64,gelu), FiLM conditioning.
+# Requires separate model object and 15-min feature engineering.
+#
+# LONG = price up is profit. TP hit when High >= tp_price.
+# Limit entry for LONG: wait for DIP (lows[k] <= signal_price * (1 - dip_pct))
+#
+# Model subsets tested:
+#   M_CONSENSUS     (9): all models
+#   M_CONS_6OLD     (6): L5-1 F5/F6/F7 + ASL6 F5/F6/F7 (existing, no MR-v2)
+#   M_CONS_3NEW     (3): MR-v2 F6/F7/F8 only
+#   M_CONS_6NEWEST  (6): L5-1 F6/F7 + ASL6 F6/F7 + MR-v2 F7/F8 (drop F5s + MR-v2 F6)
+#   M_CONS_5NEWEST  (5): L5-1 F7 + ASL6 F7 + MR-v2 F6/F7/F8
+#
+# Fill compensation: limit_entry mode tracks no-fills; ROAC = total_pnl / n_signals.
+# GPU recommended. Colab-ready.
+
+import os, sys, gc, ctypes, subprocess, warnings, random
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+import pytz
+
+warnings.filterwarnings('ignore')
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+try:
+    import pandas_ta as ta
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pandas_ta", "--no-deps", "--quiet"])
+    import pandas_ta as ta
+
+try:
+    from numba import jit
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "numba", "--quiet"])
+    from numba import jit
+
+import tensorflow as tf
+import keras
+from keras.layers import Dense, Dropout, LayerNormalization
+from keras import layers as _kl
+import h5py
+from google.cloud import storage as gcs_storage
+
+if tf.config.list_physical_devices('GPU'):
+    keras.mixed_precision.set_dtype_policy('mixed_float16')
+
+try:
+    from google.cloud import bigquery
+except Exception:
+    bigquery = None
+
+try:
+    from google.colab import auth
+    _IN_COLAB = True
+    try:
+        auth.authenticate_user()
+    except Exception:
+        pass
+except ImportError:
+    _IN_COLAB = False
+
+import matplotlib
+if not _IN_COLAB:
+    matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
+
+# ==============================================================================
+# CONFIG
+# ==============================================================================
+BUCKET_NAME      = "time-series-bucket-ys"
+WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
+INFERENCE_DIR    = "Data/Inference_v2"
+PST              = pytz.timezone('America/Los_Angeles')
+
+BACKTEST_START   = '2026-08-03'
+BACKTEST_END     = '2026-08-24'
+
+TAIL_DAYS        = 45
+
+SCORE_MINUTE     = 375
+ENTRY_MINUTE     = 385
+EXIT_TIME_MIN    = 780
+SLIPPAGE_PCT     = 0.0015
+
+BASE_PNL_THRESH  = 0.018
+MIN_TRADES_PER_MONTH = 2.0
+
+MAX_TRADES       = 3
+RANDOM_ITERS     = 50
+
+TIME_STEPS       = 128
+D_MODEL          = 64
+N_HEADS          = 4
+D_FF             = 128
+N_BLOCKS         = 2
+DROPOUT_RATE     = 0.1
+FILM_HIDDEN      = 64
+N_HORIZONS       = 3
+N_ASSET_F        = 33
+N_REGIME_F       = 22
+
+FAMILIES = {
+    'L5-1': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_1_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_1_models',
+        'arch': 'standard',
+        'bq_versions': {
+            5: 'spike_transformer_long_L5_1_fold5',
+            6: 'spike_transformer_long_L5_1_fold6',
+            7: 'spike_transformer_long_L5_1_fold7',
+        },
+    },
+    'ASL6': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_2_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_2_asl6_models',
+        'arch': 'standard',
+        'bq_versions': {
+            5: 'spike_transformer_long_L5_2_asl6_fold5',
+            6: 'spike_transformer_long_L5_2_asl6_fold6',
+            7: 'spike_transformer_long_L5_2_asl6_fold7',
+        },
+    },
+    'MR-v2': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_1_multires_v2_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_1_multires_v2_models',
+        'arch': 'multires',
+        'bq_versions': {
+            6: 'spike_transformer_long_L5_1_multires_v2_fold6',
+            7: 'spike_transformer_long_L5_1_multires_v2_fold7',
+            8: 'spike_transformer_long_L5_1_multires_v2_fold8',
+        },
+    },
+}
+
+FOLDS = [5, 6, 7, 8]
+HORIZON_LABELS = {0: '15m', 1: '30m', 2: '60m'}
+HORIZON_FROM_LABEL = {'15m': 0, '30m': 1, '60m': 2}
+
+TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
+EXCLUDE_TICKERS = {'SPY', 'VIX', 'TLT', 'IWM', 'XLE', 'ITA', 'BITF', 'MIGI', 'SMLR', 'BTCUSD', 'ETHUSD'}
+
+N_BLOCKS_15M     = 1
+TIME_STEPS_15M   = 128
+N_LOWRES_F       = 12
+
+LOWRES_COLS = [
+    'lr_Close_ret', 'lr_High_ret', 'lr_Low_ret', 'lr_Volume_norm',
+    'lr_Range', 'lr_RSI_14', 'lr_RVOL', 'lr_ROC_4', 'lr_ROC_8',
+    'lr_ROC_16', 'lr_Bar_Is_Real', 'lr_Time_Pos',
+]
+
+MICRO_COLS = ['Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
+              'bsize', 'asize', 'Total_Vol']
+ROC_HORIZONS = [5, 30, 60]
+ASSET_COLS = (['Gap_Pct', 'RSI_14', 'RVOL', 'ATR_14', 'Bar_Is_Real'] +
+              [f'ROC_{h}m' for h in ROC_HORIZONS] + MICRO_COLS)
+
+CONTEXT_ASSETS_LIST = ['SPY', 'VIX', 'TLT', 'IWM']
+SECTOR_PROXY_ASSETS = ['MARA', 'MSTR', 'ITA']
+
+CONTEXT_COLS = []
+for _t in CONTEXT_ASSETS_LIST:
+    CONTEXT_COLS.append(f'{_t}_Anchor_ROC')
+    for _h in ROC_HORIZONS:
+        CONTEXT_COLS.append(f'{_t}_ROC_{_h}m')
+CONTEXT_COLS.append('Time_Pos')
+
+ALL_COLS = ASSET_COLS + CONTEXT_COLS
+
+REGIME_COLS = [
+    'regime_rvol_15', 'regime_rvol_60', 'regime_rvol_128',
+    'regime_trend_60', 'regime_trend_128', 'regime_autocorr_60',
+    'regime_xsect_disp', 'regime_vix_level', 'regime_vix_velocity',
+    'regime_time_sin', 'regime_time_cos', 'regime_spy_ret_60',
+    'regime_vix_close', 'regime_spy_tlt_corr', 'regime_breadth',
+    'regime_skew_60',
+    'regime_crypto_ret_60', 'regime_crypto_ret_128', 'regime_crypto_rvol',
+    'regime_growth_vs_value', 'regime_defense_rs', 'regime_safe_haven',
+]
+
+W = 120
+SEED = 42
+np.random.seed(SEED)
+
+gcs_client = gcs_storage.Client()
+
+_NEEDED_COLS = {'Open', 'High', 'Low', 'Close', 'Volume',
+                'open', 'high', 'low', 'close', 'volume',
+                'Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
+                'bsize', 'asize', 'Total_Vol',
+                'Total_vol', 'Trade_count', 'Volume_delta', 'Delta_pct',
+                'Obi', 'Bsize', 'Asize',
+                'Datetime', 'Date', 'Time', 'Timestamp', 'Level_0'}
+
+
+# ==============================================================================
+# BQ CONFIG LOADING — Newest First across L5-1 + ASL6 + MR-v2
+# ==============================================================================
+def load_deploy_configs():
+    if bigquery is None:
+        raise RuntimeError("BigQuery not available")
+    bq_client = bigquery.Client()
+
+    family_fold_cfgs = {}
+    for family_name, fam in FAMILIES.items():
+        for fold_id, model_version in fam['bq_versions'].items():
+            q = f"""
+            SELECT ticker, experiment, tpsl_mode, prob_thresh, tp_pct, sl_pct,
+                   grace_minutes, dip_pct, max_wait_minutes,
+                   val_b_avg_pnl, val_b_win_rate, val_b_count
+            FROM `{WF_BQ_TABLE}`
+            WHERE model_version = '{model_version}'
+              AND survived_a = TRUE
+              AND val_b_avg_pnl >= {BASE_PNL_THRESH}
+            """
+            rows = bq_client.query(q).to_dataframe()
+            if len(rows) == 0:
+                family_fold_cfgs[(family_name, fold_id)] = {}
+                print(f"    {family_name} F{fold_id}: 0 tickers")
+                continue
+            best = rows.loc[rows.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+            cfgs = {}
+            for _, row in best.iterrows():
+                tk = row['ticker']
+                if tk in EXCLUDE_TICKERS:
+                    continue
+                exp = row['experiment']
+                h_part = exp.replace(f'{model_version}_', '').split('_')[0]
+                horizon_idx = HORIZON_FROM_LABEL.get(h_part, 1)
+                mode = row['tpsl_mode']
+                if pd.isna(mode) or mode == '':
+                    if '_GRACE' in exp:
+                        mode = 'grace'
+                    elif '_LIMIT' in exp:
+                        mode = 'limit_entry'
+                    else:
+                        mode = 'static'
+                cfgs[tk] = {
+                    'family': family_name,
+                    'fold': fold_id,
+                    'horizon': horizon_idx,
+                    'prob_thresh': float(row['prob_thresh']),
+                    'tp_pct': float(row['tp_pct']),
+                    'sl_pct': float(row['sl_pct']),
+                    'mode': mode,
+                    'grace_minutes': int(row['grace_minutes']) if pd.notna(row['grace_minutes']) else 0,
+                    'dip_pct': float(row['dip_pct']) if pd.notna(row['dip_pct']) else 0,
+                    'max_wait': int(row['max_wait_minutes']) if pd.notna(row['max_wait_minutes']) else 0,
+                    'val_b_avg_pnl': float(row['val_b_avg_pnl']),
+                }
+            family_fold_cfgs[(family_name, fold_id)] = cfgs
+            print(f"    {family_name} F{fold_id}: {len(cfgs)} tickers")
+
+    # Newest First: MR-v2 F8 > MR-v2 F7 > MR-v2 F6 > L5-1/ASL6 F7 > F6 > F5
+    NEWEST_FIRST_ORDER = [
+        ('MR-v2', 8), ('MR-v2', 7), ('MR-v2', 6),
+        ('L5-1', 7), ('ASL6', 7),
+        ('L5-1', 6), ('ASL6', 6),
+        ('L5-1', 5), ('ASL6', 5),
+    ]
+
+    deploy = {}
+    for family, fold in NEWEST_FIRST_ORDER:
+        for tk, cfg in family_fold_cfgs.get((family, fold), {}).items():
+            if tk not in deploy:
+                deploy[tk] = cfg
+
+    source_counts = {}
+    for tk, cfg in deploy.items():
+        key = f"{cfg['family']} F{cfg['fold']}"
+        source_counts.setdefault(key, []).append(tk)
+    for src in sorted(source_counts):
+        tickers = sorted(source_counts[src])
+        print(f"    Newest-First {src}: {len(tickers)} — {', '.join(tickers)}")
+    print(f"    Total: {len(deploy)} tickers (Newest First across 3 families)")
+    return deploy, family_fold_cfgs
+
+
+# ==============================================================================
+# DATA LOADING (master_inference parquets from GCS)
+# ==============================================================================
+_master_cache = {}
+
+
+def load_master(ticker, tail_days=None):
+    cache_key = (ticker, tail_days)
+    if cache_key in _master_cache:
+        return _master_cache[cache_key]
+    clean = ticker.replace("I:", "").replace("X:", "")
+    file_ticker = TICKER_FILE_MAP.get(clean, clean)
+    blob_path = f"{INFERENCE_DIR}/{file_ticker}_master_inference.parquet"
+    local_path = f"/tmp/_bt_long_mrv2_{file_ticker}_master.parquet"
+    try:
+        gcs_client.bucket(BUCKET_NAME).blob(blob_path).download_to_filename(local_path)
+        import pyarrow.parquet as pq
+        schema = pq.read_schema(local_path)
+        all_cols = [f.name for f in schema]
+        use_cols = [c for c in all_cols if c in _NEEDED_COLS]
+        if not use_cols:
+            use_cols = None
+        df = pd.read_parquet(local_path, columns=use_cols)
+        os.remove(local_path)
+        df = df.reset_index()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+        if dt_cols:
+            df['Datetime'] = pd.to_datetime(df[dt_cols[0]], utc=True)
+        else:
+            num_col = next(
+                (c for c in df.columns
+                 if c in ('Datetime', 'Date', 'Time', 'Timestamp', 'Level_0')),
+                df.columns[0])
+            df['Datetime'] = pd.to_datetime(df[num_col], unit='ms', utc=True)
+        df = df.set_index('Datetime')
+        df = df[~df.index.duplicated(keep='first')]
+        std_map = {
+            'Total_vol': 'Total_Vol', 'Trade_count': 'Trade_Count',
+            'Volume_delta': 'Volume_Delta', 'Delta_pct': 'Delta_Pct',
+            'Obi': 'OBI', 'Bsize': 'bsize', 'Asize': 'asize',
+            'open': 'Open', 'high': 'High', 'low': 'Low',
+            'close': 'Close', 'volume': 'Volume',
+        }
+        lower_map = {k.lower(): v for k, v in std_map.items()}
+        df.columns = [lower_map.get(str(c).strip().lower(), str(c).strip())
+                      for c in df.columns]
+        df = df.loc[:, ~df.columns.duplicated(keep='first')].copy()
+        for c in MICRO_COLS:
+            if c not in df.columns:
+                df[c] = 0.0
+        df = df[df.index.notna()].sort_index()
+        if tail_days is not None:
+            cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=tail_days)
+            df = df[df.index >= cutoff]
+            if df.empty:
+                return None
+        _master_cache[cache_key] = df
+        return df
+    except Exception as e:
+        if os.path.exists(local_path):
+            os.remove(local_path)
+        return None
+
+
+def heal_data(df):
+    df = df.resample('1min').asfreq()
+    for c in ['Open', 'High', 'Low', 'Close']:
+        if c in df.columns:
+            df[c] = df[c].ffill()
+    for c in ['Volume', 'Total_Vol', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
+              'Spread', 'OBI', 'bsize', 'asize']:
+        if c in df.columns:
+            df[c] = df[c].fillna(0)
+    return df
+
+
+# ==============================================================================
+# MARKET CONTEXT & FEATURE ENGINEERING
+# ==============================================================================
+def build_market_context():
+    frames = []
+    vix_close = None
+    for ca in CONTEXT_ASSETS_LIST:
+        df = load_master(ca, tail_days=TAIL_DAYS)
+        if df is None:
+            raise RuntimeError(f"Cannot load context asset {ca}")
+        df = df.sort_index()
+        df = heal_data(df)
+        if ca == 'VIX':
+            vix_close = df['Close'].copy()
+        cols = {f'{ca}_Anchor_ROC': df['Close'].pct_change(1)}
+        for h in ROC_HORIZONS:
+            cols[f'{ca}_ROC_{h}m'] = df['Close'].pct_change(h)
+        frames.append(pd.DataFrame(cols, index=df.index))
+    result = pd.concat(frames, axis=1).ffill().fillna(0)
+    if vix_close is not None:
+        result['VIX_Close'] = vix_close.reindex(result.index).ffill().fillna(0)
+    for sp in SECTOR_PROXY_ASSETS:
+        df = load_master(sp, tail_days=TAIL_DAYS)
+        if df is not None:
+            df = heal_data(df.sort_index())
+            result[f'{sp}_ret'] = df['Close'].pct_change(1).reindex(
+                result.index).ffill().fillna(0)
+    return result
+
+
+def engineer_asset(ticker, market_df):
+    df = load_master(ticker, tail_days=TAIL_DAYS)
+    if df is None:
+        return None
+    df = df.sort_index()
+    df = heal_data(df)
+    daily_c = df['Close'].resample('D').last().ffill().shift(1).reindex(
+        df.index, method='ffill')
+    df['Gap_Pct'] = (df['Open'] - daily_c) / daily_c
+    df['RSI_14'] = ta.rsi(df['Close'], length=14)
+    vol_real = df['Volume'].where(df['Volume'] > 0)
+    df['RVOL'] = df['Volume'] / vol_real.rolling(50, min_periods=5).mean().ffill().clip(lower=1e-9)
+    real_mask = df['Volume'] > 0
+    atr_raw = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['ATR_14'] = atr_raw.where(real_mask).ffill().fillna(0)
+    for h in ROC_HORIZONS:
+        df[f'ROC_{h}m'] = df['Close'].pct_change(h)
+    df = df.join(market_df, how='left').ffill().fillna(0)
+    df_pst = df.index.tz_convert(PST)
+    mins = df_pst.hour * 60 + df_pst.minute
+    df['Time_Pos'] = np.clip((mins - 390) / 390, 0, 1)
+    df['Bar_Is_Real'] = (df['Volume'] > 0).astype(float)
+    return df.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+
+def build_15min_features(df_1m):
+    ohlcv_15 = df_1m[['Open', 'High', 'Low', 'Close', 'Volume']].resample('15min').agg({
+        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+    }).ffill()
+    lr = pd.DataFrame(index=ohlcv_15.index)
+    lr['lr_Close_ret'] = ohlcv_15['Close'].pct_change(1)
+    lr['lr_High_ret'] = (ohlcv_15['High'] - ohlcv_15['Open']) / ohlcv_15['Open'].clip(lower=1e-8)
+    lr['lr_Low_ret'] = (ohlcv_15['Low'] - ohlcv_15['Open']) / ohlcv_15['Open'].clip(lower=1e-8)
+    vol_real = ohlcv_15['Volume'].where(ohlcv_15['Volume'] > 0)
+    vol_mean = vol_real.rolling(50, min_periods=5).mean().ffill().clip(lower=1e-9)
+    lr['lr_Volume_norm'] = (ohlcv_15['Volume'] / vol_mean).fillna(1.0)
+    lr['lr_Range'] = (ohlcv_15['High'] - ohlcv_15['Low']) / ohlcv_15['Close'].clip(lower=1e-8)
+    lr['lr_RSI_14'] = ta.rsi(ohlcv_15['Close'], length=14)
+    lr['lr_RVOL'] = lr['lr_Volume_norm']
+    lr['lr_ROC_4'] = ohlcv_15['Close'].pct_change(4)
+    lr['lr_ROC_8'] = ohlcv_15['Close'].pct_change(8)
+    lr['lr_ROC_16'] = ohlcv_15['Close'].pct_change(16)
+    lr['lr_Bar_Is_Real'] = (ohlcv_15['Volume'] > 0).astype(float)
+    try:
+        idx_pst = ohlcv_15.index.tz_convert(PST)
+    except Exception:
+        idx_pst = ohlcv_15.index
+    mins = idx_pst.hour * 60 + idx_pst.minute
+    lr['lr_Time_Pos'] = np.clip((mins - 390) / 390, 0, 1)
+    lr = lr.replace([np.inf, -np.inf], np.nan).fillna(0)
+    return lr[LOWRES_COLS]
+
+
+def compute_regime_features(market_df, universe_returns=None):
+    rf = pd.DataFrame(index=market_df.index)
+    spy_ret = market_df['SPY_Anchor_ROC'].fillna(0)
+    for w, name in [(15, 'regime_rvol_15'), (60, 'regime_rvol_60'),
+                     (128, 'regime_rvol_128')]:
+        rf[name] = spy_ret.rolling(w, min_periods=max(w // 2, 1)).std().fillna(0)
+    for w, name in [(60, 'regime_trend_60'), (128, 'regime_trend_128')]:
+        cum_ret = spy_ret.rolling(w, min_periods=max(w // 2, 1)).sum()
+        rvol = rf[f'regime_rvol_{w}'].clip(lower=1e-8)
+        rf[name] = (cum_ret / rvol).fillna(0).clip(-10, 10)
+    spy_vals = spy_ret.values.astype(np.float64)
+    n = len(spy_vals)
+    autocorr = np.full(n, 0.0)
+    for i in range(60, n):
+        chunk = spy_vals[i - 60:i]
+        if np.count_nonzero(~np.isnan(chunk)) >= 30:
+            x, y = chunk[:-1], chunk[1:]
+            mx, my = x.mean(), y.mean()
+            sx, sy = x.std(), y.std()
+            if sx > 1e-12 and sy > 1e-12:
+                autocorr[i] = ((x - mx) * (y - my)).mean() / (sx * sy)
+    rf['regime_autocorr_60'] = autocorr
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        rf['regime_xsect_disp'] = universe_returns.std(axis=1).fillna(0)
+    else:
+        rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
+    vix_col = 'VIX_Anchor_ROC'
+    if vix_col in market_df.columns:
+        vix_cum = market_df[vix_col].cumsum()
+        rf['regime_vix_level'] = vix_cum.rolling(60, min_periods=1).mean().fillna(0)
+        rf['regime_vix_velocity'] = vix_cum.diff(15).fillna(0)
+    else:
+        rf['regime_vix_level'] = 0.0
+        rf['regime_vix_velocity'] = 0.0
+    try:
+        idx_pst = market_df.index.tz_convert(PST)
+    except Exception:
+        idx_pst = market_df.index.tz_localize('UTC').tz_convert(PST)
+    mins_of_day = idx_pst.hour * 60 + idx_pst.minute
+    rf['regime_time_sin'] = np.sin(2 * np.pi * mins_of_day / 1440)
+    rf['regime_time_cos'] = np.cos(2 * np.pi * mins_of_day / 1440)
+    rf['regime_spy_ret_60'] = spy_ret.rolling(60, min_periods=30).sum().fillna(0)
+    if 'VIX_Close' in market_df.columns:
+        rf['regime_vix_close'] = market_df['VIX_Close'].ffill().fillna(0)
+    else:
+        rf['regime_vix_close'] = 0.0
+    tlt_ret = (market_df['TLT_Anchor_ROC'].fillna(0)
+               if 'TLT_Anchor_ROC' in market_df.columns
+               else pd.Series(0.0, index=market_df.index))
+    rf['regime_spy_tlt_corr'] = spy_ret.rolling(
+        60, min_periods=30).corr(tlt_ret).fillna(0).clip(-1, 1)
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        cum_rets_60 = universe_returns.rolling(60, min_periods=30).sum()
+        rf['regime_breadth'] = (cum_rets_60 > 0).mean(axis=1).fillna(0.5)
+    else:
+        rf['regime_breadth'] = 0.5
+    rolling_mean = spy_ret.rolling(60, min_periods=30).mean()
+    rolling_std = spy_ret.rolling(60, min_periods=30).std().clip(lower=1e-12)
+    standardized = (spy_ret - rolling_mean) / rolling_std
+    rf['regime_skew_60'] = standardized.pow(3).rolling(
+        60, min_periods=30).mean().fillna(0).clip(-5, 5)
+    crypto_ret = (market_df['MARA_ret'].fillna(0)
+                  if 'MARA_ret' in market_df.columns
+                  else pd.Series(0.0, index=market_df.index))
+    rf['regime_crypto_ret_60'] = crypto_ret.rolling(60, min_periods=30).sum().fillna(0)
+    rf['regime_crypto_ret_128'] = crypto_ret.rolling(128, min_periods=60).sum().fillna(0)
+    rf['regime_crypto_rvol'] = crypto_ret.rolling(60, min_periods=30).std().fillna(0)
+    iwm_ret = (market_df['IWM_Anchor_ROC'].fillna(0)
+               if 'IWM_Anchor_ROC' in market_df.columns
+               else pd.Series(0.0, index=market_df.index))
+    rf['regime_growth_vs_value'] = (
+        iwm_ret.rolling(60, min_periods=30).sum() -
+        spy_ret.rolling(60, min_periods=30).sum()
+    ).fillna(0)
+    defense_ret = (market_df['ITA_ret'].fillna(0)
+                   if 'ITA_ret' in market_df.columns
+                   else pd.Series(0.0, index=market_df.index))
+    rf['regime_defense_rs'] = (
+        defense_ret.rolling(60, min_periods=30).sum() -
+        spy_ret.rolling(60, min_periods=30).sum()
+    ).fillna(0)
+    rf['regime_safe_haven'] = (
+        tlt_ret.rolling(60, min_periods=30).sum() -
+        spy_ret.rolling(60, min_periods=30).sum()
+    ).fillna(0)
+    return rf[REGIME_COLS].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+
+# ==============================================================================
+# MODEL ARCHITECTURE (SpikeTransformer + MultiResSpikeTransformer)
+# ==============================================================================
+class _SeriesStationarization(_kl.Layer):
+    def call(self, x):
+        mean = tf.reduce_mean(x, axis=1, keepdims=True)
+        std = tf.math.reduce_std(x, axis=1, keepdims=True) + 1e-5
+        return (x - mean) / std, tf.concat([mean[:, 0, :], std[:, 0, :]], axis=-1)
+
+class _DeStationaryAttention(_kl.Layer):
+    def __init__(self, d_model, n_heads, dropout=0.1, **kw):
+        super().__init__(**kw)
+        self.d_model, self.n_heads = d_model, n_heads
+        self.d_head = d_model // n_heads
+        self.scale = tf.sqrt(tf.cast(self.d_head, tf.float32))
+        self.wq = Dense(d_model); self.wk = Dense(d_model)
+        self.wv = Dense(d_model); self.wo = Dense(d_model)
+        self.attn_drop = Dropout(dropout)
+        self.tau_proj = Dense(n_heads)
+        self.sigma_proj = Dense(d_model)
+    def call(self, x, stats, training=False):
+        B, T = tf.shape(x)[0], tf.shape(x)[1]
+        H, D = self.n_heads, self.d_head
+        Q = tf.transpose(tf.reshape(self.wq(x), (B, T, H, D)), (0, 2, 1, 3))
+        K = tf.transpose(tf.reshape(self.wk(x), (B, T, H, D)), (0, 2, 1, 3))
+        V = tf.transpose(tf.reshape(self.wv(x), (B, T, H, D)), (0, 2, 1, 3))
+        scores = tf.matmul(Q, K, transpose_b=True) / tf.cast(self.scale, Q.dtype)
+        tau = tf.reshape(self.tau_proj(stats), (B, H, 1, 1))
+        scores = scores + tau
+        attn = self.attn_drop(tf.nn.softmax(scores, axis=-1), training=training)
+        out = tf.reshape(tf.transpose(tf.matmul(attn, V), (0, 2, 1, 3)),
+                         (B, T, self.d_model))
+        sigma = tf.nn.softplus(self.sigma_proj(stats))
+        return self.wo(out * sigma[:, tf.newaxis, :])
+
+class TransformerBlock(_kl.Layer):
+    def __init__(self, d_model, n_heads, d_ff, dropout=0.1, **kw):
+        super().__init__(**kw)
+        self.attn = _DeStationaryAttention(d_model, n_heads, dropout, name='destat_attn')
+        self.ffn = keras.Sequential([
+            Dense(d_ff, activation='gelu'), Dense(d_model), Dropout(dropout)])
+        self.norm1 = LayerNormalization()
+        self.norm2 = LayerNormalization()
+        self.drop = Dropout(dropout)
+    def call(self, x, stats, training=False):
+        x = x + self.drop(self.attn(self.norm1(x), stats, training=training),
+                          training=training)
+        return x + self.ffn(self.norm2(x), training=training)
+
+class TransformerBackbone(_kl.Layer):
+    def __init__(self, d_model, n_heads, d_ff, n_blocks, seq_len,
+                 dropout=0.1, **kw):
+        super().__init__(**kw)
+        self.stationarize = _SeriesStationarization(name='stationarize')
+        self.input_proj = Dense(d_model)
+        self.pos_embed = self.add_weight(
+            name='pos_embed', shape=(1, seq_len, d_model),
+            initializer='glorot_normal', trainable=True)
+        self.input_drop = Dropout(dropout)
+        self.blocks = [TransformerBlock(d_model, n_heads, d_ff, dropout,
+                                        name=f'block_{i}')
+                       for i in range(n_blocks)]
+        self.final_norm = LayerNormalization()
+    def call(self, x, training=False):
+        x_norm, stats = self.stationarize(x)
+        h = self.input_proj(x_norm) + self.pos_embed
+        h = self.input_drop(h, training=training)
+        for block in self.blocks:
+            h = block(h, stats, training=training)
+        return self.final_norm(h)
+
+class _AttentionPooling(_kl.Layer):
+    def __init__(self, d_model, **kw):
+        super().__init__(**kw)
+        self.query = self.add_weight(
+            name='pool_query', shape=(1, 1, d_model),
+            initializer='glorot_normal', trainable=True)
+        self.scale = tf.sqrt(tf.cast(d_model, tf.float32))
+    def call(self, x, training=False):
+        scores = tf.matmul(self.query, x, transpose_b=True) / tf.cast(self.scale, x.dtype)
+        return tf.matmul(tf.nn.softmax(scores, axis=-1), x)[:, 0, :]
+
+class _FiLMConditioner(_kl.Layer):
+    def __init__(self, d_model, hidden_dim=64, **kw):
+        super().__init__(**kw)
+        self.mlp = keras.Sequential([
+            Dense(hidden_dim, activation='relu'),
+            Dense(hidden_dim, activation='relu')])
+        self.gamma_proj = Dense(d_model)
+        self.beta_proj = Dense(d_model)
+    def call(self, x, regime_features, training=False):
+        h = self.mlp(regime_features, training=training)
+        return (1.0 + self.gamma_proj(h)) * x + self.beta_proj(h)
+
+class SpikeTransformer(keras.Model):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.backbone = TransformerBackbone(
+            D_MODEL, N_HEADS, D_FF, N_BLOCKS,
+            TIME_STEPS, DROPOUT_RATE, name='backbone')
+        self.attn_pool = _AttentionPooling(D_MODEL, name='attn_pool')
+        self.film = _FiLMConditioner(D_MODEL, FILM_HIDDEN, name='film')
+        self.drop = Dropout(DROPOUT_RATE)
+        self.head = Dense(N_HORIZONS, activation='sigmoid', name='spike_head')
+    def call(self, inputs, training=False):
+        h = self.backbone(inputs['seq_input'], training=training)
+        h = self.attn_pool(h, training=training)
+        h = self.film(h, inputs['regime_input'], training=training)
+        return self.head(self.drop(h, training=training))
+
+
+class MultiResSpikeTransformer(keras.Model):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.backbone_1m = TransformerBackbone(
+            D_MODEL, N_HEADS, D_FF, N_BLOCKS,
+            TIME_STEPS, DROPOUT_RATE, name='backbone_1m')
+        self.pool_1m = _AttentionPooling(D_MODEL, name='pool_1m')
+        self.backbone_15m = TransformerBackbone(
+            D_MODEL, N_HEADS, D_FF, N_BLOCKS_15M,
+            TIME_STEPS_15M, DROPOUT_RATE, name='backbone_15m')
+        self.pool_15m = _AttentionPooling(D_MODEL, name='pool_15m')
+        self.fusion = Dense(D_MODEL, activation='gelu', name='fusion')
+        self.film = _FiLMConditioner(D_MODEL, FILM_HIDDEN, name='film')
+        self.drop = Dropout(DROPOUT_RATE)
+        self.head = Dense(N_HORIZONS, activation='sigmoid', name='spike_head')
+    def call(self, inputs, training=False):
+        h_1m = self.backbone_1m(inputs['seq_input'], training=training)
+        h_1m = self.pool_1m(h_1m, training=training)
+        h_15m = self.backbone_15m(inputs['seq_15m_input'], training=training)
+        h_15m = self.pool_15m(h_15m, training=training)
+        h = self.fusion(tf.concat([h_1m, h_15m], axis=-1))
+        h = self.film(h, inputs['regime_input'], training=training)
+        return self.head(self.drop(h, training=training))
+
+
+# ==============================================================================
+# MODEL LOADING (h5py weight loader)
+# ==============================================================================
+_model_std = None
+_model_mr = None
+_fold_weights = {}
+_current_key = None
+_family_meta = {}
+
+
+def _load_keras3_weights(model, filepath):
+    with h5py.File(filepath, 'r') as f:
+        _load_layer_recursive(model, f)
+
+def _load_layer_recursive(layer, h5_group):
+    if 'vars' in h5_group:
+        vg = h5_group['vars']
+        own_vars = layer.trainable_weights + layer.non_trainable_weights
+        for i, var in enumerate(own_vars):
+            key = str(i)
+            if key in vg:
+                var.assign(np.array(vg[key]))
+    for key in sorted(h5_group.keys()):
+        if key in ('vars', 'optimizer'):
+            continue
+        if not isinstance(h5_group[key], h5py.Group):
+            continue
+        child = getattr(layer, key, None)
+        if child is None:
+            continue
+        if isinstance(child, _kl.Layer):
+            _load_layer_recursive(child, h5_group[key])
+        elif isinstance(child, (list, tuple)):
+            _load_list_recursive(child, h5_group[key])
+
+def _load_list_recursive(items, h5_group):
+    used_names = {}
+    for item in items:
+        if not isinstance(item, _kl.Layer):
+            continue
+        cname = type(item).__name__
+        snake = ''.join(f'_{c.lower()}' if c.isupper() else c
+                        for c in cname).lstrip('_')
+        if snake in used_names:
+            used_names[snake] += 1
+            snake = f"{snake}_{used_names[snake]}"
+        else:
+            used_names[snake] = 0
+        if snake in h5_group:
+            _load_layer_recursive(item, h5_group[snake])
+
+def _ensure_file(gcs_path, local_path):
+    if os.path.exists(local_path):
+        return local_path
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+    gcs_client.bucket(BUCKET_NAME).blob(gcs_path).download_to_filename(local_path)
+    return local_path
+
+def _get_model_for_family(family):
+    arch = FAMILIES[family].get('arch', 'standard')
+    return _model_mr if arch == 'multires' else _model_std
+
+def _ensure_fold_loaded(family, fold_id):
+    global _current_key
+    key = (family, fold_id)
+    if _current_key != key:
+        model = _get_model_for_family(family)
+        _load_keras3_weights(model, _fold_weights[key])
+        _current_key = key
+
+def load_models_and_meta(deploy_configs, all_model_configs=None):
+    global _model_std, _model_mr, _fold_weights, _current_key, _family_meta
+    all_cfgs = list(deploy_configs.values())
+    if all_model_configs:
+        for cfg_list in all_model_configs.values():
+            all_cfgs.extend(cfg_list)
+    needed_families = sorted(set(cfg['family'] for cfg in all_cfgs))
+    for family_name in needed_families:
+        fam = FAMILIES[family_name]
+        local_meta = f'/tmp/ra_moe_long_{family_name}_meta.npz'
+        meta_path = _ensure_file(f"{fam['gcs_data']}/meta.npz", local_meta)
+        meta = np.load(meta_path, allow_pickle=True)
+        meta_dict = {
+            'scaling_stats': meta['scaling_stats'].item(),
+            'regime_stats': meta['regime_stats'].item(),
+        }
+        if 'scaling_stats_15m' in meta:
+            meta_dict['scaling_stats_15m'] = meta['scaling_stats_15m'].item()
+        _family_meta[family_name] = meta_dict
+        print(f"   {family_name} meta loaded")
+
+    keras.backend.clear_session()
+    gc.collect()
+
+    need_std = any(FAMILIES[f].get('arch', 'standard') == 'standard' for f in needed_families)
+    need_mr  = any(FAMILIES[f].get('arch', 'standard') == 'multires' for f in needed_families)
+
+    if need_std:
+        _model_std = SpikeTransformer(name='spike_transformer')
+        dummy_seq = tf.zeros((1, TIME_STEPS, N_ASSET_F))
+        dummy_reg = tf.zeros((1, N_REGIME_F))
+        _model_std({'seq_input': dummy_seq, 'regime_input': dummy_reg})
+        print(f"   Standard SpikeTransformer: {_model_std.count_params():,} params")
+
+    if need_mr:
+        _model_mr = MultiResSpikeTransformer(name='multires_spike_transformer')
+        dummy_seq = tf.zeros((1, TIME_STEPS, N_ASSET_F))
+        dummy_15m = tf.zeros((1, TIME_STEPS_15M, N_LOWRES_F))
+        dummy_reg = tf.zeros((1, N_REGIME_F))
+        _model_mr({'seq_input': dummy_seq, 'seq_15m_input': dummy_15m, 'regime_input': dummy_reg})
+        print(f"   MultiResSpikeTransformer: {_model_mr.count_params():,} params")
+
+    needed_keys = sorted(set((cfg['family'], cfg['fold']) for cfg in all_cfgs))
+    for family_name, fold_id in needed_keys:
+        fam = FAMILIES[family_name]
+        local_dir = f'/tmp/ra_moe_long_{family_name}_models/fold_{fold_id}'
+        weights_path = os.path.join(local_dir, 'model.weights.h5')
+        if not os.path.exists(weights_path):
+            os.makedirs(local_dir, exist_ok=True)
+            prefix = f"{fam['gcs_models']}/fold_{fold_id}"
+            bucket = gcs_client.bucket(BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=prefix):
+                fname = blob.name.split('/')[-1]
+                blob.download_to_filename(os.path.join(local_dir, fname))
+        _fold_weights[(family_name, fold_id)] = weights_path
+        n_tickers = sum(1 for c in deploy_configs.values()
+                        if c['family'] == family_name and c['fold'] == fold_id)
+        print(f"   {family_name} F{fold_id} weights cached ({n_tickers} tickers)")
+
+    first_key = needed_keys[0]
+    first_model = _get_model_for_family(first_key[0])
+    _load_keras3_weights(first_model, _fold_weights[first_key])
+    _current_key = first_key
+    print(f"   {len(needed_keys)} (family,fold) combos, {len(deploy_configs)} tickers")
+
+
+def apply_scaling(df, stats, cols):
+    df_s = df.copy()
+    for col in cols:
+        if col in ('Time_Pos', 'Bar_Is_Real'):
+            continue
+        if col in stats:
+            df_s[col] = ((df_s[col] - stats[col]['med'])
+                         / stats[col]['iqr']).clip(-10, 10).astype('float32')
+    return df_s
+
+
+# ==============================================================================
+# NUMBA TRADE SIMULATION — LONG DIRECTION
+# TP hit when High >= tp_price (price rises to target)
+# SL hit when Low <= sl_price (price drops against us)
+# EOD PnL = (exit - entry) / entry
+# ==============================================================================
+@jit(nopython=True)
+def run_trade_sim(entry_indices, prices, highs, lows, date_ints, time_mins,
+                  tp, sl, exit_time):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        ep = prices[idx]; tgt = ep * (1 + tp); stp = ep * (1 - sl)
+        oc = 0.0; xp = ep; xt = 0; done = False; xi = idx
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (xp - ep) / ep; xi = k; done = True; break
+            sl_h = lows[k] <= stp; tp_h = highs[k] >= tgt
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                xi = k; done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; xi = k; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; xi = k; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (xp - ep) / ep; xi = k; done = True; break
+        if not done: xp = prices[np_-1]; oc = (xp - ep) / ep; xi = np_
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = ep; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; nxt = cp + 1
+        while nxt < ne:
+            if entry_indices[nxt] > xi: break
+            nxt += 1
+        cp = nxt
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+@jit(nopython=True)
+def run_trade_sim_grace(entry_indices, prices, highs, lows, date_ints, time_mins,
+                        tp, sl, exit_time, grace_minutes):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        ep = prices[idx]; tgt = ep * (1 + tp); stp = ep * (1 - sl)
+        et = time_mins[idx]; oc = 0.0; xp = ep; xt = 0; done = False; xi = idx
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (xp - ep) / ep; xi = k; done = True; break
+            elapsed = time_mins[k] - et; sl_act = elapsed >= grace_minutes
+            tp_h = highs[k] >= tgt; sl_h = sl_act and (lows[k] <= stp)
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                xi = k; done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; xi = k; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; xi = k; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (xp - ep) / ep; xi = k; done = True; break
+        if not done: xp = prices[np_-1]; oc = (xp - ep) / ep; xi = np_
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = ep; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; nxt = cp + 1
+        while nxt < ne:
+            if entry_indices[nxt] > xi: break
+            nxt += 1
+        cp = nxt
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+@jit(nopython=True)
+def run_trade_sim_limit_entry(entry_indices, prices, highs, lows, date_ints, time_mins,
+                              tp, sl, exit_time, dip_pct, max_wait_minutes):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        sp = prices[idx]; lp = sp * (1.0 - dip_pct); st = time_mins[idx]
+        fi = -1; fp = 0.0
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed: break
+            if time_mins[k] - st > max_wait_minutes: break
+            if lows[k] <= lp: fp = lp; fi = k; break
+        if fi < 0: cp += 1; ltd = ed; continue
+        tgt = fp * (1 + tp); stp = fp * (1 - sl)
+        oc = 0.0; xp = fp; xt = 0; done = False; xi = fi
+        for k in range(fi + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (xp - fp) / fp; xi = k; done = True; break
+            sl_h = lows[k] <= stp; tp_h = highs[k] >= tgt
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                xi = k; done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; xi = k; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; xi = k; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (xp - fp) / fp; xi = k; done = True; break
+        if not done: xp = prices[np_-1]; oc = (xp - fp) / fp; xi = np_
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = fp; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; nxt = cp + 1
+        while nxt < ne:
+            if entry_indices[nxt] > xi: break
+            nxt += 1
+        cp = nxt
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+@jit(nopython=True)
+def run_trade_sim_limit_entry_with_nofills(entry_indices, prices, highs, lows, date_ints, time_mins,
+                                           tp, sl, exit_time, dip_pct, max_wait_minutes):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); filled_a = np.empty(ne, np.int64)
+    tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        sp = prices[idx]; lp = sp * (1.0 - dip_pct); st = time_mins[idx]
+        fi = -1; fp = 0.0
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed: break
+            if time_mins[k] - st > max_wait_minutes: break
+            if lows[k] <= lp: fp = lp; fi = k; break
+        if fi < 0:
+            pnl_a[tc] = 0.0; date_a[tc] = ed; entry_a[tc] = sp
+            exit_a[tc] = sp; out_a[tc] = 0; filled_a[tc] = 0
+            tc += 1; ltd = ed; cp += 1; continue
+        tgt = fp * (1 + tp); stp = fp * (1 - sl)
+        oc = 0.0; xp = fp; xt = 0; done = False; xi = fi
+        for k in range(fi + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (xp - fp) / fp; xi = k; done = True; break
+            sl_h = lows[k] <= stp; tp_h = highs[k] >= tgt
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                xi = k; done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; xi = k; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; xi = k; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (xp - fp) / fp; xi = k; done = True; break
+        if not done: xp = prices[np_-1]; oc = (xp - fp) / fp; xi = np_
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = fp; exit_a[tc] = xp
+        out_a[tc] = xt; filled_a[tc] = 1
+        tc += 1; ltd = ed; nxt = cp + 1
+        while nxt < ne:
+            if entry_indices[nxt] > xi: break
+            nxt += 1
+        cp = nxt
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc], filled_a[:tc]
+
+def _run_sim(indices, ohlcv, cfg, include_nofills=False):
+    p, h, l, d, t = ohlcv['prices'], ohlcv['highs'], ohlcv['lows'], ohlcv['dates'], ohlcv['times'].astype(np.int64)
+    m = cfg['mode']
+    if m == 'grace':
+        r = run_trade_sim_grace(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                                EXIT_TIME_MIN, cfg.get('grace_minutes', 0))
+        pnl, dd, ep, xp, oc = r
+        filled = np.ones(len(pnl), dtype=np.int64)
+    elif m == 'limit_entry':
+        if include_nofills:
+            r = run_trade_sim_limit_entry_with_nofills(
+                indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                EXIT_TIME_MIN, cfg.get('dip_pct', 0), cfg.get('max_wait', 30))
+            pnl, dd, ep, xp, oc, filled = r
+        else:
+            r = run_trade_sim_limit_entry(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                                          EXIT_TIME_MIN, cfg.get('dip_pct', 0), cfg.get('max_wait', 30))
+            pnl, dd, ep, xp, oc = r
+            filled = np.ones(len(pnl), dtype=np.int64)
+    else:
+        r = run_trade_sim(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'], EXIT_TIME_MIN)
+        pnl, dd, ep, xp, oc = r
+        filled = np.ones(len(pnl), dtype=np.int64)
+    if len(pnl) > 0 and SLIPPAGE_PCT > 0:
+        slip_mask = filled.astype(np.float64)
+        pnl = pnl - 2 * SLIPPAGE_PCT * slip_mask
+    return pnl, dd, ep, xp, oc, filled
+
+
+# ==============================================================================
+# SCORING + TRADE SIM — enriched with signal metadata for prioritization
+# ==============================================================================
+def score_and_backtest_ticker(ticker, cfg, df_feat, regime_df, df_15m=None):
+    family = cfg['family']
+    scaling_stats = _family_meta[family]['scaling_stats']
+    regime_stats = _family_meta[family]['regime_stats']
+    is_multires = FAMILIES[family].get('arch', 'standard') == 'multires'
+
+    df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
+
+    if is_multires and df_15m is not None:
+        scaling_stats_15m = _family_meta[family].get('scaling_stats_15m')
+        if scaling_stats_15m:
+            df_15m_scaled = apply_scaling(df_15m, scaling_stats_15m, LOWRES_COLS)
+        else:
+            df_15m_scaled = df_15m.copy()
+        XL = df_15m_scaled[LOWRES_COLS].values.astype(np.float32)
+
+    bt_start = pd.Timestamp(BACKTEST_START, tz='UTC')
+    bt_end = pd.Timestamp(BACKTEST_END, tz='UTC') + pd.Timedelta(days=1)
+
+    score_bars = []
+    for i in range(TIME_STEPS, len(df_feat)):
+        ts = df_feat.index[i]
+        if ts < bt_start or ts >= bt_end:
+            continue
+        bar_pst = ts.tz_convert(PST)
+        bar_min = bar_pst.hour * 60 + bar_pst.minute
+        if bar_min != SCORE_MINUTE:
+            continue
+        if 'Volume' in df_feat.columns and float(df_feat['Volume'].iloc[i]) == 0:
+            continue
+        score_bars.append(i)
+
+    if not score_bars:
+        return []
+
+    fold_id = cfg['fold']
+    _ensure_fold_loaded(family, fold_id)
+    model = _get_model_for_family(family)
+
+    XA = df_scaled[ALL_COLS].values.astype(np.float32)
+    h_idx = cfg['horizon']
+    signal_dates = []
+    signal_meta = {}
+
+    for row_idx in score_bars:
+        seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
+
+        regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
+            [df_feat.index[row_idx]], method='pad')[0]]
+        regime_scaled = np.zeros(N_REGIME_F, dtype=np.float32)
+        for ri, col in enumerate(REGIME_COLS):
+            val = float(regime_at_entry[col]) if col in regime_at_entry.index else 0.0
+            if col in regime_stats:
+                s = regime_stats[col]
+                val = np.clip((val - s['med']) / s['iqr'], -10, 10)
+            regime_scaled[ri] = val
+        regime_batch = regime_scaled[np.newaxis]
+
+        if is_multires and df_15m is not None:
+            ts_1m = df_feat.index[row_idx]
+            lr_idx = df_15m_scaled.index.get_indexer([ts_1m], method='pad')[0]
+            lr_end = lr_idx + 1
+            lr_start = max(0, lr_end - TIME_STEPS_15M)
+            lr_window = XL[lr_start:lr_end]
+            if len(lr_window) < TIME_STEPS_15M:
+                pad = np.zeros((TIME_STEPS_15M - len(lr_window), N_LOWRES_F), dtype=np.float32)
+                lr_window = np.concatenate([pad, lr_window], axis=0)
+            lr_batch = lr_window[np.newaxis]
+            preds = model(
+                {'seq_input': seq_batch, 'seq_15m_input': lr_batch, 'regime_input': regime_batch},
+                training=False
+            ).numpy().flatten()
+        else:
+            preds = model(
+                {'seq_input': seq_batch, 'regime_input': regime_batch},
+                training=False
+            ).numpy().flatten()
+
+        prob = float(preds[h_idx])
+        if prob >= cfg['prob_thresh']:
+            bar_pst = df_feat.index[row_idx].tz_convert(PST)
+            date_int = bar_pst.year * 10000 + bar_pst.month * 100 + bar_pst.day
+            signal_dates.append((row_idx, date_int, prob))
+            signal_meta[date_int] = {
+                'atr_14': float(df_feat['ATR_14'].iloc[row_idx]),
+                'rvol': float(df_feat['RVOL'].iloc[row_idx]),
+                'gap_pct': float(df_feat['Gap_Pct'].iloc[row_idx]),
+                'rsi_14': float(df_feat['RSI_14'].iloc[row_idx]) if 'RSI_14' in df_feat.columns else 50.0,
+            }
+
+    if not signal_dates:
+        return []
+
+    df_bt = df_feat[(df_feat.index >= bt_start) & (df_feat.index < bt_end)].copy()
+    df_bt_pst = df_bt.index.tz_convert(PST)
+
+    ohlcv = {
+        'prices': df_bt['Close'].values.copy(),
+        'highs': df_bt['High'].values.copy(),
+        'lows': df_bt['Low'].values.copy(),
+        'dates': (df_bt_pst.year * 10000 + df_bt_pst.month * 100 + df_bt_pst.day).values.astype(np.int64),
+        'times': (df_bt_pst.hour * 60 + df_bt_pst.minute).values,
+    }
+
+    entry_indices = []
+    signal_probs = {}
+    for row_idx, date_int, prob in signal_dates:
+        for j in range(len(df_bt)):
+            bt_pst = df_bt_pst[j]
+            bt_date_int = bt_pst.year * 10000 + bt_pst.month * 100 + bt_pst.day
+            bt_min = bt_pst.hour * 60 + bt_pst.minute
+            if bt_date_int == date_int and bt_min == ENTRY_MINUTE:
+                entry_indices.append(j)
+                signal_probs[date_int] = prob
+                break
+
+    if not entry_indices:
+        return []
+
+    pnl, dates, ep, xp, outcomes, fill_flags = _run_sim(
+        np.array(entry_indices, dtype=np.int64), ohlcv, cfg, include_nofills=True)
+
+    trades = []
+    for i in range(len(pnl)):
+        d = int(dates[i])
+        date_str = f"{d//10000}-{(d%10000)//100:02d}-{d%100:02d}"
+        meta = signal_meta.get(d, {})
+        prob = signal_probs.get(d, 0.0)
+        thresh = cfg['prob_thresh']
+        ev = prob * cfg['tp_pct'] - (1 - prob) * cfg['sl_pct']
+        is_filled = bool(fill_flags[i])
+        trades.append({
+            'Ticker': ticker,
+            'Date': date_str,
+            'PnL': float(pnl[i]),
+            'Entry': float(ep[i]),
+            'Exit': float(xp[i]),
+            'Outcome': 'NO_FILL' if not is_filled else ('TP' if outcomes[i]==1 else 'SL' if outcomes[i]==-1 else 'EOD'),
+            'Filled': is_filled,
+            'Mode': cfg['mode'],
+            'Horizon': HORIZON_LABELS[h_idx],
+            'Family': f"{cfg['family']} F{cfg['fold']}",
+            'Prob': prob,
+            'Thresh': thresh,
+            'Prob_Margin': (prob - thresh) / max(thresh, 1e-6),
+            'EV': ev,
+            'Val_B': cfg['val_b_avg_pnl'],
+            'TP_Pct': cfg['tp_pct'],
+            'SL_Pct': cfg['sl_pct'],
+            'RR_Ratio': cfg['tp_pct'] / max(cfg['sl_pct'], 1e-6),
+            'ATR_14': meta.get('atr_14', 0.0),
+            'RVOL': meta.get('rvol', 0.0),
+            'Gap_Pct': meta.get('gap_pct', 0.0),
+        })
+    return trades
+
+
+# ==============================================================================
+# PRIORITIZATION STRATEGIES
+# ==============================================================================
+def _minmax_norm(vals):
+    mn, mx = min(vals), max(vals)
+    if mx - mn < 1e-12:
+        return [0.5] * len(vals)
+    return [(v - mn) / (mx - mn) for v in vals]
+
+def select_all(day_trades, max_k, rng=None):
+    return day_trades
+
+def select_random(day_trades, max_k, rng=None):
+    if rng is None:
+        rng = random.Random(SEED)
+    if len(day_trades) <= max_k:
+        return day_trades
+    return rng.sample(day_trades, max_k)
+
+def select_prob_raw(day_trades, max_k, rng=None):
+    return sorted(day_trades, key=lambda t: -t['Prob'])[:max_k]
+
+def select_prob_margin(day_trades, max_k, rng=None):
+    return sorted(day_trades, key=lambda t: -t['Prob_Margin'])[:max_k]
+
+def select_expected_value(day_trades, max_k, rng=None):
+    return sorted(day_trades, key=lambda t: -t['EV'])[:max_k]
+
+def select_val_b(day_trades, max_k, rng=None):
+    return sorted(day_trades, key=lambda t: -t['Val_B'])[:max_k]
+
+def select_composite(day_trades, max_k, rng=None):
+    if len(day_trades) <= max_k:
+        return day_trades
+    pm = _minmax_norm([t['Prob_Margin'] for t in day_trades])
+    ev = _minmax_norm([t['EV'] for t in day_trades])
+    vb = _minmax_norm([t['Val_B'] for t in day_trades])
+    scores = [0.4 * pm[i] + 0.3 * ev[i] + 0.3 * vb[i] for i in range(len(day_trades))]
+    ranked = sorted(zip(scores, day_trades), key=lambda x: -x[0])
+    return [t for _, t in ranked[:max_k]]
+
+def select_inverse_prob(day_trades, max_k, rng=None):
+    return sorted(day_trades, key=lambda t: t['Prob'])[:max_k]
+
+
+STRATEGIES = {
+    'ALL_TRADES':   select_all,
+    'RANDOM':       select_random,
+    'PROB_RAW':     select_prob_raw,
+    'PROB_MARGIN':  select_prob_margin,
+    'EXPECTED_VAL': select_expected_value,
+    'VAL_B_BEST':   select_val_b,
+    'COMPOSITE':    select_composite,
+    'INVERSE_PROB': select_inverse_prob,
+}
+
+
+def evaluate_strategy(all_trades_df, strategy_fn, max_k, n_iters=1):
+    dates = sorted(all_trades_df['Date'].unique())
+    is_random = (strategy_fn == select_random)
+    actual_iters = RANDOM_ITERS if is_random else 1
+
+    has_filled_col = 'Filled' in all_trades_df.columns
+
+    iter_daily = []
+    for iteration in range(actual_iters):
+        rng = random.Random(SEED + iteration)
+        selected = []
+        for date in dates:
+            day = all_trades_df[all_trades_df['Date'] == date].to_dict('records')
+            picked = strategy_fn(day, max_k, rng)
+            selected.extend(picked)
+
+        if not selected:
+            iter_daily.append([])
+            continue
+
+        sel_df = pd.DataFrame(selected)
+        daily_ew = []
+        for date in dates:
+            day = sel_df[sel_df['Date'] == date]
+            if len(day) == 0:
+                continue
+            n_selected = len(day)
+            if has_filled_col and 'Filled' in day.columns:
+                n_filled = int(day['Filled'].sum())
+                filled_day = day[day['Filled'] == True]
+                filled_pnl = filled_day['PnL'].mean() if len(filled_day) > 0 else 0.0
+                roac = filled_day['PnL'].sum() / n_selected if n_selected > 0 else 0.0
+            else:
+                n_filled = n_selected
+                filled_pnl = day['PnL'].mean()
+                roac = day['PnL'].mean()
+            daily_ew.append({
+                'Date': date,
+                'EW': filled_pnl,
+                'ROAC': roac,
+                'N': n_selected,
+                'N_Filled': n_filled,
+                'Tickers': sorted(day['Ticker'].unique().tolist()),
+            })
+        iter_daily.append(daily_ew)
+
+    if is_random and iter_daily:
+        all_dates_set = sorted(set(d['Date'] for run in iter_daily for d in run))
+        avg_daily = []
+        for date in all_dates_set:
+            ew_vals, roac_vals, n_vals, nf_vals = [], [], [], []
+            for run in iter_daily:
+                for d in run:
+                    if d['Date'] == date:
+                        ew_vals.append(d['EW'])
+                        roac_vals.append(d['ROAC'])
+                        n_vals.append(d['N'])
+                        nf_vals.append(d['N_Filled'])
+            avg_daily.append({
+                'Date': date,
+                'EW': np.mean(ew_vals) if ew_vals else 0,
+                'ROAC': np.mean(roac_vals) if roac_vals else 0,
+                'N': np.mean(n_vals) if n_vals else 0,
+                'N_Filled': np.mean(nf_vals) if nf_vals else 0,
+                'Tickers': [],
+            })
+        return avg_daily
+    else:
+        return iter_daily[0] if iter_daily else []
+
+
+def compute_stats(daily_ew_list):
+    if not daily_ew_list:
+        return {}
+    ew_vals = [d['EW'] for d in daily_ew_list]
+    roac_vals = [d.get('ROAC', d['EW']) for d in daily_ew_list]
+    n_vals = [d['N'] for d in daily_ew_list]
+    nf_vals = [d.get('N_Filled', d['N']) for d in daily_ew_list]
+    cum = np.cumsum(ew_vals)
+    cum_roac = np.cumsum(roac_vals)
+    avg = np.mean(ew_vals)
+    avg_roac = np.mean(roac_vals)
+    std = np.std(ew_vals) if len(ew_vals) > 1 else 0
+    std_roac = np.std(roac_vals) if len(roac_vals) > 1 else 0
+    sharpe = (avg / std * np.sqrt(252)) if std > 0 else 0
+    sharpe_roac = (avg_roac / std_roac * np.sqrt(252)) if std_roac > 0 else 0
+    total_trades = sum(n_vals)
+    total_filled = sum(nf_vals)
+    win_days = sum(1 for v in ew_vals if v > 0)
+    max_dd = 0
+    peak = 0
+    for c in cum:
+        peak = max(peak, c)
+        dd = peak - c
+        max_dd = max(max_dd, dd)
+    cap_util = total_filled / total_trades if total_trades > 0 else 1.0
+    return {
+        'cum_ew': cum[-1],
+        'avg_daily': avg,
+        'std_daily': std,
+        'sharpe': sharpe,
+        'total_trades': total_trades,
+        'avg_trades_day': np.mean(n_vals),
+        'n_days': len(daily_ew_list),
+        'win_day_pct': win_days / len(daily_ew_list) if daily_ew_list else 0,
+        'max_drawdown': max_dd,
+        'best_day': max(ew_vals),
+        'worst_day': min(ew_vals),
+        'total_filled': total_filled,
+        'cap_util': cap_util,
+        'cum_roac': cum_roac[-1],
+        'avg_daily_roac': avg_roac,
+        'sharpe_roac': sharpe_roac,
+    }
+
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+print(f"\n{'='*W}")
+print(f"  ST LONG — 9-MODEL TRADE PRIORITIZATION (+ MR-v2)")
+print(f"  {BACKTEST_START} -> {BACKTEST_END} | MAX_TRADES = {MAX_TRADES}")
+print(f"  Score: {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} PT | Entry: {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PT | "
+      f"Exit: {EXIT_TIME_MIN//60}:{EXIT_TIME_MIN%60:02d} PT")
+print(f"  Slippage: {2*SLIPPAGE_PCT:.2%} RT | Deploy threshold: >{BASE_PNL_THRESH:.1%}")
+print(f"{'='*W}")
+
+print(f"\n  Loading deploy configs from BQ (Newest First, 3 families)...")
+DEPLOY_CONFIGS, FAMILY_FOLD_CFGS = load_deploy_configs()
+DEPLOY_TICKERS = sorted(DEPLOY_CONFIGS.keys())
+
+ALL_MODEL_CONFIGS = {}
+for (family_name, fold_id), cfgs in FAMILY_FOLD_CFGS.items():
+    for tk, cfg in cfgs.items():
+        ALL_MODEL_CONFIGS.setdefault(tk, []).append(cfg)
+n_multi = sum(1 for v in ALL_MODEL_CONFIGS.values() if len(v) > 1)
+print(f"    Multi-model tickers: {n_multi}/{len(ALL_MODEL_CONFIGS)} "
+      f"(tickers with configs in >1 model)")
+
+print(f"\n  Loading models and scaling stats...")
+load_models_and_meta(DEPLOY_CONFIGS, ALL_MODEL_CONFIGS)
+
+print(f"\n  Building market context...")
+market_df = build_market_context()
+_master_cache.clear()
+
+_bt_tickers = sorted(DEPLOY_CONFIGS.keys())
+print(f"  Building universe returns for regime features ({len(_bt_tickers)} tickers)...")
+_univ_rets = {}
+for _t in _bt_tickers:
+    _df = load_master(_t, tail_days=TAIL_DAYS)
+    if _df is not None:
+        _df = heal_data(_df.sort_index())
+        _univ_rets[_t] = _df['Close'].pct_change(1)
+        _master_cache.pop((_t, TAIL_DAYS), None)
+_univ_ret_df = pd.DataFrame(_univ_rets).reindex(market_df.index).fillna(0)
+print(f"    Universe returns: {_univ_ret_df.shape[1]} tickers loaded")
+
+print(f"  Computing regime features (22 cols)...")
+regime_df = compute_regime_features(market_df, _univ_ret_df)
+del _univ_ret_df, _univ_rets
+
+
+# ==============================================================================
+# PHASE 1: Score all tickers, simulate all trades
+# ==============================================================================
+print(f"\n  Phase 1: Scoring and simulating ALL {len(DEPLOY_TICKERS)} tickers...")
+all_trades = []
+_15m_cache = {}
+for ticker in DEPLOY_TICKERS:
+    cfg = DEPLOY_CONFIGS[ticker]
+    print(f"    {ticker} ({cfg['family']} F{cfg['fold']}, {cfg['mode']}, "
+          f"H={HORIZON_LABELS[cfg['horizon']]})...", end="")
+    df_feat = engineer_asset(ticker, market_df)
+    if df_feat is None:
+        print(" SKIP (load failed)")
+        continue
+    df_15m = None
+    is_mr = FAMILIES[cfg['family']].get('arch', 'standard') == 'multires'
+    if is_mr:
+        if ticker not in _15m_cache:
+            _15m_cache[ticker] = build_15min_features(df_feat)
+        df_15m = _15m_cache[ticker]
+    trades = score_and_backtest_ticker(ticker, cfg, df_feat, regime_df, df_15m=df_15m)
+    if trades:
+        n_filled = sum(1 for t in trades if t.get('Filled', True))
+        n_nofill = len(trades) - n_filled
+        filled_pnls = [t['PnL'] for t in trades if t.get('Filled', True)]
+        avg_str = f"avg={np.mean(filled_pnls):+.2%}" if filled_pnls else "avg=N/A"
+        nf_str = f" ({n_nofill} no-fill)" if n_nofill > 0 else ""
+        print(f" {n_filled}t{nf_str} {avg_str}")
+        all_trades.extend(trades)
+    else:
+        print(" 0 signals")
+    _master_cache.pop((ticker, TAIL_DAYS), None)
+
+_master_cache.clear()
+
+
+# ==============================================================================
+# PHASE 2: Analyze signal distribution
+# ==============================================================================
+if not all_trades:
+    print(f"\n  NO TRADES in backtest window. Cannot compare strategies.")
+else:
+    df_all = pd.DataFrame(all_trades)
+    all_dates = sorted(df_all['Date'].unique())
+
+    print(f"\n\n{'='*W}")
+    print(f"  SIGNAL DISTRIBUTION ANALYSIS")
+    print(f"{'='*W}\n")
+
+    daily_counts = df_all.groupby('Date').size()
+    contested_days = (daily_counts > MAX_TRADES).sum()
+    total_days = len(daily_counts)
+    n_filled_total = df_all['Filled'].sum() if 'Filled' in df_all.columns else len(df_all)
+    n_nofill_total = len(df_all) - n_filled_total
+    fill_rate = n_filled_total / len(df_all) if len(df_all) > 0 else 1.0
+
+    print(f"  Total signals:     {len(df_all)} ({n_filled_total} filled, {n_nofill_total} no-fill)")
+    print(f"  Fill rate:         {fill_rate:.0%}")
+    print(f"  Active days:       {total_days}")
+    print(f"  Avg signals/day:   {daily_counts.mean():.1f}")
+    print(f"  Max signals/day:   {daily_counts.max()}")
+    print(f"  Contested days:    {contested_days}/{total_days} "
+          f"(days with >{MAX_TRADES} signals)")
+
+    print(f"\n  {'Date':<12} {'Signals':>8} {'Contested':>10}  Tickers")
+    print(f"  {'─'*W}")
+    for date in all_dates:
+        day = df_all[df_all['Date'] == date]
+        n = len(day)
+        contested = 'YES' if n > MAX_TRADES else ''
+        tickers = ', '.join(sorted(day['Ticker'].unique()))
+        print(f"  {date:<12} {n:>8} {contested:>10}  {tickers}")
+
+
+    # ==========================================================================
+    # PHASE 3: Evaluate each strategy
+    # ==========================================================================
+    print(f"\n\n{'='*W}")
+    print(f"  STRATEGY COMPARISON (MAX_TRADES = {MAX_TRADES})")
+    print(f"{'='*W}\n")
+
+    strategy_results = {}
+    strategy_daily = {}
+    for name, fn in STRATEGIES.items():
+        print(f"  Evaluating {name}...", end="")
+        daily = evaluate_strategy(df_all, fn, MAX_TRADES)
+        stats = compute_stats(daily)
+        strategy_results[name] = stats
+        strategy_daily[name] = daily
+        if stats:
+            print(f" EW={stats['cum_ew']:+.2%}, Sharpe={stats['sharpe']:.1f}, "
+                  f"trades={stats['total_trades']:.0f}")
+        else:
+            print(" NO TRADES")
+
+    print(f"\n  {'Strategy':<14} {'Cum EW':>8} {'Avg/Day':>8} {'Sharpe':>7} "
+          f"{'Trades':>7} {'Filled':>7} {'CapUtil':>7} {'ROAC':>8} "
+          f"{'Tr/Day':>6} {'WinDay%':>8} {'MaxDD':>7}")
+    print(f"  {'─'*W}")
+
+    ranked = sorted(strategy_results.items(), key=lambda x: x[1].get('cum_ew', -999), reverse=True)
+    for name, s in ranked:
+        if not s:
+            continue
+        print(f"  {name:<14} {s['cum_ew']:>+7.2%} {s['avg_daily']:>+7.2%} "
+              f"{s['sharpe']:>7.1f} {s['total_trades']:>7.0f} "
+              f"{s.get('total_filled', s['total_trades']):>7.0f} "
+              f"{s.get('cap_util', 1.0):>6.0%} "
+              f"{s.get('avg_daily_roac', s['avg_daily']):>+7.2%} "
+              f"{s['avg_trades_day']:>5.1f} {s['win_day_pct']:>7.0%} "
+              f"{s['max_drawdown']:>6.2%}")
+
+    best_name = ranked[0][0] if ranked else 'NONE'
+    best_stats = ranked[0][1] if ranked else {}
+    print(f"\n  WINNER: {best_name}")
+
+
+    # ==========================================================================
+    # CHARTS — Phase 1 (single-model strategies)
+    # ==========================================================================
+    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
+    fig.suptitle(f'ST LONG — Trade Prioritization Comparison (9 models incl. MR-v2)\n'
+                 f'{BACKTEST_START} -> {BACKTEST_END} | MAX_TRADES = {MAX_TRADES} | '
+                 f'{len(df_all)} signals, {contested_days} contested days',
+                 fontsize=13, fontweight='bold')
+
+    colors_map = {
+        'ALL_TRADES': '#1565C0', 'RANDOM': '#757575',
+        'PROB_RAW': '#2E7D32', 'PROB_MARGIN': '#00838F',
+        'EXPECTED_VAL': '#E65100', 'VAL_B_BEST': '#6A1B9A',
+        'COMPOSITE': '#C62828', 'INVERSE_PROB': '#F9A825',
+    }
+
+    ax = axes[0, 0]
+    for name in STRATEGIES:
+        daily = strategy_daily.get(name, [])
+        if not daily:
+            continue
+        dates_dt = pd.to_datetime([d['Date'] for d in daily])
+        cum = np.cumsum([d['EW'] for d in daily]) * 100
+        dates_dt = dates_dt.insert(0, dates_dt[0] - pd.Timedelta(days=1))
+        cum = np.insert(cum, 0, 0.0)
+        lw = 2.5 if name in (best_name, 'ALL_TRADES') else 1.2
+        ls = '-' if name != 'RANDOM' else '--'
+        ax.plot(dates_dt, cum, color=colors_map.get(name, '#333'),
+                linewidth=lw, linestyle=ls, label=name, alpha=0.85)
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    ax.set_ylabel('Cumulative EW PnL (%)')
+    ax.set_title('Equity Curves — Single-Model Strategies')
+    ax.legend(fontsize=7, ncol=2)
+    ax.grid(alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    ax = axes[0, 1]
+    strat_names = [n for n, _ in ranked if strategy_results.get(n)]
+    cum_vals = [strategy_results[n]['cum_ew'] * 100 for n in strat_names]
+    bar_colors = [colors_map.get(n, '#333') for n in strat_names]
+    ax.barh(range(len(strat_names)), cum_vals, color=bar_colors, alpha=0.8)
+    ax.set_yticks(range(len(strat_names)))
+    ax.set_yticklabels(strat_names, fontsize=9)
+    for i, (name, val) in enumerate(zip(strat_names, cum_vals)):
+        s = strategy_results[name]
+        ax.text(val + 0.3 if val >= 0 else val - 0.3,
+                i, f" Sh={s['sharpe']:.1f}", va='center', fontsize=7)
+    ax.axvline(0, color='black', linewidth=0.8)
+    ax.set_xlabel('Cumulative EW PnL (%)')
+    ax.set_title('Strategy Ranking')
+    ax.grid(axis='x', alpha=0.3)
+
+    ax = axes[1, 0]
+    all_daily_plot = {d['Date']: d['EW'] for d in strategy_daily.get('ALL_TRADES', [])}
+    top_strats = [name for name, _ in ranked[:4] if name != 'ALL_TRADES']
+    if 'ALL_TRADES' not in [n for n, _ in ranked[:4]]:
+        top_strats = ['ALL_TRADES'] + top_strats[:3]
+    else:
+        top_strats = [n for n, _ in ranked[:4]]
+    for name in top_strats:
+        if name == 'ALL_TRADES':
+            continue
+        daily = strategy_daily.get(name, [])
+        if not daily:
+            continue
+        dates_dt = pd.to_datetime([d['Date'] for d in daily])
+        diffs = [(d['EW'] - all_daily_plot.get(d['Date'], 0)) * 100 for d in daily]
+        ax.bar(dates_dt, diffs, alpha=0.5, width=0.6,
+               color=colors_map.get(name, '#333'), label=name)
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    ax.set_ylabel('EW PnL diff vs ALL_TRADES (%)')
+    ax.set_title('Daily Delta vs ALL_TRADES')
+    ax.legend(fontsize=7)
+    ax.grid(alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    ax = axes[1, 1]
+    date_labels = pd.to_datetime(all_dates)
+    counts = [len(df_all[df_all['Date'] == d]) for d in all_dates]
+    bar_colors_count = ['#C62828' if c > MAX_TRADES else '#2E7D32' for c in counts]
+    ax.bar(date_labels, counts, color=bar_colors_count, alpha=0.8, width=0.8)
+    ax.axhline(MAX_TRADES, color='black', linewidth=1.5, linestyle='--',
+               label=f'MAX_TRADES = {MAX_TRADES}')
+    for i, (dt, c) in enumerate(zip(date_labels, counts)):
+        if c > MAX_TRADES:
+            ax.text(dt, c + 0.2, f'{c}', ha='center', fontsize=8, fontweight='bold')
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    ax.set_ylabel('Signals')
+    ax.set_title('Daily Signal Count (red = contested)')
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    plt.tight_layout()
+    chart_path = '/tmp/backtest_st_long_multires_v2.png'
+    plt.savefig(chart_path, dpi=150, bbox_inches='tight')
+    print(f"\n  Chart saved: {chart_path}")
+    if _IN_COLAB:
+        plt.show()
+    plt.close()
+
+
+    # ==========================================================================
+    # PHASE 5: MULTI-MODEL SCORING
+    # ==========================================================================
+    print(f"\n\n{'='*W}")
+    print(f"  PHASE 5: MULTI-MODEL SCORING")
+    print(f"  Scoring each ticker with all available (family, fold) models")
+    print(f"{'='*W}")
+
+    multi_trades = []
+    ticker_model_counts = {}
+    _15m_cache_p5 = {}
+    for ticker in DEPLOY_TICKERS:
+        available = ALL_MODEL_CONFIGS.get(ticker, [])
+        if not available:
+            continue
+        df_feat = engineer_asset(ticker, market_df)
+        if df_feat is None:
+            continue
+        n_models_scored = 0
+        for cfg in available:
+            df_15m = None
+            is_mr = FAMILIES[cfg['family']].get('arch', 'standard') == 'multires'
+            if is_mr:
+                if ticker not in _15m_cache_p5:
+                    _15m_cache_p5[ticker] = build_15min_features(df_feat)
+                df_15m = _15m_cache_p5[ticker]
+            trades = score_and_backtest_ticker(ticker, cfg, df_feat, regime_df, df_15m=df_15m)
+            for t in trades:
+                t['Model_Source'] = f"{cfg['family']} F{cfg['fold']}"
+            if trades:
+                n_models_scored += 1
+            multi_trades.extend(trades)
+        ticker_model_counts[ticker] = n_models_scored
+        _master_cache.pop((ticker, TAIL_DAYS), None)
+        n_avail = len(available)
+        print(f"    {ticker}: {n_avail} models available, "
+              f"{n_models_scored} fired signals")
+
+    _master_cache.clear()
+
+    if multi_trades:
+        df_multi = pd.DataFrame(multi_trades)
+        multi_dates = sorted(df_multi['Date'].unique())
+
+        print(f"\n  Multi-model pool: {len(df_multi)} total candidates "
+              f"across {df_multi['Ticker'].nunique()} tickers, {len(multi_dates)} days")
+
+
+        # ==================================================================
+        # MULTI-MODEL STRATEGIES
+        # ==================================================================
+        def _resolve_ticker_model(candidates, method='max_prob'):
+            if len(candidates) == 1:
+                return candidates[0]
+            if method == 'max_prob':
+                return max(candidates, key=lambda c: c['Prob'])
+            elif method == 'best_val_b':
+                return max(candidates, key=lambda c: c['Val_B'])
+            elif method == 'newest_fold':
+                fold_order = {'F8': 0, 'F7': 1, 'F6': 2, 'F5': 3}
+                family_order = {'MR-v2': 0, 'ASL6': 1, 'L5-1': 2}
+                def fold_key(c):
+                    src = c.get('Model_Source', c.get('Family', ''))
+                    parts = src.split()
+                    fam = parts[0] if parts else ''
+                    fold = parts[1] if len(parts) > 1 else ''
+                    return (fold_order.get(fold, 9), family_order.get(fam, 9), -c['Prob'])
+                return min(candidates, key=fold_key)
+            return candidates[0]
+
+        def select_multi_consensus(day_trades_multi, max_k, rng=None):
+            by_ticker = defaultdict(list)
+            for t in day_trades_multi:
+                by_ticker[t['Ticker']].append(t)
+            resolved = []
+            for ticker, cands in by_ticker.items():
+                best = _resolve_ticker_model(cands, 'max_prob')
+                best = dict(best)
+                best['N_Models'] = len(cands)
+                best['Avg_Prob_Multi'] = np.mean([c['Prob'] for c in cands])
+                resolved.append(best)
+            resolved.sort(key=lambda t: (-t['N_Models'], -t['Prob']))
+            return resolved[:max_k]
+
+        def select_multi_ensemble_avg(day_trades_multi, max_k, rng=None):
+            by_ticker = defaultdict(list)
+            for t in day_trades_multi:
+                by_ticker[t['Ticker']].append(t)
+            resolved = []
+            for ticker, cands in by_ticker.items():
+                best = _resolve_ticker_model(cands, 'max_prob')
+                best = dict(best)
+                best['Avg_Prob_Multi'] = np.mean([c['Prob'] for c in cands])
+                resolved.append(best)
+            resolved.sort(key=lambda t: -t['Avg_Prob_Multi'])
+            return resolved[:max_k]
+
+        def select_multi_max_prob(day_trades_multi, max_k, rng=None):
+            by_ticker = defaultdict(list)
+            for t in day_trades_multi:
+                by_ticker[t['Ticker']].append(t)
+            resolved = []
+            for ticker, cands in by_ticker.items():
+                best = _resolve_ticker_model(cands, 'max_prob')
+                resolved.append(best)
+            resolved.sort(key=lambda t: -t['Prob'])
+            return resolved[:max_k]
+
+        def select_multi_newest_fold(day_trades_multi, max_k, rng=None):
+            by_ticker = defaultdict(list)
+            for t in day_trades_multi:
+                by_ticker[t['Ticker']].append(t)
+            resolved = []
+            for ticker, cands in by_ticker.items():
+                best = _resolve_ticker_model(cands, 'newest_fold')
+                resolved.append(best)
+            resolved.sort(key=lambda t: -t['Prob'])
+            return resolved[:max_k]
+
+        def select_multi_agreement(day_trades_multi, max_k, rng=None):
+            by_ticker = defaultdict(list)
+            for t in day_trades_multi:
+                by_ticker[t['Ticker']].append(t)
+            resolved = []
+            for ticker, cands in by_ticker.items():
+                if len(cands) < 2:
+                    continue
+                probs = [c['Prob'] for c in cands]
+                spread = max(probs) - min(probs)
+                if spread > 0.15:
+                    continue
+                best = _resolve_ticker_model(cands, 'max_prob')
+                best = dict(best)
+                best['Avg_Prob_Multi'] = np.mean(probs)
+                best['Prob_Spread'] = spread
+                resolved.append(best)
+            resolved.sort(key=lambda t: -t.get('Avg_Prob_Multi', t['Prob']))
+            return resolved[:max_k]
+
+        OLD_FAMILIES = {'L5-1', 'ASL6'}
+        NEW_FAMILIES = {'MR-v2'}
+
+        def _filter_by_families(day_trades, families):
+            return [t for t in day_trades
+                    if t.get('Model_Source', '').split()[0] in families]
+
+        def select_consensus_6old(day_trades_multi, max_k, rng=None):
+            return select_multi_consensus(
+                _filter_by_families(day_trades_multi, OLD_FAMILIES), max_k, rng)
+
+        def select_consensus_3new(day_trades_multi, max_k, rng=None):
+            return select_multi_consensus(
+                _filter_by_families(day_trades_multi, NEW_FAMILIES), max_k, rng)
+
+        def select_consensus_5newest(day_trades_multi, max_k, rng=None):
+            newest_versions = {
+                ('L5-1', 'F7'), ('ASL6', 'F7'),
+                ('MR-v2', 'F6'), ('MR-v2', 'F7'), ('MR-v2', 'F8'),
+            }
+            def _is_newest(t):
+                parts = t.get('Model_Source', '').split()
+                return (parts[0], parts[1]) in newest_versions if len(parts) >= 2 else False
+            filtered = [t for t in day_trades_multi if _is_newest(t)]
+            return select_multi_consensus(filtered, max_k, rng)
+
+        def select_consensus_6newest(day_trades_multi, max_k, rng=None):
+            newest_6 = {
+                ('L5-1', 'F6'), ('L5-1', 'F7'),
+                ('ASL6', 'F6'), ('ASL6', 'F7'),
+                ('MR-v2', 'F7'), ('MR-v2', 'F8'),
+            }
+            def _is_in_6(t):
+                parts = t.get('Model_Source', '').split()
+                return (parts[0], parts[1]) in newest_6 if len(parts) >= 2 else False
+            filtered = [t for t in day_trades_multi if _is_in_6(t)]
+            return select_multi_consensus(filtered, max_k, rng)
+
+        MULTI_STRATEGIES = {
+            'M_CONSENSUS':    select_multi_consensus,
+            'M_CONS_6OLD':    select_consensus_6old,
+            'M_CONS_3NEW':    select_consensus_3new,
+            'M_CONS_6NEWEST': select_consensus_6newest,
+            'M_CONS_5NEWEST': select_consensus_5newest,
+            'M_ENSEMBLE_AVG': select_multi_ensemble_avg,
+            'M_MAX_PROB':     select_multi_max_prob,
+            'M_NEWEST_FOLD':  select_multi_newest_fold,
+            'M_AGREEMENT':    select_multi_agreement,
+        }
+
+
+        # ==================================================================
+        # PHASE 6: EVALUATE MULTI-MODEL STRATEGIES
+        # ==================================================================
+        print(f"\n\n{'='*W}")
+        print(f"  MULTI-MODEL STRATEGY COMPARISON (MAX_TRADES = {MAX_TRADES})")
+        print(f"{'='*W}\n")
+
+        multi_strategy_results = {}
+        multi_strategy_daily = {}
+
+        for name, fn in MULTI_STRATEGIES.items():
+            selected = []
+            for date in multi_dates:
+                day = df_multi[df_multi['Date'] == date].to_dict('records')
+                picked = fn(day, MAX_TRADES)
+                selected.extend(picked)
+
+            if not selected:
+                multi_strategy_results[name] = {}
+                multi_strategy_daily[name] = []
+                print(f"  {name}: NO TRADES")
+                continue
+
+            sel_df = pd.DataFrame(selected)
+            daily_ew = []
+            for date in multi_dates:
+                day = sel_df[sel_df['Date'] == date]
+                if len(day) == 0:
+                    continue
+                n_selected = len(day)
+                if 'Filled' in day.columns:
+                    n_filled = int(day['Filled'].sum())
+                    filled_day = day[day['Filled'] == True]
+                    filled_pnl = filled_day['PnL'].mean() if len(filled_day) > 0 else 0.0
+                    roac = filled_day['PnL'].sum() / n_selected if n_selected > 0 else 0.0
+                else:
+                    n_filled = n_selected
+                    filled_pnl = day['PnL'].mean()
+                    roac = day['PnL'].mean()
+                daily_ew.append({
+                    'Date': date,
+                    'EW': filled_pnl,
+                    'ROAC': roac,
+                    'N': n_selected,
+                    'N_Filled': n_filled,
+                    'Tickers': sorted(day['Ticker'].unique().tolist()),
+                })
+
+            stats = compute_stats(daily_ew)
+            multi_strategy_results[name] = stats
+            multi_strategy_daily[name] = daily_ew
+            cu_str = f", CapUtil={stats.get('cap_util', 1.0):.0%}" if stats.get('cap_util', 1.0) < 1.0 else ""
+            print(f"  {name}: EW={stats['cum_ew']:+.2%}, "
+                  f"Sharpe={stats['sharpe']:.1f}, trades={stats['total_trades']:.0f}"
+                  f"{cu_str}")
+
+
+        # ==================================================================
+        # COMBINED COMPARISON: SINGLE-MODEL + MULTI-MODEL
+        # ==================================================================
+        print(f"\n\n{'='*W}")
+        print(f"  COMBINED STRATEGY COMPARISON — SINGLE-MODEL + MULTI-MODEL")
+        print(f"{'='*W}\n")
+
+        all_results = {}
+        all_daily = {}
+        for name, s in strategy_results.items():
+            all_results[name] = s
+            all_daily[name] = strategy_daily[name]
+        for name, s in multi_strategy_results.items():
+            all_results[name] = s
+            all_daily[name] = multi_strategy_daily[name]
+
+        combined_ranked = sorted(all_results.items(),
+                                  key=lambda x: x[1].get('cum_ew', -999), reverse=True)
+
+        print(f"  {'Strategy':<16} {'Type':<7} {'Cum EW':>8} {'Avg/Day':>8} "
+              f"{'Sharpe':>7} {'Trades':>7} {'Filled':>7} {'CapUtil':>7} "
+              f"{'ROAC':>8} {'WinDay%':>8}")
+        print(f"  {'─'*W}")
+
+        for name, s in combined_ranked:
+            if not s:
+                continue
+            stype = 'MULTI' if name.startswith('M_') else 'SINGLE'
+            print(f"  {name:<16} {stype:<7} {s['cum_ew']:>+7.2%} "
+                  f"{s['avg_daily']:>+7.2%} {s['sharpe']:>7.1f} "
+                  f"{s['total_trades']:>7.0f} "
+                  f"{s.get('total_filled', s['total_trades']):>7.0f} "
+                  f"{s.get('cap_util', 1.0):>6.0%} "
+                  f"{s.get('avg_daily_roac', s['avg_daily']):>+7.2%} "
+                  f"{s['win_day_pct']:>7.0%}")
+
+        overall_best = combined_ranked[0][0] if combined_ranked else 'NONE'
+        best_single = next((n for n, _ in combined_ranked if not n.startswith('M_')), None)
+        best_multi = next((n for n, _ in combined_ranked if n.startswith('M_')), None)
+
+        print(f"\n  OVERALL WINNER:     {overall_best}")
+        if best_single:
+            print(f"  Best single-model:  {best_single} "
+                  f"(EW={all_results[best_single].get('cum_ew',0):+.2%})")
+        if best_multi:
+            print(f"  Best multi-model:   {best_multi} "
+                  f"(EW={all_results[best_multi].get('cum_ew',0):+.2%})")
+        if best_single and best_multi:
+            delta = (all_results[best_multi].get('cum_ew', 0) -
+                     all_results[best_single].get('cum_ew', 0))
+            winner_type = "multi-model" if delta > 0 else "single-model"
+            print(f"  Multi vs Single:    {delta:+.2%} ({winner_type} wins)")
+
+        # KEY COMPARISON: 3 NEW (MR-v2) vs 6 OLD (L5-1 + ASL6)
+        print(f"\n  ── KEY COMPARISON: 3 NEW MR-v2 vs 6 OLD (L5-1 + ASL6) ──")
+        if 'M_CONS_3NEW' in multi_strategy_results and 'M_CONS_6OLD' in multi_strategy_results:
+            s_new = multi_strategy_results['M_CONS_3NEW']
+            s_old = multi_strategy_results['M_CONS_6OLD']
+            if s_new and s_old:
+                delta_ew = s_new.get('cum_ew', 0) - s_old.get('cum_ew', 0)
+                delta_sh = s_new.get('sharpe', 0) - s_old.get('sharpe', 0)
+                winner = "3 NEW (MR-v2)" if delta_ew > 0 else "6 OLD (L5-1+ASL6)"
+                print(f"  3 NEW (MR-v2):   EW={s_new['cum_ew']:+.2%}, Sh={s_new['sharpe']:.1f}, "
+                      f"trades={s_new['total_trades']:.0f}")
+                print(f"  6 OLD (L5-1+ASL6): EW={s_old['cum_ew']:+.2%}, Sh={s_old['sharpe']:.1f}, "
+                      f"trades={s_old['total_trades']:.0f}")
+                print(f"  Delta:           EW={delta_ew:+.2%}, Sharpe={delta_sh:+.1f} → {winner} wins")
+            else:
+                print(f"  One or both subsets had no trades.")
+        else:
+            print(f"  Subset strategies not evaluated (no BQ configs).")
+
+
+        # ==================================================================
+        # PHASE 7: MAX_TRADES SWEEP
+        # ==================================================================
+        SWEEP_RANGE = range(1, 10)
+        TOP_STRATS = {
+            'M_CONSENSUS':    ('multi',  select_multi_consensus),
+            'M_CONS_6NEWEST': ('multi',  select_consensus_6newest),
+            'M_CONS_5NEWEST': ('multi',  select_consensus_5newest),
+            'M_CONS_6OLD':    ('multi',  select_consensus_6old),
+            'M_CONS_3NEW':    ('multi',  select_consensus_3new),
+            'M_AGREEMENT':    ('multi',  select_multi_agreement),
+        }
+
+        print(f"\n\n{'='*W}")
+        print(f"  PHASE 7: MAX_TRADES SWEEP (1 → 9) — CONSENSUS VARIANTS")
+        print(f"{'='*W}\n")
+
+        sweep_results = {}
+        for sname, (stype, fn) in TOP_STRATS.items():
+            sweep_results[sname] = {}
+            source_df = df_multi if stype == 'multi' else df_all
+            source_dates = sorted(source_df['Date'].unique())
+
+            for max_k in SWEEP_RANGE:
+                selected = []
+                for date in source_dates:
+                    day = source_df[source_df['Date'] == date].to_dict('records')
+                    picked = fn(day, max_k)
+                    selected.extend(picked)
+
+                if not selected:
+                    sweep_results[sname][max_k] = {}
+                    continue
+
+                sel_df = pd.DataFrame(selected)
+                daily_ew = []
+                for date in source_dates:
+                    day_sel = sel_df[sel_df['Date'] == date]
+                    if len(day_sel) == 0:
+                        continue
+                    n_sel = len(day_sel)
+                    if 'Filled' in day_sel.columns:
+                        n_f = int(day_sel['Filled'].sum())
+                        f_day = day_sel[day_sel['Filled'] == True]
+                        f_pnl = f_day['PnL'].mean() if len(f_day) > 0 else 0.0
+                        roac_v = f_day['PnL'].sum() / n_sel if n_sel > 0 else 0.0
+                    else:
+                        n_f = n_sel
+                        f_pnl = day_sel['PnL'].mean()
+                        roac_v = day_sel['PnL'].mean()
+                    daily_ew.append({
+                        'Date': date, 'EW': f_pnl, 'ROAC': roac_v,
+                        'N': n_sel, 'N_Filled': n_f,
+                    })
+                sweep_results[sname][max_k] = compute_stats(daily_ew)
+
+        print(f"  {'Strategy':<16}", end="")
+        for k in SWEEP_RANGE:
+            print(f"  {'K='+str(k):>10}", end="")
+        print()
+        print(f"  {'─'*W}")
+
+        metrics_to_sweep = [
+            ('Cum EW', 'cum_ew', lambda v: f"{v:>+9.2%}"),
+            ('Sharpe', 'sharpe', lambda v: f"{v:>10.1f}"),
+            ('Avg/Day', 'avg_daily', lambda v: f"{v:>+9.2%}"),
+            ('MaxDD', 'max_drawdown', lambda v: f"{v:>9.2%}"),
+            ('Trades', 'total_trades', lambda v: f"{v:>10.0f}"),
+            ('WinDay%', 'win_day_pct', lambda v: f"{v:>9.0%}"),
+        ]
+
+        for metric_name, metric_key, fmt_fn in metrics_to_sweep:
+            print(f"\n  — {metric_name} —")
+            for sname in TOP_STRATS:
+                vals = []
+                for k in SWEEP_RANGE:
+                    s = sweep_results[sname].get(k, {})
+                    vals.append(s.get(metric_key, 0))
+                best_k = max(SWEEP_RANGE, key=lambda kk: sweep_results[sname].get(kk, {}).get(metric_key, -999))
+                print(f"  {sname:<16}", end="")
+                for i, v in enumerate(vals):
+                    marker = ' *' if (i + 1) == best_k and metric_key in ('cum_ew', 'sharpe') else '  '
+                    print(f"{fmt_fn(v)}{marker}", end="")
+                print()
+
+        print(f"\n  (* = best K for that strategy)")
+
+        best_overall_ew = -999
+        best_overall_combo = ('', 0)
+        for sname in TOP_STRATS:
+            for k in SWEEP_RANGE:
+                s = sweep_results[sname].get(k, {})
+                ew = s.get('cum_ew', -999)
+                if ew > best_overall_ew:
+                    best_overall_ew = ew
+                    best_overall_combo = (sname, k)
+        print(f"\n  BEST by Cum EW:  {best_overall_combo[0]} @ K={best_overall_combo[1]} "
+              f"({best_overall_ew:+.2%})")
+
+
+        # ==================================================================
+        # MULTI-MODEL TICKER COVERAGE
+        # ==================================================================
+        print(f"\n\n{'='*W}")
+        print(f"  MULTI-MODEL TICKER COVERAGE")
+        print(f"{'='*W}\n")
+
+        print(f"  {'Ticker':<7} {'Models':>7} {'Configs':>8} "
+              f"{'NF Source':<12} {'Avg Prob':>8} {'NF PnL':>7}")
+        print(f"  {'─'*80}")
+
+        for ticker in sorted(DEPLOY_TICKERS):
+            n_configs = len(ALL_MODEL_CONFIGS.get(ticker, []))
+            n_fired = ticker_model_counts.get(ticker, 0)
+            nf_cfg = DEPLOY_CONFIGS[ticker]
+            nf_src = f"{nf_cfg['family']} F{nf_cfg['fold']}"
+
+            tk_multi = df_multi[df_multi['Ticker'] == ticker]
+            avg_prob = tk_multi['Prob'].mean() if len(tk_multi) > 0 else 0
+
+            tk_single = df_all[df_all['Ticker'] == ticker]
+            nf_pnl = tk_single['PnL'].mean() if len(tk_single) > 0 else 0
+
+            print(f"  {ticker:<7} {n_fired:>3}/{n_configs:<3} "
+                  f"{n_configs:>8} {nf_src:<12} "
+                  f"{avg_prob:>7.3f} {nf_pnl:>+6.2%}")
+
+
+        # ==================================================================
+        # COMBINED CHARTS — SINGLE + MULTI
+        # ==================================================================
+        multi_colors = {
+            'M_CONSENSUS': '#D81B60',
+            'M_CONS_6OLD': '#1E88E5',
+            'M_CONS_3NEW': '#00ACC1',
+            'M_CONS_6NEWEST': '#8E24AA',
+            'M_CONS_5NEWEST': '#FF6F00',
+            'M_ENSEMBLE_AVG': '#FFB300',
+            'M_MAX_PROB': '#5C6BC0',
+            'M_NEWEST_FOLD': '#78909C',
+            'M_AGREEMENT': '#43A047',
+        }
+        all_colors = {**colors_map, **multi_colors}
+
+        fig2, axes2 = plt.subplots(2, 2, figsize=(20, 14))
+        fig2.suptitle(f'ST LONG — Combined Prioritization: Single + Multi-Model (9 models)\n'
+                      f'{BACKTEST_START} -> {BACKTEST_END} | MAX_TRADES = {MAX_TRADES}',
+                      fontsize=13, fontweight='bold')
+
+        ax = axes2[0, 0]
+        for name in list(STRATEGIES.keys()) + list(MULTI_STRATEGIES.keys()):
+            daily = all_daily.get(name, [])
+            if not daily:
+                continue
+            dates_dt = pd.to_datetime([d['Date'] for d in daily])
+            cum = np.cumsum([d['EW'] for d in daily]) * 100
+            dates_dt = dates_dt.insert(0, dates_dt[0] - pd.Timedelta(days=1))
+            cum = np.insert(cum, 0, 0.0)
+            is_multi = name.startswith('M_')
+            lw = 2.0 if name == overall_best else 1.0
+            ls = '--' if is_multi else '-'
+            alpha = 0.9 if name == overall_best else 0.6
+            ax.plot(dates_dt, cum, color=all_colors.get(name, '#333'),
+                    linewidth=lw, linestyle=ls, label=name, alpha=alpha)
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+        ax.set_ylabel('Cumulative EW PnL (%)')
+        ax.set_title('All Strategies — Equity Curves')
+        ax.legend(fontsize=5, ncol=3, loc='upper left')
+        ax.grid(alpha=0.3)
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+        ax = axes2[0, 1]
+        comb_names = [n for n, _ in combined_ranked if all_results.get(n)]
+        comb_vals = [all_results[n]['cum_ew'] * 100 for n in comb_names]
+        comb_colors_bar = [all_colors.get(n, '#333') for n in comb_names]
+        ax.barh(range(len(comb_names)), comb_vals, color=comb_colors_bar, alpha=0.8)
+        ax.set_yticks(range(len(comb_names)))
+        labels = [f"{'[M] ' if n.startswith('M_') else ''}{n}" for n in comb_names]
+        ax.set_yticklabels(labels, fontsize=7)
+        for i, (name, val) in enumerate(zip(comb_names, comb_vals)):
+            s = all_results[name]
+            ax.text(val + 0.2 if val >= 0 else val - 0.2,
+                    i, f"Sh={s['sharpe']:.1f}", va='center', fontsize=6)
+        ax.axvline(0, color='black', linewidth=0.8)
+        ax.set_xlabel('Cumulative EW PnL (%)')
+        ax.set_title('Combined Ranking')
+        ax.grid(axis='x', alpha=0.3)
+
+        ax = axes2[1, 0]
+        config_counts = [len(ALL_MODEL_CONFIGS.get(tk, [])) for tk in DEPLOY_TICKERS]
+        fired_counts = [ticker_model_counts.get(tk, 0) for tk in DEPLOY_TICKERS]
+        x_pos = range(len(DEPLOY_TICKERS))
+        ax.bar(x_pos, config_counts, alpha=0.4, color='#1565C0', label='Configs available')
+        ax.bar(x_pos, fired_counts, alpha=0.7, color='#2E7D32', label='Models fired')
+        ax.set_xticks(list(x_pos))
+        ax.set_xticklabels(DEPLOY_TICKERS, rotation=90, fontsize=5)
+        ax.set_ylabel('Number of models')
+        ax.set_title('Per-Ticker Model Coverage')
+        ax.legend(fontsize=8)
+        ax.grid(axis='y', alpha=0.3)
+
+        ax = axes2[1, 1]
+        single_names = [n for n in strategy_results if strategy_results[n]]
+        multi_names = [n for n in multi_strategy_results if multi_strategy_results[n]]
+        for name in single_names:
+            s = strategy_results[name]
+            ax.scatter(s['sharpe'], s['cum_ew'] * 100,
+                      color=all_colors.get(name, '#333'), s=100,
+                      marker='o', label=name, zorder=5)
+            ax.annotate(name, (s['sharpe'], s['cum_ew']*100),
+                       fontsize=5, xytext=(5, 5), textcoords='offset points')
+        for name in multi_names:
+            s = multi_strategy_results[name]
+            ax.scatter(s['sharpe'], s['cum_ew'] * 100,
+                      color=all_colors.get(name, '#333'), s=100,
+                      marker='D', label=name, zorder=5)
+            ax.annotate(name, (s['sharpe'], s['cum_ew']*100),
+                       fontsize=5, xytext=(5, 5), textcoords='offset points')
+        ax.set_xlabel('Sharpe Ratio')
+        ax.set_ylabel('Cumulative EW PnL (%)')
+        ax.set_title('Sharpe vs PnL (o=single, D=multi)')
+        ax.grid(alpha=0.3)
+
+        plt.tight_layout()
+        chart2_path = '/tmp/backtest_st_long_multires_v2_combined.png'
+        plt.savefig(chart2_path, dpi=150, bbox_inches='tight')
+        print(f"\n  Combined chart saved: {chart2_path}")
+        if _IN_COLAB:
+            plt.show()
+        plt.close()
+
+        # Sweep chart
+        sweep_colors = {
+            'M_CONSENSUS': '#D81B60', 'M_CONS_6NEWEST': '#8E24AA',
+            'M_CONS_5NEWEST': '#FF6F00', 'M_CONS_6OLD': '#1E88E5',
+            'M_CONS_3NEW': '#00ACC1', 'M_AGREEMENT': '#43A047',
+        }
+        fig3, axes3 = plt.subplots(2, 2, figsize=(20, 14))
+        fig3.suptitle(f'ST LONG — MAX_TRADES Sweep (1→9) — 3 NEW vs 6 OLD\n'
+                      f'{BACKTEST_START} → {BACKTEST_END}',
+                      fontsize=13, fontweight='bold')
+        ks = list(SWEEP_RANGE)
+
+        ks_plot = [0] + ks
+
+        ax = axes3[0, 0]
+        for sname in TOP_STRATS:
+            vals = [0.0] + [sweep_results[sname].get(k, {}).get('cum_ew', 0) * 100 for k in ks]
+            ax.plot(ks_plot, vals, 'o-', color=sweep_colors.get(sname, '#333'), linewidth=2,
+                    markersize=8, label=sname)
+        ax.set_xlabel('MAX_TRADES (K)'); ax.set_ylabel('Cumulative EW PnL (%)')
+        ax.set_title('Cumulative PnL vs Position Cap')
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.set_xticks(ks_plot); ax.legend(fontsize=7); ax.grid(alpha=0.3)
+
+        ax = axes3[0, 1]
+        for sname in TOP_STRATS:
+            vals = [0.0] + [sweep_results[sname].get(k, {}).get('sharpe', 0) for k in ks]
+            ax.plot(ks_plot, vals, 's-', color=sweep_colors.get(sname, '#333'), linewidth=2,
+                    markersize=8, label=sname)
+        ax.set_xlabel('MAX_TRADES (K)'); ax.set_ylabel('Sharpe Ratio')
+        ax.set_title('Sharpe vs Position Cap')
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.set_xticks(ks_plot); ax.legend(fontsize=7); ax.grid(alpha=0.3)
+
+        ax = axes3[1, 0]
+        for sname in TOP_STRATS:
+            vals = [0.0] + [sweep_results[sname].get(k, {}).get('avg_daily', 0) * 100 for k in ks]
+            ax.plot(ks_plot, vals, '^-', color=sweep_colors.get(sname, '#333'), linewidth=2,
+                    markersize=8, label=sname)
+        ax.set_xlabel('MAX_TRADES (K)'); ax.set_ylabel('Avg Daily EW PnL (%)')
+        ax.set_title('Avg Daily PnL vs Position Cap')
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.set_xticks(ks_plot); ax.legend(fontsize=7); ax.grid(alpha=0.3)
+
+        ax = axes3[1, 1]
+        for sname in TOP_STRATS:
+            vals = [0.0] + [sweep_results[sname].get(k, {}).get('max_drawdown', 0) * 100 for k in ks]
+            ax.plot(ks_plot, vals, 'D-', color=sweep_colors.get(sname, '#333'), linewidth=2,
+                    markersize=8, label=sname)
+        ax.set_xlabel('MAX_TRADES (K)'); ax.set_ylabel('Max Drawdown (%)')
+        ax.set_title('Max Drawdown vs Position Cap')
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.set_xticks(ks_plot); ax.legend(fontsize=7); ax.grid(alpha=0.3)
+        ax.invert_yaxis()
+
+        plt.tight_layout()
+        chart3_path = '/tmp/backtest_st_long_multires_v2_sweep.png'
+        plt.savefig(chart3_path, dpi=150, bbox_inches='tight')
+        print(f"\n  Sweep chart saved: {chart3_path}")
+        if _IN_COLAB:
+            plt.show()
+        plt.close()
+
+    else:
+        print(f"\n  No multi-model trades — skipping multi-model comparison.")
+
+
+# ==============================================================================
+# CLEANUP
+# ==============================================================================
+keras.backend.clear_session()
+gc.collect()
+try:
+    ctypes.CDLL("libc.so.6").malloc_trim(0)
+except Exception:
+    pass
+
+print(f"\n{'='*W}")
+print(f"  LONG 9-MODEL PRIORITIZATION COMPARISON COMPLETE")
+print(f"{'='*W}")

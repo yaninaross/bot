@@ -1,16 +1,17 @@
-# %% ── Daily Scoring — ST SHORT HYB + M_CONS5 (5 newest models) ──────────────
+# %% ── Daily Scoring — ST SHORT MR-v2 M_MRV2_NEWEST3 ─────────────────────────
 #
-# Spike Transformer SHORT — 3-Family Hybrid + M_CONS5 selection
+# Spike Transformer SHORT — MR-v2 only, 3 newest folds for consensus
 #
-#   - 9 models loaded: L5-1 F5/F6/F7 + L5-2 F5/F6/F7 + MR-v2 F6/F7/F8
-#   - Hybrid config: best val_b_avg_pnl across ALL 9 (family, fold) combos
-#   - Consensus: only 5 newest count — L5-1 F7, L5-2 F7, MR-v2 F6/F7/F8
+#   - 5 models loaded: MR-v2 F6/F7/F8/F9/F10
+#   - Hybrid config: best val_b_avg_pnl across all 5 MR-v2 folds
+#   - Consensus: 3 newest count — MR-v2 F8/F9/F10
 #   - F7+ tickers only included if val_b_avg_pnl >= 3.0%
-#   - M_CONS5: score ALL tickers, count fires from 5 newest models,
+#   - M_MRV2_NEWEST3: score ALL tickers, count fires from 3 newest models,
 #     rank by (n_fires DESC, best_prob DESC), pick top MAX_TRADES
 #   - Score at minute 375 (6:15 AM PT), entry at minute 385 (6:25 AM PT)
 #   - FiLM regime conditioning (no separate regime filter)
-#   - MR-v2: MultiResSpikeTransformer (dual backbone 1m+15m, 153K params)
+#   - MultiResSpikeTransformer (dual backbone 1m+15m, 153K params)
+#   - L5-1/L5-2 REMOVED: proven negative signal in 10/11-model backtests
 #
 # Run AFTER daily_stitch_master.py has finished updating GCS.
 
@@ -67,29 +68,9 @@ TAIL_DAYS        = 25
 PST              = pytz.timezone('America/Los_Angeles')
 MIN_PRICE        = 2.00
 
-FOLDS            = [5, 6, 7, 8]
+FOLDS            = [6, 7, 8, 9, 10]
 
 FAMILIES = {
-    'L5-1': {
-        'gcs_data':   'Algos/RA_MoE/short_L5_1_data',
-        'gcs_models': 'Algos/RA_MoE/short_L5_1_models',
-        'arch': 'standard',
-        'bq_versions': {
-            5: 'spike_transformer_short_L5_1_fold5',
-            6: 'spike_transformer_short_L5_1_fold6',
-            7: 'spike_transformer_short_L5_1_fold7',
-        },
-    },
-    'L5-2': {
-        'gcs_data':   'Algos/RA_MoE/short_L5_2_data',
-        'gcs_models': 'Algos/RA_MoE/short_L5_2_models',
-        'arch': 'standard',
-        'bq_versions': {
-            5: 'spike_transformer_short_L5_2_fold5',
-            6: 'spike_transformer_short_L5_2_fold6',
-            7: 'spike_transformer_short_L5_2_fold7',
-        },
-    },
     'MR-v2': {
         'gcs_data':   'Algos/RA_MoE/short_L5_2_multires_v2_data',
         'gcs_models': 'Algos/RA_MoE/short_L5_2_multires_v2_models',
@@ -98,16 +79,16 @@ FAMILIES = {
             6: 'spike_transformer_short_L5_2_multires_v2_fold6',
             7: 'spike_transformer_short_L5_2_multires_v2_fold7',
             8: 'spike_transformer_short_L5_2_multires_v2_fold8',
+            9: 'spike_transformer_short_L5_2_multires_v2_fold9',
+            10: 'spike_transformer_short_L5_2_multires_v2_fold10',
         },
     },
 }
 
 CONSENSUS_MODELS = {
-    ('L5-1', 7),
-    ('L5-2', 7),
-    ('MR-v2', 6),
-    ('MR-v2', 7),
     ('MR-v2', 8),
+    ('MR-v2', 9),
+    ('MR-v2', 10),
 }
 
 F7_VAL_B_THRESH  = 0.030
@@ -178,7 +159,7 @@ gcs_client = gcs_storage.Client()
 
 
 # ==============================================================================
-# BQ CONFIG LOADING — Hybrid across L5-1 + L5-2
+# BQ CONFIG LOADING — MR-v2 folds
 # ==============================================================================
 def load_deploy_configs():
     if bigquery is None:
@@ -261,7 +242,7 @@ def load_deploy_configs():
         source_counts.setdefault(key, []).append(tk)
     for src in sorted(source_counts):
         tickers = sorted(source_counts[src])
-        print(f"    Hybrid {src}: {len(tickers)} — {', '.join(tickers)}")
+        print(f"    MR-v2 {src}: {len(tickers)} — {', '.join(tickers)}")
     print(f"    Total: {len(deploy)} tickers")
     return deploy, family_fold_cfgs
 
@@ -270,6 +251,8 @@ def load_deploy_configs():
 # DATA LOADING
 # ==============================================================================
 _master_cache = {}
+_feat_cache = {}
+_15m_cache = {}
 
 
 def load_master(ticker, tail_days=None):
@@ -416,7 +399,7 @@ def build_15min_features(df_1m):
     return lr[LOWRES_COLS]
 
 
-def compute_regime_features(market_df):
+def compute_regime_features(market_df, universe_returns=None):
     rf = pd.DataFrame(index=market_df.index)
     spy_ret = market_df['SPY_Anchor_ROC'].fillna(0)
     for w, name in [(15, 'regime_rvol_15'), (60, 'regime_rvol_60'),
@@ -438,7 +421,10 @@ def compute_regime_features(market_df):
             if sx > 1e-12 and sy > 1e-12:
                 autocorr[i] = ((x - mx) * (y - my)).mean() / (sx * sy)
     rf['regime_autocorr_60'] = autocorr
-    rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        rf['regime_xsect_disp'] = universe_returns.std(axis=1).fillna(0)
+    else:
+        rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
     vix_col = 'VIX_Anchor_ROC'
     if vix_col in market_df.columns:
         vix_cum = market_df[vix_col].cumsum()
@@ -464,7 +450,11 @@ def compute_regime_features(market_df):
                else pd.Series(0.0, index=market_df.index))
     rf['regime_spy_tlt_corr'] = spy_ret.rolling(
         60, min_periods=30).corr(tlt_ret).fillna(0).clip(-1, 1)
-    rf['regime_breadth'] = 0.5
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        cum_rets_60 = universe_returns.rolling(60, min_periods=30).sum()
+        rf['regime_breadth'] = (cum_rets_60 > 0).mean(axis=1).fillna(0.5)
+    else:
+        rf['regime_breadth'] = 0.5
     rolling_mean = spy_ret.rolling(60, min_periods=30).mean()
     rolling_std = spy_ret.rolling(60, min_periods=30).std().clip(lower=1e-12)
     standardized = (spy_ret - rolling_mean) / rolling_std
@@ -1030,9 +1020,9 @@ def print_dashboard(results, deploy_configs, run_ts):
 
     print()
     print(f"  {'='*W}")
-    print(f"  ST SHORT SIGNALS — HYB + M_CONS5 (5 newest models)   {pst_str}")
+    print(f"  ST SHORT SIGNALS — MR-v2 M_MRV2_NEWEST3 (3 newest MR-v2)   {pst_str}")
     print(f"  {'='*W}")
-    print(f"  Strategy: Hybrid + M_CONS5 (5 newest models, rank by n_fires+prob, max={MAX_TRADES})  |  "
+    print(f"  Strategy: M_MRV2_NEWEST3 (3 newest MR-v2, rank by n_fires+prob, max={MAX_TRADES})  |  "
           f"Score: {SCORE_MINUTE // 60}:{SCORE_MINUTE % 60:02d} PST  |  "
           f"Entry: {ENTRY_MINUTE // 60}:{ENTRY_MINUTE % 60:02d} PST")
     for src in sorted(source_counts):
@@ -1141,7 +1131,7 @@ def print_dashboard(results, deploy_configs, run_ts):
                       f"[{r['horizon']} dump prob={r['prob']:.3f}]")
 
     print()
-    print(f"  Strategy: HYB + M_CONS5 (5 newest models, max={MAX_TRADES})  |  "
+    print(f"  Strategy: M_MRV2_NEWEST3 (3 newest MR-v2, max={MAX_TRADES})  |  "
           f"Score {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} -> Entry {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PST  |  "
           f"FiLM conditioning")
     print(f"  {'='*W}")
@@ -1202,7 +1192,7 @@ def log_to_bigquery(results, run_ts):
             'close': r['close'],
             'filter_status': 'OK',
             'tpsl_mode': r['mode'],
-            'strategy': 'ST_SHORT_HYB_MCONS5',
+            'strategy': 'ST_SHORT_MRV2_NEWEST3',
             'model_version': mv,
         })
     bq_client = bigquery.Client()
@@ -1212,7 +1202,7 @@ def log_to_bigquery(results, run_ts):
         if errors:
             print(f"   BigQuery errors: {errors}")
         else:
-            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_HYB_MCONS5)")
+            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_MRV2_NEWEST3)")
     except Exception as e:
         print(f"   BigQuery failed: {e}")
 
@@ -1245,7 +1235,7 @@ def _check_stitch_freshness():
 run_ts = datetime.now(pytz.utc)
 pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
 print(f"\n{'='*80}")
-print(f"  DAILY SCORING — ST SHORT HYB + M_CONS5 (5 newest models) — {pst_str}")
+print(f"  DAILY SCORING — ST SHORT MR-v2 M_MRV2_NEWEST3 (3 newest MR-v2) — {pst_str}")
 print(f"{'='*80}")
 
 _check_stitch_freshness()
@@ -1255,7 +1245,7 @@ now_minutes = now_pst.hour * 60 + now_pst.minute
 if now_minutes < SCORE_MINUTE:
     print(f"\n  SKIP — too early ({now_minutes} < {SCORE_MINUTE})")
 else:
-    print(f"\n  Loading deploy configs from BQ (Hybrid, L5-1+L5-2+MR-v2)...")
+    print(f"\n  Loading deploy configs from BQ (MR-v2 F6-F10)...")
     DEPLOY_CONFIGS, FAMILY_FOLD_CFGS = load_deploy_configs()
 
     print(f"\n  Loading models and scaling stats...")
@@ -1263,10 +1253,21 @@ else:
 
     print(f"  Building market context...")
     market_df = build_market_context()
-    _master_cache.clear()
+
+    _deploy_tickers = sorted(DEPLOY_CONFIGS.keys())
+    print(f"  Building universe returns for regime features ({len(_deploy_tickers)} tickers)...")
+    _univ_rets = {}
+    for _t in _deploy_tickers:
+        _df = load_master(_t, tail_days=TAIL_DAYS)
+        if _df is not None:
+            _df = heal_data(_df.sort_index())
+            _univ_rets[_t] = _df['Close'].pct_change(1)
+    _univ_ret_df = pd.DataFrame(_univ_rets).reindex(market_df.index).fillna(0)
+    print(f"    Universe returns: {_univ_ret_df.shape[1]} tickers loaded")
 
     print(f"  Computing regime features (22 cols)...")
-    regime_df = compute_regime_features(market_df)
+    regime_df = compute_regime_features(market_df, _univ_ret_df)
+    del _univ_ret_df, _univ_rets
 
     # --- Phase 1: Score each ticker with hybrid model (validation + base result) ---
     print(f"\n  Phase 1: Scoring {len(DEPLOY_CONFIGS)} tickers with hybrid model...")
@@ -1277,8 +1278,11 @@ else:
         if df_feat is None:
             print(f"      {ticker}: SKIP — load_master failed")
             continue
+        _feat_cache[ticker] = df_feat
         is_mr = FAMILIES[cfg['family']].get('arch', 'standard') == 'multires'
         df_15m = build_15min_features(df_feat) if is_mr else None
+        if df_15m is not None:
+            _15m_cache[ticker] = df_15m
         result = score_ticker(ticker, cfg, df_feat, regime_df, run_ts, df_15m=df_15m)
         if result is not None:
             results.append(result)
@@ -1294,14 +1298,19 @@ else:
         r['n_available'] = 1
         r['consensus'] = None
         r['best_fire_prob'] = 0.0
+        r['sum_conviction'] = 0.0
         r['signal'] = False
 
     for r in results:
         ticker = r['ticker']
-        df_feat = engineer_asset(ticker, market_df)
+        df_feat = _feat_cache.get(ticker)
+        if df_feat is None:
+            df_feat = engineer_asset(ticker, market_df)
         if df_feat is None:
             continue
-        df_15m = build_15min_features(df_feat)
+        df_15m = _15m_cache.get(ticker)
+        if df_15m is None:
+            df_15m = build_15min_features(df_feat)
         consensus = score_all_models(ticker, df_feat, regime_df, run_ts,
                                       FAMILY_FOLD_CFGS, df_15m=df_15m)
         if consensus:
@@ -1309,6 +1318,7 @@ else:
             r['n_fires'] = consensus['n_fires']
             r['n_available'] = consensus['n_available']
             r['best_fire_prob'] = consensus['best_fire_prob']
+            r['sum_conviction'] = sum(s['prob'] / max(s['thresh'], 1e-6) for s in consensus['fires'])
             if consensus['n_fires'] > 0:
                 fire_strs = [f"{s['family']}F{s['fold']}={s['prob']:.3f}"
                              for s in consensus['all_scores'] if s['fired']]
@@ -1317,18 +1327,17 @@ else:
                 print(f"    {ticker}: {consensus['n_fires']}/{consensus['n_available']} fired "
                       f"[{', '.join(fire_strs)}]"
                       + (f"  skip=[{', '.join(skip_strs)}]" if skip_strs else ""))
-        _master_cache.pop((ticker, TAIL_DAYS), None)
 
-    # --- Phase 3: M_CONSENSUS selection — rank by (n_fires DESC, best_fire_prob DESC) ---
+    # --- Phase 3: M_CONSENSUS selection — rank by (n_fires DESC, conviction DESC) ---
     candidates = [r for r in results if r['n_fires'] > 0]
-    candidates.sort(key=lambda r: (-r['n_fires'], -r['best_fire_prob']))
+    candidates.sort(key=lambda r: (-r['n_fires'], -r['sum_conviction']))
 
     print(f"\n  M_CONSENSUS: {len(candidates)} tickers with ≥1 model firing")
     if candidates:
         for i, r in enumerate(candidates):
             marker = " <- SELECTED" if i < MAX_TRADES else ""
             print(f"    #{i+1} {r['ticker']:<6} fires={r['n_fires']}/{r['n_available']}  "
-                  f"best_prob={r['best_fire_prob']:.3f}  hyb_prob={r['prob']:.3f}{marker}")
+                  f"conviction={r['sum_conviction']:.3f}  hyb_prob={r['prob']:.3f}{marker}")
 
     selected = candidates[:MAX_TRADES]
     selected_tickers = set(r['ticker'] for r in selected)
@@ -1337,12 +1346,14 @@ else:
 
     if len(candidates) > MAX_TRADES:
         dropped = candidates[MAX_TRADES:]
-        drop_strs = [f"{r['ticker']}({r['n_fires']}M,p={r['best_fire_prob']:.3f})" for r in dropped]
+        drop_strs = [f"{r['ticker']}({r['n_fires']}M,conv={r['sum_conviction']:.3f})" for r in dropped]
         print(f"  Dropped ({len(dropped)}): {', '.join(drop_strs)}")
 
     print_dashboard(results, DEPLOY_CONFIGS, run_ts)
     log_to_bigquery(results, run_ts)
 
     _master_cache.clear()
+    _feat_cache.clear()
+    _15m_cache.clear()
     tf.keras.backend.clear_session()
     gc.collect()

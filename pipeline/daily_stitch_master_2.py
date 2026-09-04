@@ -44,11 +44,11 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    # Batch 2: 32 deploy tickers M-X
+    # Batch 2: 33 deploy tickers M-X
     'MARA', 'MNTS', 'MRNA', 'MSTR', 'MU', 'MVIS', 'MXL', 'NBIS', 'NEE', 'NNE',
-    'NTLA', 'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT', 'RDW', 'RIOT', 'RKLB', 'RXT',
-    'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA', 'VOYG', 'VRT', 'VST', 'WOLF',
-    'WULF', 'XOM',
+    'NTLA', 'OKLO', 'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT', 'RDW', 'RIOT', 'RKLB',
+    'RXT', 'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA', 'VOYG', 'VRT', 'VST',
+    'WOLF', 'WULF', 'XOM',
 ]
 
 CONTEXT_ASSETS = []
@@ -57,7 +57,7 @@ TICKER_DATA_START = {}
 DATA_START_DEFAULT = pd.Timestamp("2022-01-01", tz='UTC')
 
 TAIL_DAYS = 5
-MAX_WORKERS = 2
+MAX_WORKERS = 6
 BATCH_SIZE = 20
 
 BUCKET_NAME     = "time-series-bucket-ys"

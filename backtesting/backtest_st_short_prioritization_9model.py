@@ -460,7 +460,7 @@ def build_15min_features(df_1m):
     return lr[LOWRES_COLS]
 
 
-def compute_regime_features(market_df):
+def compute_regime_features(market_df, universe_returns=None):
     rf = pd.DataFrame(index=market_df.index)
     spy_ret = market_df['SPY_Anchor_ROC'].fillna(0)
     for w, name in [(15, 'regime_rvol_15'), (60, 'regime_rvol_60'),
@@ -482,7 +482,10 @@ def compute_regime_features(market_df):
             if sx > 1e-12 and sy > 1e-12:
                 autocorr[i] = ((x - mx) * (y - my)).mean() / (sx * sy)
     rf['regime_autocorr_60'] = autocorr
-    rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        rf['regime_xsect_disp'] = universe_returns.std(axis=1).fillna(0)
+    else:
+        rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
     vix_col = 'VIX_Anchor_ROC'
     if vix_col in market_df.columns:
         vix_cum = market_df[vix_col].cumsum()
@@ -508,7 +511,11 @@ def compute_regime_features(market_df):
                else pd.Series(0.0, index=market_df.index))
     rf['regime_spy_tlt_corr'] = spy_ret.rolling(
         60, min_periods=30).corr(tlt_ret).fillna(0).clip(-1, 1)
-    rf['regime_breadth'] = 0.5
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        cum_rets_60 = universe_returns.rolling(60, min_periods=30).sum()
+        rf['regime_breadth'] = (cum_rets_60 > 0).mean(axis=1).fillna(0.5)
+    else:
+        rf['regime_breadth'] = 0.5
     rolling_mean = spy_ret.rolling(60, min_periods=30).mean()
     rolling_std = spy_ret.rolling(60, min_periods=30).std().clip(lower=1e-12)
     standardized = (spy_ret - rolling_mean) / rolling_std
@@ -2383,6 +2390,126 @@ else:
         if _IN_COLAB:
             plt.show()
         plt.close()
+
+
+        # ==================================================================
+        # DEPLOYED STRATEGY CHARTS — M_CONS_5NEWEST daily PnL + comparisons
+        # ==================================================================
+        DEPLOYED = 'M_CONS_5NEWEST'
+        deployed_daily = multi_strategy_daily.get(DEPLOYED, [])
+        if deployed_daily:
+            compare_strats = [
+                (DEPLOYED, multi_strategy_daily, multi_strategy_results),
+                ('M_CONSENSUS', multi_strategy_daily, multi_strategy_results),
+                ('M_CONS_6NEWEST', multi_strategy_daily, multi_strategy_results),
+                ('VAL_B_BEST', strategy_daily, strategy_results),
+            ]
+
+            fig_dep, axes_dep = plt.subplots(2, 2, figsize=(20, 14))
+            dep_stats = multi_strategy_results.get(DEPLOYED, {})
+            dep_cum = dep_stats.get('cum_ew', 0)
+            dep_sharpe = dep_stats.get('sharpe', 0)
+            dep_trades = dep_stats.get('total_trades', 0)
+            fig_dep.suptitle(
+                f'ST SHORT — DEPLOYED: {DEPLOYED}\n'
+                f'{BACKTEST_START} -> {BACKTEST_END} | '
+                f'EW {dep_cum:+.2%} | Sharpe {dep_sharpe:.1f} | '
+                f'{dep_trades:.0f} trades | MAX_TRADES {MAX_TRADES}',
+                fontsize=13, fontweight='bold')
+
+            # [0,0] Deployed equity curve with daily annotations
+            ax = axes_dep[0, 0]
+            dates_dt = pd.to_datetime([d['Date'] for d in deployed_daily])
+            cum_vals = np.cumsum([d['EW'] for d in deployed_daily]) * 100
+            ax.plot(dates_dt, cum_vals, 'b-o', linewidth=2.5, markersize=6,
+                    label=DEPLOYED, zorder=5)
+            ax.fill_between(dates_dt, 0, cum_vals, alpha=0.12, color='blue')
+            ax.axhline(0, color='black', linewidth=0.8)
+            for i, d in enumerate(deployed_daily):
+                ax.annotate(f"{d['EW']*100:+.1f}%",
+                            (dates_dt[i], cum_vals[i]),
+                            textcoords="offset points", xytext=(0, 12),
+                            fontsize=7, ha='center',
+                            color='green' if d['EW'] > 0 else 'red')
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            ax.set_ylabel('Cumulative EW PnL (%)')
+            ax.set_title(f'{DEPLOYED} — Equity Curve')
+            ax.legend(fontsize=9)
+            ax.grid(alpha=0.3)
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+            # [0,1] Daily PnL bar chart for deployed
+            ax = axes_dep[0, 1]
+            ew_vals = [d['EW'] * 100 for d in deployed_daily]
+            bar_colors_dep = ['#2E7D32' if v > 0 else '#C62828' for v in ew_vals]
+            ax.bar(dates_dt, ew_vals, color=bar_colors_dep, alpha=0.8, width=0.8)
+            for i, d in enumerate(deployed_daily):
+                ax.text(dates_dt[i],
+                        ew_vals[i] + (0.08 if ew_vals[i] >= 0 else -0.25),
+                        f"{d['N']}t", ha='center', fontsize=7)
+            ax.axhline(0, color='black', linewidth=0.8)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            ax.set_ylabel('Daily EW PnL (%)')
+            ax.set_title(f'{DEPLOYED} — Daily PnL')
+            ax.grid(axis='y', alpha=0.3)
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+            # [1,0] Comparison equity curves — deployed vs top alternatives
+            ax = axes_dep[1, 0]
+            dep_compare_colors = {
+                DEPLOYED: '#FF6F00',
+                'M_CONSENSUS': '#D81B60',
+                'M_CONS_6NEWEST': '#8E24AA',
+                'VAL_B_BEST': '#6A1B9A',
+            }
+            for sname, s_daily_dict, s_results_dict in compare_strats:
+                s_daily = s_daily_dict.get(sname, [])
+                s_stats = s_results_dict.get(sname, {})
+                if not s_daily:
+                    continue
+                s_dates = pd.to_datetime([d['Date'] for d in s_daily])
+                s_cum = np.cumsum([d['EW'] for d in s_daily]) * 100
+                s_ew = s_stats.get('cum_ew', 0)
+                s_sh = s_stats.get('sharpe', 0)
+                lw = 2.5 if sname == DEPLOYED else 1.5
+                ax.plot(s_dates, s_cum,
+                        color=dep_compare_colors.get(sname, '#555'),
+                        linewidth=lw,
+                        label=f'{sname} (EW={s_ew:+.1%}, Sh={s_sh:.1f})')
+            ax.axhline(0, color='black', linewidth=0.8)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            ax.set_ylabel('Cumulative EW PnL (%)')
+            ax.set_title('Deployed vs Top Alternatives')
+            ax.legend(fontsize=8)
+            ax.grid(alpha=0.3)
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+            # [1,1] Daily PnL table (text)
+            ax = axes_dep[1, 1]
+            ax.axis('off')
+            table_lines = [f"{'Date':<12} {'#Tr':>4} {'EW PnL':>8} {'Cum':>8}  Tickers"]
+            table_lines.append('─' * 60)
+            cum_running = 0.0
+            for d in deployed_daily:
+                cum_running += d['EW']
+                tks = ', '.join(d.get('Tickers', []))
+                table_lines.append(
+                    f"{d['Date']:<12} {d['N']:>4} {d['EW']*100:>+7.2f}% "
+                    f"{cum_running*100:>+7.2f}%  {tks}")
+            table_text = '\n'.join(table_lines)
+            ax.text(0.02, 0.98, table_text, transform=ax.transAxes,
+                    fontsize=7, verticalalignment='top',
+                    fontfamily='monospace',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+            ax.set_title(f'{DEPLOYED} — Daily Detail', fontsize=11)
+
+            plt.tight_layout()
+            dep_chart_path = '/tmp/backtest_st_short_deployed_m_cons5newest.png'
+            plt.savefig(dep_chart_path, dpi=150, bbox_inches='tight')
+            print(f"\n  Deployed strategy chart saved: {dep_chart_path}")
+            if _IN_COLAB:
+                plt.show()
+            plt.close()
 
     else:
         print(f"\n  No multi-model trades — skipping multi-model comparison.")

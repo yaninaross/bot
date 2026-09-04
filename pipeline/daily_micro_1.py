@@ -29,8 +29,8 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 TARGET_TICKERS = [
     'ACHR', 'ACMR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS',
-    'AVAV', 'AXTI', 'BBAI', 'BE', 'BEAM', 'BLZE', 'BTBT', 'CAT',
-    'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CVX',
+    'AVAV', 'AXTI', 'BBAI', 'BE', 'BEAM', 'BKSY', 'BLZE', 'BTBT',
+    'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN', 'CORZ', 'CRDO', 'CVX',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"

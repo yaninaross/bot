@@ -38,8 +38,9 @@ def _release_memory():
 # ==============================================================================
 TARGET_TICKERS = [
     'ACHR', 'ACMR', 'AEHR', 'ALAB', 'AMD', 'APLD', 'ARM', 'ASTS', 'AVAV', 'AXTI',
-    'BBAI', 'BE', 'BEAM', 'BLZE', 'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK', 'COIN',
-    'CORZ', 'CVX', 'ETN', 'FCEL', 'FLNC', 'JOBY', 'MRNA', 'MU', 'MVIS', 'NNE',
+    'BBAI', 'BE', 'BEAM', 'BKSY', 'BLZE', 'BTBT', 'CAT', 'CEG', 'CIFR', 'CLSK',
+    'COIN', 'CORZ', 'CRDO', 'CVX', 'ETN', 'FCEL', 'FLNC', 'JOBY', 'MRNA', 'MU',
+    'MVIS', 'NNE',
 ]
 
 CONTEXT_ASSETS = ['I:VIX', 'TLT', 'IWM', 'SPY']

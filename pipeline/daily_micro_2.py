@@ -27,9 +27,9 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'ETN', 'FCEL', 'FLNC', 'GEV', 'HUT', 'IREN', 'JOBY', 'KEEL',
-    'KTOS', 'LUNR', 'MARA', 'MNTS', 'MRNA', 'MSTR', 'MU', 'MVIS',
-    'MXL', 'NBIS', 'NEE', 'NNE', 'NTLA',
+    'ETN', 'FCEL', 'FLNC', 'GEV', 'HOOD', 'HUT', 'IREN', 'JOBY',
+    'KEEL', 'KTOS', 'LUNR', 'MARA', 'MNTS', 'MRNA', 'MSTR', 'MU',
+    'MVIS', 'MXL', 'NBIS', 'NEE', 'NNE', 'NTLA',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"

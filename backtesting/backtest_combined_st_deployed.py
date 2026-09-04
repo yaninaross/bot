@@ -1,21 +1,26 @@
 # %% ── Combined ST LONG + SHORT — Deployed Strategy Backtest ──────────────────
 #
-# Backtests BOTH deployed Spike Transformer strategies over the OOS test period
-# using live model inference from master_inference parquet files on GCS.
+# Backtests BOTH deployed Spike Transformer strategies over the same test window
+# using live model inference from master_inference parquets on GCS.
 #
-# ST LONG:  fold 5 (7 tickers), N_REGIME_F=16, GCS: real_data/real_models
-# ST SHORT: fold 7 F7 Filt >=3.0% (6 tickers), N_REGIME_F=22 (L5-1 sector-aware)
+# ST LONG  — M_CONS_6NEWEST (6 newest models for consensus fire counting):
+#   MR-v2 F9/F8/F7 + L5-1 F7 + ASL6 F7 + L5-1 F6
+#   Hybrid config: best val_b per ticker across all 10 models
+#   Newest-first deploy selection for TP/SL
 #
-# For each trading day:
-#   1. Load master_inference, engineer features
-#   2. Score with deployed model at entry minute
-#   3. Simulate trades using 1-min bars (static / grace / limit_entry)
-#   4. Track trades per day per strategy
-#   5. Print per-day, per-ticker, per-strategy, and combined results
+# ST SHORT — M_MRV2_NEWEST3 (3 newest MR-v2 folds for consensus fire counting):
+#   MR-v2 F8/F9/F10 (L5-1/L5-2 REMOVED: proven negative signal)
+#   Hybrid config: best val_b per ticker across all 5 MR-v2 folds (F7 gated >=3.0%)
 #
+# 3-phase per direction:
+#   1. Score all tickers with all consensus models → fire data
+#   2. Per-day selection: rank by (n_fires DESC, sum_conviction DESC), top MAX_TRADES
+#   3. Trade simulation on selected signals only
+#
+# Combined portfolio: equal-weight across LONG + SHORT trades each day.
 # GPU recommended. Colab-ready.
 
-import os, sys, gc, subprocess, warnings
+import os, sys, gc, ctypes, subprocess, warnings
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -32,83 +37,101 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pandas_ta", "--no-deps", "--quiet"])
     import pandas_ta as ta
 
+try:
+    from numba import jit
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "numba", "--quiet"])
+    from numba import jit
+
 import tensorflow as tf
 import keras
 from keras.layers import Dense, Dropout, LayerNormalization
 from keras import layers as _kl
-
+import h5py
 from google.cloud import storage as gcs_storage
 
 if tf.config.list_physical_devices('GPU'):
     keras.mixed_precision.set_dtype_policy('mixed_float16')
 
 try:
-    import matplotlib
+    from google.cloud import bigquery
+except Exception:
+    bigquery = None
+
+try:
+    from google.colab import auth
+    _IN_COLAB = True
     try:
-        import google.colab  # noqa
-        _IN_COLAB = True
-    except ImportError:
-        _IN_COLAB = False
-        matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    HAS_MPL = True
-except ImportError:
-    HAS_MPL = False
+        auth.authenticate_user()
+    except Exception:
+        pass
+except (ImportError, Exception):
+    _IN_COLAB = False
+
+import matplotlib
+if not _IN_COLAB:
+    matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 
 # ==============================================================================
-# CONFIG
+# CONFIG — SHARED
 # ==============================================================================
-BUCKET_NAME    = "time-series-bucket-ys"
-INFERENCE_DIR  = "Data/Inference_v2"
-PST            = pytz.timezone('America/Los_Angeles')
-TAIL_DAYS      = 45
+BUCKET_NAME      = "time-series-bucket-ys"
+WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
+INFERENCE_DIR    = "Data/Inference_v2"
+PST              = pytz.timezone('America/Los_Angeles')
 
-BACKTEST_START = '2026-07-29'
-BACKTEST_END   = '2026-08-12'
+BACKTEST_START   = '2026-08-03'
+BACKTEST_END     = '2026-08-30'
 
-SLIPPAGE_PCT   = 0.0015
-EXIT_TIME_MIN  = 780
-MIN_PRICE      = 2.00
+TAIL_DAYS        = 45
+SCORE_MINUTE     = 375
+ENTRY_MINUTE     = 385
+EXIT_TIME_MIN    = 780
+SLIPPAGE_PCT     = 0.0015
+
+BASE_PNL_THRESH  = 0.018
+MAX_TRADES       = 3
+
+TIME_STEPS       = 128
+D_MODEL          = 64
+N_HEADS          = 4
+D_FF             = 128
+N_BLOCKS         = 2
+DROPOUT_RATE     = 0.1
+FILM_HIDDEN      = 64
+N_HORIZONS       = 3
+N_ASSET_F        = 33
+N_REGIME_F       = 22
+
+N_BLOCKS_15M     = 1
+TIME_STEPS_15M   = 128
+N_LOWRES_F       = 12
 
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
+MIN_PRICE        = 2.00
+
+EXCLUDE_TICKERS = {'SPY', 'VIX', 'TLT', 'IWM', 'XLE', 'ITA', 'BITF', 'MIGI', 'SMLR'}
+
+LOWRES_COLS = [
+    'lr_Close_ret', 'lr_High_ret', 'lr_Low_ret', 'lr_Volume_norm',
+    'lr_Range', 'lr_RSI_14', 'lr_RVOL', 'lr_ROC_4', 'lr_ROC_8',
+    'lr_ROC_16', 'lr_Bar_Is_Real', 'lr_Time_Pos',
+]
+
 MICRO_COLS = ['Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
               'bsize', 'asize', 'Total_Vol']
 ROC_HORIZONS = [5, 30, 60]
-CONTEXT_ASSETS = ['SPY', 'VIX', 'TLT', 'IWM']
-SECTOR_PROXY_ASSETS = ['MARA', 'MSTR', 'ITA']
-
-W = 120
-gcs_client = gcs_storage.Client()
-
-
-# ── ST LONG config ──
-LONG_GCS_DATA   = 'Algos/RA_MoE/real_data'
-LONG_GCS_MODEL  = 'Algos/RA_MoE/real_models'
-LONG_FOLD       = 5
-LONG_SCORE_MIN  = 375
-LONG_ENTRY_MIN  = 385
-LONG_N_REGIME_F = 16
-
-# ── ST SHORT config ──
-SHORT_GCS_DATA  = 'Algos/RA_MoE/short_L5_1_data'
-SHORT_GCS_MODEL = 'Algos/RA_MoE/short_L5_1_models'
-SHORT_FOLD      = 7
-SHORT_SCORE_MIN = 375
-SHORT_ENTRY_MIN = 385
-SHORT_N_REGIME_F = 22
-
-# ── Shared model params ──
-TIME_STEPS = 128
-D_MODEL = 64; N_HEADS = 4; D_FF = 128; N_BLOCKS = 2; DROPOUT = 0.1
-FILM_HIDDEN = 64; N_HORIZONS = 3; N_ASSET_F = 33
-
 ASSET_COLS = (['Gap_Pct', 'RSI_14', 'RVOL', 'ATR_14', 'Bar_Is_Real'] +
               [f'ROC_{h}m' for h in ROC_HORIZONS] + MICRO_COLS)
 
+CONTEXT_ASSETS_LIST = ['SPY', 'VIX', 'TLT', 'IWM']
+SECTOR_PROXY_ASSETS = ['MARA', 'MSTR', 'ITA']
+
 CONTEXT_COLS = []
-for _t in CONTEXT_ASSETS:
+for _t in CONTEXT_ASSETS_LIST:
     CONTEXT_COLS.append(f'{_t}_Anchor_ROC')
     for _h in ROC_HORIZONS:
         CONTEXT_COLS.append(f'{_t}_ROC_{_h}m')
@@ -116,48 +139,97 @@ CONTEXT_COLS.append('Time_Pos')
 
 ALL_COLS = ASSET_COLS + CONTEXT_COLS
 
-LONG_REGIME_COLS = [
+REGIME_COLS = [
     'regime_rvol_15', 'regime_rvol_60', 'regime_rvol_128',
     'regime_trend_60', 'regime_trend_128', 'regime_autocorr_60',
     'regime_xsect_disp', 'regime_vix_level', 'regime_vix_velocity',
     'regime_time_sin', 'regime_time_cos', 'regime_spy_ret_60',
     'regime_vix_close', 'regime_spy_tlt_corr', 'regime_breadth',
     'regime_skew_60',
-]
-
-SHORT_REGIME_COLS = LONG_REGIME_COLS + [
     'regime_crypto_ret_60', 'regime_crypto_ret_128', 'regime_crypto_rvol',
     'regime_growth_vs_value', 'regime_defense_rs', 'regime_safe_haven',
 ]
 
 HORIZON_LABELS = {0: '15m', 1: '30m', 2: '60m'}
+HORIZON_FROM_LABEL = {'15m': 0, '30m': 1, '60m': 2}
+
+W = 120
+SEED = 42
+np.random.seed(SEED)
+
+gcs_client = gcs_storage.Client()
+
+_NEEDED_COLS = {'Open', 'High', 'Low', 'Close', 'Volume',
+                'open', 'high', 'low', 'close', 'volume',
+                'Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
+                'bsize', 'asize', 'Total_Vol',
+                'Total_vol', 'Trade_count', 'Volume_delta', 'Delta_pct',
+                'Obi', 'Bsize', 'Asize',
+                'Datetime', 'Date', 'Time', 'Timestamp', 'Level_0'}
 
 
 # ==============================================================================
-# FROZEN DEPLOY CONFIGS
+# CONFIG — PER-DIRECTION
 # ==============================================================================
-LONG_DEPLOY_CONFIGS = {
-    'ACHR': {'fold': 5, 'horizon': 0, 'prob_thresh': 0.50, 'tp_pct': 0.12, 'sl_pct': 0.06, 'mode': 'grace', 'grace_minutes': 15},
-    'CLSK': {'fold': 5, 'horizon': 2, 'prob_thresh': 0.60, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'static'},
-    'MARA': {'fold': 5, 'horizon': 1, 'prob_thresh': 0.60, 'tp_pct': 0.12, 'sl_pct': 0.06, 'mode': 'static'},
-    'ONDS': {'fold': 5, 'horizon': 0, 'prob_thresh': 0.50, 'tp_pct': 0.20, 'sl_pct': 0.10, 'mode': 'limit_entry', 'dip_pct': 0.04, 'max_wait': 90},
-    'PL':   {'fold': 5, 'horizon': 1, 'prob_thresh': 0.50, 'tp_pct': 0.16, 'sl_pct': 0.08, 'mode': 'limit_entry', 'dip_pct': 0.025, 'max_wait': 60},
-    'RIOT': {'fold': 5, 'horizon': 0, 'prob_thresh': 0.50, 'tp_pct': 0.06, 'sl_pct': 0.03, 'mode': 'static'},
-    'SOUN': {'fold': 5, 'horizon': 0, 'prob_thresh': 0.40, 'tp_pct': 0.12, 'sl_pct': 0.06, 'mode': 'grace', 'grace_minutes': 15},
+LONG_FAMILIES = {
+    'L5-1': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_1_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_1_models',
+        'arch': 'standard',
+        'bq_versions': {
+            5: 'spike_transformer_long_L5_1_fold5',
+            6: 'spike_transformer_long_L5_1_fold6',
+            7: 'spike_transformer_long_L5_1_fold7',
+        },
+    },
+    'ASL6': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_2_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_2_asl6_models',
+        'arch': 'standard',
+        'bq_versions': {
+            5: 'spike_transformer_long_L5_2_asl6_fold5',
+            6: 'spike_transformer_long_L5_2_asl6_fold6',
+            7: 'spike_transformer_long_L5_2_asl6_fold7',
+        },
+    },
+    'MR-v2': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_1_multires_v2_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_1_multires_v2_models',
+        'arch': 'multires',
+        'bq_versions': {
+            6: 'spike_transformer_long_L5_1_multires_v2_fold6',
+            7: 'spike_transformer_long_L5_1_multires_v2_fold7',
+            8: 'spike_transformer_long_L5_1_multires_v2_fold8',
+            9: 'spike_transformer_long_L5_1_multires_v2_fold9',
+        },
+    },
 }
+LONG_CONSENSUS = {('MR-v2', 9), ('MR-v2', 8), ('MR-v2', 7),
+                   ('L5-1', 7), ('ASL6', 7),
+                   ('L5-1', 6)}
+LONG_NEWEST_FIRST = [
+    ('MR-v2', 9), ('MR-v2', 8), ('MR-v2', 7),
+    ('L5-1', 7), ('ASL6', 7),
+    ('L5-1', 6), ('ASL6', 6),
+]
+LONG_F7_THRESH = 0.005
 
-SHORT_DEPLOY_CONFIGS = {
-    'CAT':  {'fold': 7, 'horizon': 0, 'prob_thresh': 0.20, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.005, 'max_wait': 30},
-    'CLSK': {'fold': 7, 'horizon': 1, 'prob_thresh': 0.70, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.005, 'max_wait': 30},
-    'HUT':  {'fold': 7, 'horizon': 1, 'prob_thresh': 0.30, 'tp_pct': 0.12, 'sl_pct': 0.06, 'mode': 'static'},
-    'KEEL': {'fold': 7, 'horizon': 0, 'prob_thresh': 0.60, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.0125, 'max_wait': 30},
-    'KTOS': {'fold': 7, 'horizon': 2, 'prob_thresh': 0.20, 'tp_pct': 0.20, 'sl_pct': 0.10, 'mode': 'limit_entry', 'dip_pct': 0.04, 'max_wait': 90},
-    'RIOT': {'fold': 7, 'horizon': 0, 'prob_thresh': 0.30, 'tp_pct': 0.08, 'sl_pct': 0.04, 'mode': 'limit_entry', 'dip_pct': 0.005, 'max_wait': 30},
+SHORT_FAMILIES = {
+    'MR-v2': {
+        'gcs_data':   'Algos/RA_MoE/short_L5_2_multires_v2_data',
+        'gcs_models': 'Algos/RA_MoE/short_L5_2_multires_v2_models',
+        'arch': 'multires',
+        'bq_versions': {
+            6: 'spike_transformer_short_L5_2_multires_v2_fold6',
+            7: 'spike_transformer_short_L5_2_multires_v2_fold7',
+            8: 'spike_transformer_short_L5_2_multires_v2_fold8',
+            9: 'spike_transformer_short_L5_2_multires_v2_fold9',
+            10: 'spike_transformer_short_L5_2_multires_v2_fold10',
+        },
+    },
 }
-
-LONG_TICKERS  = sorted(LONG_DEPLOY_CONFIGS.keys())
-SHORT_TICKERS = sorted(SHORT_DEPLOY_CONFIGS.keys())
-ALL_TICKERS   = sorted(set(LONG_TICKERS) | set(SHORT_TICKERS))
+SHORT_CONSENSUS = {('MR-v2', 8), ('MR-v2', 9), ('MR-v2', 10)}
+SHORT_F7_THRESH = 0.030
 
 
 # ==============================================================================
@@ -172,9 +244,18 @@ def load_master(ticker, tail_days=None):
         return _master_cache[cache_key]
     clean = ticker.replace("I:", "").replace("X:", "")
     file_ticker = TICKER_FILE_MAP.get(clean, clean)
-    uri = f"gs://{BUCKET_NAME}/{INFERENCE_DIR}/{file_ticker}_master_inference.parquet"
+    blob_path = f"{INFERENCE_DIR}/{file_ticker}_master_inference.parquet"
+    local_path = f"/tmp/_bt_comb_{file_ticker}_master.parquet"
     try:
-        df = pd.read_parquet(uri)
+        gcs_client.bucket(BUCKET_NAME).blob(blob_path).download_to_filename(local_path)
+        import pyarrow.parquet as pq
+        schema = pq.read_schema(local_path)
+        all_cols = [f.name for f in schema]
+        use_cols = [c for c in all_cols if c in _NEEDED_COLS]
+        if not use_cols:
+            use_cols = None
+        df = pd.read_parquet(local_path, columns=use_cols)
+        os.remove(local_path)
         df = df.reset_index()
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
@@ -211,7 +292,8 @@ def load_master(ticker, tail_days=None):
         _master_cache[cache_key] = df
         return df
     except Exception as e:
-        print(f"      load_master({ticker}): FAILED — {e}")
+        if os.path.exists(local_path):
+            os.remove(local_path)
         return None
 
 
@@ -233,12 +315,11 @@ def heal_data(df):
 def build_market_context():
     frames = []
     vix_close = None
-    for ca in CONTEXT_ASSETS:
+    for ca in CONTEXT_ASSETS_LIST:
         df = load_master(ca, tail_days=TAIL_DAYS)
         if df is None:
             raise RuntimeError(f"Cannot load context asset {ca}")
-        df = df.sort_index()
-        df = heal_data(df)
+        df = heal_data(df.sort_index())
         if ca == 'VIX':
             vix_close = df['Close'].copy()
         cols = {f'{ca}_Anchor_ROC': df['Close'].pct_change(1)}
@@ -261,8 +342,7 @@ def engineer_asset(ticker, market_df):
     df = load_master(ticker, tail_days=TAIL_DAYS)
     if df is None:
         return None
-    df = df.sort_index()
-    df = heal_data(df)
+    df = heal_data(df.sort_index())
     daily_c = df['Close'].resample('D').last().ffill().shift(1).reindex(
         df.index, method='ffill')
     df['Gap_Pct'] = (df['Open'] - daily_c) / daily_c
@@ -282,7 +362,34 @@ def engineer_asset(ticker, market_df):
     return df.replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
-def compute_regime_features(market_df, regime_cols):
+def build_15min_features(df_1m):
+    ohlcv_15 = df_1m[['Open', 'High', 'Low', 'Close', 'Volume']].resample('15min').agg({
+        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+    }).ffill()
+    lr = pd.DataFrame(index=ohlcv_15.index)
+    lr['lr_Close_ret'] = ohlcv_15['Close'].pct_change(1)
+    lr['lr_High_ret'] = (ohlcv_15['High'] - ohlcv_15['Open']) / ohlcv_15['Open'].clip(lower=1e-8)
+    lr['lr_Low_ret'] = (ohlcv_15['Low'] - ohlcv_15['Open']) / ohlcv_15['Open'].clip(lower=1e-8)
+    vol_real = ohlcv_15['Volume'].where(ohlcv_15['Volume'] > 0)
+    vol_mean = vol_real.rolling(50, min_periods=5).mean().ffill().clip(lower=1e-9)
+    lr['lr_Volume_norm'] = (ohlcv_15['Volume'] / vol_mean).fillna(1.0)
+    lr['lr_Range'] = (ohlcv_15['High'] - ohlcv_15['Low']) / ohlcv_15['Close'].clip(lower=1e-8)
+    lr['lr_RSI_14'] = ta.rsi(ohlcv_15['Close'], length=14)
+    lr['lr_RVOL'] = lr['lr_Volume_norm']
+    lr['lr_ROC_4'] = ohlcv_15['Close'].pct_change(4)
+    lr['lr_ROC_8'] = ohlcv_15['Close'].pct_change(8)
+    lr['lr_ROC_16'] = ohlcv_15['Close'].pct_change(16)
+    lr['lr_Bar_Is_Real'] = (ohlcv_15['Volume'] > 0).astype(float)
+    try:
+        idx_pst = ohlcv_15.index.tz_convert(PST)
+    except Exception:
+        idx_pst = ohlcv_15.index
+    mins = idx_pst.hour * 60 + idx_pst.minute
+    lr['lr_Time_Pos'] = np.clip((mins - 390) / 390, 0, 1)
+    return lr[LOWRES_COLS].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+
+def compute_regime_features(market_df, universe_returns=None):
     rf = pd.DataFrame(index=market_df.index)
     spy_ret = market_df['SPY_Anchor_ROC'].fillna(0)
     for w, name in [(15, 'regime_rvol_15'), (60, 'regime_rvol_60'),
@@ -304,7 +411,10 @@ def compute_regime_features(market_df, regime_cols):
             if sx > 1e-12 and sy > 1e-12:
                 autocorr[i] = ((x - mx) * (y - my)).mean() / (sx * sy)
     rf['regime_autocorr_60'] = autocorr
-    rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        rf['regime_xsect_disp'] = universe_returns.std(axis=1).fillna(0)
+    else:
+        rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
     vix_col = 'VIX_Anchor_ROC'
     if vix_col in market_df.columns:
         vix_cum = market_df[vix_col].cumsum()
@@ -321,49 +431,46 @@ def compute_regime_features(market_df, regime_cols):
     rf['regime_time_sin'] = np.sin(2 * np.pi * mins_of_day / 1440)
     rf['regime_time_cos'] = np.cos(2 * np.pi * mins_of_day / 1440)
     rf['regime_spy_ret_60'] = spy_ret.rolling(60, min_periods=30).sum().fillna(0)
-    if 'VIX_Close' in market_df.columns:
-        rf['regime_vix_close'] = market_df['VIX_Close'].ffill().fillna(0)
-    else:
-        rf['regime_vix_close'] = 0.0
+    rf['regime_vix_close'] = (market_df['VIX_Close'].ffill().fillna(0)
+                               if 'VIX_Close' in market_df.columns
+                               else pd.Series(0.0, index=market_df.index))
     tlt_ret = (market_df['TLT_Anchor_ROC'].fillna(0)
                if 'TLT_Anchor_ROC' in market_df.columns
                else pd.Series(0.0, index=market_df.index))
     rf['regime_spy_tlt_corr'] = spy_ret.rolling(
         60, min_periods=30).corr(tlt_ret).fillna(0).clip(-1, 1)
-    rf['regime_breadth'] = 0.5
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        cum_rets_60 = universe_returns.rolling(60, min_periods=30).sum()
+        rf['regime_breadth'] = (cum_rets_60 > 0).mean(axis=1).fillna(0.5)
+    else:
+        rf['regime_breadth'] = 0.5
     rolling_mean = spy_ret.rolling(60, min_periods=30).mean()
     rolling_std = spy_ret.rolling(60, min_periods=30).std().clip(lower=1e-12)
     standardized = (spy_ret - rolling_mean) / rolling_std
     rf['regime_skew_60'] = standardized.pow(3).rolling(
         60, min_periods=30).mean().fillna(0).clip(-5, 5)
-
-    if 'regime_crypto_ret_60' in regime_cols:
-        crypto_ret = (market_df['MARA_ret'].fillna(0)
-                      if 'MARA_ret' in market_df.columns
-                      else pd.Series(0.0, index=market_df.index))
-        rf['regime_crypto_ret_60'] = crypto_ret.rolling(60, min_periods=30).sum().fillna(0)
-        rf['regime_crypto_ret_128'] = crypto_ret.rolling(128, min_periods=60).sum().fillna(0)
-        rf['regime_crypto_rvol'] = crypto_ret.rolling(60, min_periods=30).std().fillna(0)
-        iwm_ret = (market_df['IWM_Anchor_ROC'].fillna(0)
-                   if 'IWM_Anchor_ROC' in market_df.columns
+    crypto_ret = (market_df['MARA_ret'].fillna(0)
+                  if 'MARA_ret' in market_df.columns
+                  else pd.Series(0.0, index=market_df.index))
+    rf['regime_crypto_ret_60'] = crypto_ret.rolling(60, min_periods=30).sum().fillna(0)
+    rf['regime_crypto_ret_128'] = crypto_ret.rolling(128, min_periods=60).sum().fillna(0)
+    rf['regime_crypto_rvol'] = crypto_ret.rolling(60, min_periods=30).std().fillna(0)
+    iwm_ret = (market_df['IWM_Anchor_ROC'].fillna(0)
+               if 'IWM_Anchor_ROC' in market_df.columns
+               else pd.Series(0.0, index=market_df.index))
+    rf['regime_growth_vs_value'] = (
+        iwm_ret.rolling(60, min_periods=30).sum() -
+        spy_ret.rolling(60, min_periods=30).sum()).fillna(0)
+    defense_ret = (market_df['ITA_ret'].fillna(0)
+                   if 'ITA_ret' in market_df.columns
                    else pd.Series(0.0, index=market_df.index))
-        rf['regime_growth_vs_value'] = (
-            iwm_ret.rolling(60, min_periods=30).sum() -
-            spy_ret.rolling(60, min_periods=30).sum()
-        ).fillna(0)
-        defense_ret = (market_df['ITA_ret'].fillna(0)
-                       if 'ITA_ret' in market_df.columns
-                       else pd.Series(0.0, index=market_df.index))
-        rf['regime_defense_rs'] = (
-            defense_ret.rolling(60, min_periods=30).sum() -
-            spy_ret.rolling(60, min_periods=30).sum()
-        ).fillna(0)
-        rf['regime_safe_haven'] = (
-            tlt_ret.rolling(60, min_periods=30).sum() -
-            spy_ret.rolling(60, min_periods=30).sum()
-        ).fillna(0)
-
-    return rf[regime_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+    rf['regime_defense_rs'] = (
+        defense_ret.rolling(60, min_periods=30).sum() -
+        spy_ret.rolling(60, min_periods=30).sum()).fillna(0)
+    rf['regime_safe_haven'] = (
+        tlt_ret.rolling(60, min_periods=30).sum() -
+        spy_ret.rolling(60, min_periods=30).sum()).fillna(0)
+    return rf[REGIME_COLS].replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
 def apply_scaling(df, stats, cols):
@@ -378,14 +485,13 @@ def apply_scaling(df, stats, cols):
 
 
 # ==============================================================================
-# MODEL ARCHITECTURE (parameterized by n_regime_f)
+# MODEL ARCHITECTURE
 # ==============================================================================
 class _SeriesStationarization(_kl.Layer):
     def call(self, x):
         mean = tf.reduce_mean(x, axis=1, keepdims=True)
         std = tf.math.reduce_std(x, axis=1, keepdims=True) + 1e-5
         return (x - mean) / std, tf.concat([mean[:, 0, :], std[:, 0, :]], axis=-1)
-
 
 class _DeStationaryAttention(_kl.Layer):
     def __init__(self, d_model, n_heads, dropout=0.1, **kw):
@@ -398,7 +504,6 @@ class _DeStationaryAttention(_kl.Layer):
         self.attn_drop = Dropout(dropout)
         self.tau_proj = Dense(n_heads)
         self.sigma_proj = Dense(d_model)
-
     def call(self, x, stats, training=False):
         B, T = tf.shape(x)[0], tf.shape(x)[1]
         H, D = self.n_heads, self.d_head
@@ -414,7 +519,6 @@ class _DeStationaryAttention(_kl.Layer):
         sigma = tf.nn.softplus(self.sigma_proj(stats))
         return self.wo(out * sigma[:, tf.newaxis, :])
 
-
 class TransformerBlock(_kl.Layer):
     def __init__(self, d_model, n_heads, d_ff, dropout=0.1, **kw):
         super().__init__(**kw)
@@ -424,12 +528,10 @@ class TransformerBlock(_kl.Layer):
         self.norm1 = LayerNormalization()
         self.norm2 = LayerNormalization()
         self.drop = Dropout(dropout)
-
     def call(self, x, stats, training=False):
         x = x + self.drop(self.attn(self.norm1(x), stats, training=training),
                           training=training)
         return x + self.ffn(self.norm2(x), training=training)
-
 
 class TransformerBackbone(_kl.Layer):
     def __init__(self, d_model, n_heads, d_ff, n_blocks, seq_len,
@@ -441,10 +543,10 @@ class TransformerBackbone(_kl.Layer):
             name='pos_embed', shape=(1, seq_len, d_model),
             initializer='glorot_normal', trainable=True)
         self.input_drop = Dropout(dropout)
-        self.blocks = [TransformerBlock(d_model, n_heads, d_ff, dropout)
-                       for _ in range(n_blocks)]
+        self.blocks = [TransformerBlock(d_model, n_heads, d_ff, dropout,
+                                        name=f'block_{i}')
+                       for i in range(n_blocks)]
         self.final_norm = LayerNormalization()
-
     def call(self, x, training=False):
         x_norm, stats = self.stationarize(x)
         h = self.input_proj(x_norm) + self.pos_embed
@@ -453,7 +555,6 @@ class TransformerBackbone(_kl.Layer):
             h = block(h, stats, training=training)
         return self.final_norm(h)
 
-
 class _AttentionPooling(_kl.Layer):
     def __init__(self, d_model, **kw):
         super().__init__(**kw)
@@ -461,11 +562,9 @@ class _AttentionPooling(_kl.Layer):
             name='pool_query', shape=(1, 1, d_model),
             initializer='glorot_normal', trainable=True)
         self.scale = tf.sqrt(tf.cast(d_model, tf.float32))
-
     def call(self, x, training=False):
         scores = tf.matmul(self.query, x, transpose_b=True) / tf.cast(self.scale, x.dtype)
         return tf.matmul(tf.nn.softmax(scores, axis=-1), x)[:, 0, :]
-
 
 class _FiLMConditioner(_kl.Layer):
     def __init__(self, d_model, hidden_dim=64, **kw):
@@ -475,34 +574,95 @@ class _FiLMConditioner(_kl.Layer):
             Dense(hidden_dim, activation='relu')])
         self.gamma_proj = Dense(d_model)
         self.beta_proj = Dense(d_model)
-
     def call(self, x, regime_features, training=False):
         h = self.mlp(regime_features, training=training)
         return (1.0 + self.gamma_proj(h)) * x + self.beta_proj(h)
 
-
 class SpikeTransformer(keras.Model):
-    def __init__(self, n_regime_f=16, **kw):
+    def __init__(self, **kw):
         super().__init__(**kw)
-        self.n_regime_f = n_regime_f
         self.backbone = TransformerBackbone(
             D_MODEL, N_HEADS, D_FF, N_BLOCKS,
-            TIME_STEPS, DROPOUT, name='backbone')
+            TIME_STEPS, DROPOUT_RATE, name='backbone')
         self.attn_pool = _AttentionPooling(D_MODEL, name='attn_pool')
         self.film = _FiLMConditioner(D_MODEL, FILM_HIDDEN, name='film')
-        self.drop = Dropout(DROPOUT)
+        self.drop = Dropout(DROPOUT_RATE)
         self.head = Dense(N_HORIZONS, activation='sigmoid', name='spike_head')
-
     def call(self, inputs, training=False):
         h = self.backbone(inputs['seq_input'], training=training)
         h = self.attn_pool(h, training=training)
         h = self.film(h, inputs['regime_input'], training=training)
         return self.head(self.drop(h, training=training))
 
+class MultiResSpikeTransformer(keras.Model):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.backbone_1m = TransformerBackbone(
+            D_MODEL, N_HEADS, D_FF, N_BLOCKS,
+            TIME_STEPS, DROPOUT_RATE, name='backbone_1m')
+        self.pool_1m = _AttentionPooling(D_MODEL, name='pool_1m')
+        self.backbone_15m = TransformerBackbone(
+            D_MODEL, N_HEADS, D_FF, N_BLOCKS_15M,
+            TIME_STEPS_15M, DROPOUT_RATE, name='backbone_15m')
+        self.pool_15m = _AttentionPooling(D_MODEL, name='pool_15m')
+        self.fusion = Dense(D_MODEL, activation='gelu', name='fusion')
+        self.film = _FiLMConditioner(D_MODEL, FILM_HIDDEN, name='film')
+        self.drop = Dropout(DROPOUT_RATE)
+        self.head = Dense(N_HORIZONS, activation='sigmoid', name='spike_head')
+    def call(self, inputs, training=False):
+        h_1m = self.backbone_1m(inputs['seq_input'], training=training)
+        h_1m = self.pool_1m(h_1m, training=training)
+        h_15m = self.backbone_15m(inputs['seq_15m_input'], training=training)
+        h_15m = self.pool_15m(h_15m, training=training)
+        h = self.fusion(tf.concat([h_1m, h_15m], axis=-1))
+        h = self.film(h, inputs['regime_input'], training=training)
+        return self.head(self.drop(h, training=training))
+
 
 # ==============================================================================
-# MODEL LOADING
+# H5PY WEIGHT LOADING
 # ==============================================================================
+def _load_keras3_weights(model, filepath):
+    with h5py.File(filepath, 'r') as f:
+        _load_layer_recursive(model, f)
+
+def _load_layer_recursive(layer, h5_group):
+    if 'vars' in h5_group:
+        vg = h5_group['vars']
+        own_vars = layer.trainable_weights + layer.non_trainable_weights
+        for i, var in enumerate(own_vars):
+            key = str(i)
+            if key in vg:
+                var.assign(np.array(vg[key]))
+    for key in sorted(h5_group.keys()):
+        if key in ('vars', 'optimizer'):
+            continue
+        if not isinstance(h5_group[key], h5py.Group):
+            continue
+        child = getattr(layer, key, None)
+        if child is None:
+            continue
+        if isinstance(child, _kl.Layer):
+            _load_layer_recursive(child, h5_group[key])
+        elif isinstance(child, (list, tuple)):
+            _load_list_recursive(child, h5_group[key])
+
+def _load_list_recursive(items, h5_group):
+    used_names = {}
+    for item in items:
+        if not isinstance(item, _kl.Layer):
+            continue
+        cname = type(item).__name__
+        snake = ''.join(f'_{c.lower()}' if c.isupper() else c
+                        for c in cname).lstrip('_')
+        if snake in used_names:
+            used_names[snake] += 1
+            snake = f"{snake}_{used_names[snake]}"
+        else:
+            used_names[snake] = 0
+        if snake in h5_group:
+            _load_layer_recursive(item, h5_group[snake])
+
 def _ensure_file(gcs_path, local_path):
     if os.path.exists(local_path):
         return local_path
@@ -511,812 +671,1132 @@ def _ensure_file(gcs_path, local_path):
     return local_path
 
 
-def load_model(gcs_data_prefix, gcs_model_prefix, fold_id, n_regime_f, label):
-    meta_path = _ensure_file(
-        f'{gcs_data_prefix}/meta.npz', f'/tmp/bt_combined_{label}_meta.npz')
-    meta = np.load(meta_path, allow_pickle=True)
-    scaling_stats = meta['scaling_stats'].item()
-    regime_stats = meta['regime_stats'].item()
+# ==============================================================================
+# DIRECTION STATE — holds per-direction models, weights, meta
+# ==============================================================================
+class DirState:
+    def __init__(self, label, families):
+        self.label = label
+        self.families = families
+        self.model_std = None
+        self.model_mr = None
+        self.fold_weights = {}
+        self.current_key_std = None
+        self.current_key_mr = None
+        self.family_meta = {}
 
-    model = SpikeTransformer(n_regime_f=n_regime_f, name=f'spike_transformer_{label}')
-    dummy_seq = tf.zeros((1, TIME_STEPS, N_ASSET_F))
-    dummy_reg = tf.zeros((1, n_regime_f))
-    model({'seq_input': dummy_seq, 'regime_input': dummy_reg})
+    def get_model(self, family):
+        arch = self.families[family].get('arch', 'standard')
+        return self.model_mr if arch == 'multires' else self.model_std
 
-    local_dir = f'/tmp/bt_combined_{label}_models/fold_{fold_id}'
-    weights_path = os.path.join(local_dir, 'model.weights.h5')
-    if not os.path.exists(weights_path):
-        os.makedirs(local_dir, exist_ok=True)
-        prefix = f'{gcs_model_prefix}/fold_{fold_id}'
-        bucket = gcs_client.bucket(BUCKET_NAME)
-        for blob in bucket.list_blobs(prefix=prefix):
-            fname = blob.name.split('/')[-1]
-            blob.download_to_filename(os.path.join(local_dir, fname))
-    model.load_weights(weights_path)
-    print(f"  {label} model loaded: {model.count_params():,} params (fold {fold_id}, regime_f={n_regime_f})")
-    return model, scaling_stats, regime_stats
+    def ensure_fold_loaded(self, family, fold_id):
+        key = (family, fold_id)
+        arch = self.families[family].get('arch', 'standard')
+        if arch == 'multires':
+            if self.current_key_mr != key:
+                _load_keras3_weights(self.model_mr, self.fold_weights[key])
+                self.current_key_mr = key
+        else:
+            if self.current_key_std != key:
+                _load_keras3_weights(self.model_std, self.fold_weights[key])
+                self.current_key_std = key
+
+
+def build_models_for_dir(ds, deploy_configs, family_fold_cfgs):
+    all_cfgs = list(deploy_configs.values())
+    if family_fold_cfgs:
+        for cfgs in family_fold_cfgs.values():
+            if isinstance(cfgs, dict):
+                all_cfgs.extend(cfgs.values())
+    needed_families = sorted(set(cfg['family'] for cfg in all_cfgs))
+    for family_name in needed_families:
+        fam = ds.families[family_name]
+        local_meta = f'/tmp/ra_moe_{ds.label}_{family_name}_meta.npz'
+        meta_path = _ensure_file(f"{fam['gcs_data']}/meta.npz", local_meta)
+        meta = np.load(meta_path, allow_pickle=True)
+        meta_dict = {
+            'scaling_stats': meta['scaling_stats'].item(),
+            'regime_stats': meta['regime_stats'].item(),
+        }
+        if 'scaling_stats_15m' in meta:
+            meta_dict['scaling_stats_15m'] = meta['scaling_stats_15m'].item()
+        ds.family_meta[family_name] = meta_dict
+
+    need_std = any(ds.families[f].get('arch', 'standard') == 'standard'
+                   for f in needed_families)
+    need_mr = any(ds.families[f].get('arch', 'standard') == 'multires'
+                  for f in needed_families)
+
+    if need_std:
+        ds.model_std = SpikeTransformer(name=f'st_{ds.label}')
+        ds.model_std({'seq_input': tf.zeros((1, TIME_STEPS, N_ASSET_F)),
+                      'regime_input': tf.zeros((1, N_REGIME_F))})
+        print(f"   {ds.label} SpikeTransformer: {ds.model_std.count_params():,} params")
+
+    if need_mr:
+        ds.model_mr = MultiResSpikeTransformer(name=f'mr_{ds.label}')
+        ds.model_mr({'seq_input': tf.zeros((1, TIME_STEPS, N_ASSET_F)),
+                     'seq_15m_input': tf.zeros((1, TIME_STEPS_15M, N_LOWRES_F)),
+                     'regime_input': tf.zeros((1, N_REGIME_F))})
+        print(f"   {ds.label} MultiResSpikeTransformer: {ds.model_mr.count_params():,} params")
+
+    needed_keys = sorted(set((cfg['family'], cfg['fold']) for cfg in all_cfgs))
+    for family_name, fold_id in needed_keys:
+        fam = ds.families[family_name]
+        local_dir = f'/tmp/ra_moe_{ds.label}_{family_name}_models/fold_{fold_id}'
+        weights_path = os.path.join(local_dir, 'model.weights.h5')
+        if not os.path.exists(weights_path):
+            os.makedirs(local_dir, exist_ok=True)
+            prefix = f"{fam['gcs_models']}/fold_{fold_id}"
+            bucket = gcs_client.bucket(BUCKET_NAME)
+            for blob in bucket.list_blobs(prefix=prefix):
+                fname = blob.name.split('/')[-1]
+                blob.download_to_filename(os.path.join(local_dir, fname))
+        ds.fold_weights[(family_name, fold_id)] = weights_path
+
+    if need_std:
+        std_keys = [k for k in needed_keys
+                    if ds.families[k[0]].get('arch', 'standard') == 'standard']
+        if std_keys:
+            _load_keras3_weights(ds.model_std, ds.fold_weights[std_keys[0]])
+            ds.current_key_std = std_keys[0]
+    if need_mr:
+        mr_keys = [k for k in needed_keys
+                   if ds.families[k[0]].get('arch', 'standard') == 'multires']
+        if mr_keys:
+            _load_keras3_weights(ds.model_mr, ds.fold_weights[mr_keys[0]])
+            ds.current_key_mr = mr_keys[0]
+    print(f"   {ds.label}: {len(needed_keys)} (family,fold) combos ready")
 
 
 # ==============================================================================
-# SCORING
+# BQ CONFIG LOADING
 # ==============================================================================
-def score_ticker_day(model, scaling_stats, regime_stats, regime_cols, n_regime_f,
-                     ticker, cfg, df_feat, regime_df, target_date, score_minute):
-    target_pst = PST.localize(datetime(target_date.year, target_date.month,
-                                       target_date.day,
-                                       score_minute // 60, score_minute % 60))
-    target_utc = target_pst.astimezone(pytz.utc)
+def load_bq_configs(families, f7_thresh, label):
+    if bigquery is None:
+        raise RuntimeError("BigQuery not available")
+    bq_client = bigquery.Client()
+    family_fold_cfgs = {}
+    for family_name, fam in families.items():
+        for fold_id, model_version in fam['bq_versions'].items():
+            q = f"""
+            SELECT ticker, experiment, tpsl_mode, prob_thresh, tp_pct, sl_pct,
+                   grace_minutes, dip_pct, max_wait_minutes,
+                   val_b_avg_pnl, val_b_win_rate, val_b_count
+            FROM `{WF_BQ_TABLE}`
+            WHERE model_version = '{model_version}'
+              AND survived_a = TRUE
+              AND val_b_avg_pnl >= {BASE_PNL_THRESH}
+            """
+            rows = bq_client.query(q).to_dataframe()
+            if len(rows) == 0:
+                family_fold_cfgs[(family_name, fold_id)] = {}
+                print(f"    {label} {family_name} F{fold_id}: 0 tickers")
+                continue
+            best = rows.loc[rows.groupby('ticker')['val_b_avg_pnl'].idxmax()]
+            cfgs = {}
+            for _, row in best.iterrows():
+                tk = row['ticker']
+                if tk in EXCLUDE_TICKERS:
+                    continue
+                exp = row['experiment']
+                h_part = exp.replace(f'{model_version}_', '').split('_')[0]
+                horizon_idx = HORIZON_FROM_LABEL.get(h_part, 1)
+                mode = row['tpsl_mode']
+                if pd.isna(mode) or mode == '':
+                    if '_GRACE' in exp:
+                        mode = 'grace'
+                    elif '_LIMIT' in exp:
+                        mode = 'limit_entry'
+                    else:
+                        mode = 'static'
+                cfgs[tk] = {
+                    'family': family_name, 'fold': fold_id,
+                    'horizon': horizon_idx,
+                    'prob_thresh': float(row['prob_thresh']),
+                    'tp_pct': float(row['tp_pct']),
+                    'sl_pct': float(row['sl_pct']),
+                    'mode': mode,
+                    'grace_minutes': int(row['grace_minutes']) if pd.notna(row['grace_minutes']) else 0,
+                    'dip_pct': float(row['dip_pct']) if pd.notna(row['dip_pct']) else 0,
+                    'max_wait': int(row['max_wait_minutes']) if pd.notna(row['max_wait_minutes']) else 0,
+                    'val_b_avg_pnl': float(row['val_b_avg_pnl']),
+                }
+            family_fold_cfgs[(family_name, fold_id)] = cfgs
+            print(f"    {label} {family_name} F{fold_id}: {len(cfgs)} tickers")
+    return family_fold_cfgs
 
-    candidates = df_feat.index[df_feat.index <= target_utc]
-    if len(candidates) == 0:
-        return None
-    row_idx = df_feat.index.get_loc(candidates[-1])
-    bar_ts_pst = df_feat.index[row_idx].tz_convert(PST)
-    score_date = bar_ts_pst.date()
-    if score_date != target_date:
-        return None
-    bar_minute = bar_ts_pst.hour * 60 + bar_ts_pst.minute
-    if bar_minute != score_minute:
-        return None
-    if row_idx < TIME_STEPS:
-        return None
-    if 'Volume' in df_feat.columns and float(df_feat['Volume'].iloc[row_idx]) == 0:
-        return None
 
-    if 'Close' in df_feat.columns:
-        raw_close = float(df_feat['Close'].iloc[row_idx])
-        if raw_close < MIN_PRICE:
-            return None
+def select_long_deploy(family_fold_cfgs):
+    deploy = {}
+    for family, fold in LONG_NEWEST_FIRST:
+        for tk, cfg in family_fold_cfgs.get((family, fold), {}).items():
+            if tk not in deploy:
+                deploy[tk] = cfg
+    print(f"    LONG deploy: {len(deploy)} tickers (Newest First)")
+    return deploy
 
-    df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
-    XA = df_scaled[ALL_COLS].values.astype(np.float32)
-    seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
 
-    regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
-        [df_feat.index[row_idx]], method='pad')[0]]
-    regime_scaled = np.zeros(n_regime_f, dtype=np.float32)
-    for i, col in enumerate(regime_cols):
-        val = float(regime_at_entry[col]) if col in regime_at_entry.index else 0.0
-        if col in regime_stats:
-            s = regime_stats[col]
-            val = np.clip((val - s['med']) / s['iqr'], -10, 10)
-        regime_scaled[i] = val
-    regime_batch = regime_scaled[np.newaxis]
+def select_short_deploy(family_fold_cfgs):
+    all_tickers = set()
+    for cfgs in family_fold_cfgs.values():
+        all_tickers |= set(cfgs.keys())
+    deploy = {}
+    for tk in sorted(all_tickers):
+        best_val, best_cfg = -999, None
+        for (family_name, fold_id), cfgs in family_fold_cfgs.items():
+            if tk not in cfgs:
+                continue
+            cfg = cfgs[tk]
+            v = cfg['val_b_avg_pnl']
+            if fold_id >= 7 and v < SHORT_F7_THRESH:
+                continue
+            if v > best_val:
+                best_val = v
+                best_cfg = cfg
+        if best_cfg is not None:
+            deploy[tk] = best_cfg
+    print(f"    SHORT deploy: {len(deploy)} tickers (Hybrid)")
+    return deploy
 
-    preds = model(
-        {'seq_input': seq_batch, 'regime_input': regime_batch},
-        training=False
-    ).numpy().flatten()
 
-    h_idx = cfg['horizon']
-    prob = float(preds[h_idx])
-    signal = prob >= cfg['prob_thresh']
-    close = float(df_feat['Close'].iloc[row_idx])
+# ==============================================================================
+# NUMBA TRADE SIMS — LONG DIRECTION
+# ==============================================================================
+@jit(nopython=True)
+def sim_long_static(entry_indices, prices, highs, lows, date_ints, time_mins,
+                    tp, sl, exit_time):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        ep = prices[idx]; tgt = ep * (1 + tp); stp = ep * (1 - sl)
+        oc = 0.0; xp = ep; xt = 0; done = False; xi = idx
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (xp - ep) / ep; xi = k; done = True; break
+            sl_h = lows[k] <= stp; tp_h = highs[k] >= tgt
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                xi = k; done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; xi = k; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; xi = k; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (xp - ep) / ep; xi = k; done = True; break
+        if not done: xp = prices[np_-1]; oc = (xp - ep) / ep; xi = np_
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = ep; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; cp += 1
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
 
-    return {
-        'prob': round(prob, 4),
-        'signal': signal,
-        'close': round(close, 4),
-        'bar_idx': row_idx,
-        'all_probs': {HORIZON_LABELS[i]: round(float(preds[i]), 4)
-                      for i in range(N_HORIZONS)},
+@jit(nopython=True)
+def sim_long_grace(entry_indices, prices, highs, lows, date_ints, time_mins,
+                   tp, sl, exit_time, grace_minutes):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        ep = prices[idx]; tgt = ep * (1 + tp); stp = ep * (1 - sl)
+        et = time_mins[idx]; oc = 0.0; xp = ep; xt = 0; done = False
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (xp - ep) / ep; done = True; break
+            elapsed = time_mins[k] - et; sl_act = elapsed >= grace_minutes
+            tp_h = highs[k] >= tgt; sl_h = sl_act and (lows[k] <= stp)
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (xp - ep) / ep; done = True; break
+        if not done: xp = prices[np_-1]; oc = (xp - ep) / ep
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = ep; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; cp += 1
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+@jit(nopython=True)
+def sim_long_limit(entry_indices, prices, highs, lows, date_ints, time_mins,
+                   tp, sl, exit_time, dip_pct, max_wait):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        sp = prices[idx]; lp = sp * (1.0 - dip_pct); st = time_mins[idx]
+        fi = -1; fp = 0.0
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed: break
+            if time_mins[k] - st > max_wait: break
+            if lows[k] <= lp: fp = lp; fi = k; break
+        if fi < 0: cp += 1; ltd = ed; continue
+        tgt = fp * (1 + tp); stp = fp * (1 - sl)
+        oc = 0.0; xp = fp; xt = 0; done = False
+        for k in range(fi + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (xp - fp) / fp; done = True; break
+            sl_h = lows[k] <= stp; tp_h = highs[k] >= tgt
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (xp - fp) / fp; done = True; break
+        if not done: xp = prices[np_-1]; oc = (xp - fp) / fp
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = fp; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; cp += 1
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+
+# ==============================================================================
+# NUMBA TRADE SIMS — SHORT DIRECTION
+# ==============================================================================
+@jit(nopython=True)
+def sim_short_static(entry_indices, prices, highs, lows, date_ints, time_mins,
+                     tp, sl, exit_time):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        ep = prices[idx]; tgt = ep * (1 - tp); stp = ep * (1 + sl)
+        oc = 0.0; xp = ep; xt = 0; done = False; xi = idx
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (ep - xp) / ep; xi = k; done = True; break
+            tp_h = lows[k] <= tgt; sl_h = highs[k] >= stp
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                xi = k; done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; xi = k; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; xi = k; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (ep - xp) / ep; xi = k; done = True; break
+        if not done: xp = prices[np_-1]; oc = (ep - xp) / ep; xi = np_
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = ep; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; cp += 1
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+@jit(nopython=True)
+def sim_short_grace(entry_indices, prices, highs, lows, date_ints, time_mins,
+                    tp, sl, exit_time, grace_minutes):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        ep = prices[idx]; tgt = ep * (1 - tp); stp = ep * (1 + sl)
+        et = time_mins[idx]; oc = 0.0; xp = ep; xt = 0; done = False
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (ep - xp) / ep; done = True; break
+            elapsed = time_mins[k] - et; sl_act = elapsed >= grace_minutes
+            tp_h = lows[k] <= tgt; sl_h = sl_act and (highs[k] >= stp)
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (ep - xp) / ep; done = True; break
+        if not done: xp = prices[np_-1]; oc = (ep - xp) / ep
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = ep; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; cp += 1
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+@jit(nopython=True)
+def sim_short_limit(entry_indices, prices, highs, lows, date_ints, time_mins,
+                    tp, sl, exit_time, dip_pct, max_wait):
+    ne = len(entry_indices); np_ = len(prices)
+    pnl_a = np.empty(ne, np.float64); date_a = np.empty(ne, np.int64)
+    entry_a = np.empty(ne, np.float64); exit_a = np.empty(ne, np.float64)
+    out_a = np.empty(ne, np.int64); tc = 0; cp = 0; ltd = -1
+    while cp < ne:
+        idx = entry_indices[cp]
+        if idx >= np_ - 1: break
+        ed = date_ints[idx]
+        if ed == ltd: cp += 1; continue
+        sp = prices[idx]; lp = sp * (1.0 + dip_pct); st = time_mins[idx]
+        fi = -1; fp = 0.0
+        for k in range(idx + 1, np_):
+            if date_ints[k] != ed: break
+            if time_mins[k] - st > max_wait: break
+            if highs[k] >= lp: fp = lp; fi = k; break
+        if fi < 0: cp += 1; ltd = ed; continue
+        tgt = fp * (1 - tp); stp = fp * (1 + sl)
+        oc = 0.0; xp = fp; xt = 0; done = False
+        for k in range(fi + 1, np_):
+            if date_ints[k] != ed:
+                xp = prices[k-1]; oc = (fp - xp) / fp; done = True; break
+            tp_h = lows[k] <= tgt; sl_h = highs[k] >= stp
+            if sl_h and tp_h:
+                if np.random.random() < 0.5: oc = -sl; xp = stp; xt = -1
+                else: oc = tp; xp = tgt; xt = 1
+                done = True; break
+            if sl_h: oc = -sl; xp = stp; xt = -1; done = True; break
+            if tp_h: oc = tp; xp = tgt; xt = 1; done = True; break
+            if time_mins[k] >= exit_time:
+                xp = prices[k]; oc = (fp - xp) / fp; done = True; break
+        if not done: xp = prices[np_-1]; oc = (fp - xp) / fp
+        pnl_a[tc] = oc; date_a[tc] = ed; entry_a[tc] = fp; exit_a[tc] = xp; out_a[tc] = xt
+        tc += 1; ltd = ed; cp += 1
+    return pnl_a[:tc], date_a[:tc], entry_a[:tc], exit_a[:tc], out_a[:tc]
+
+
+def _run_sim(indices, ohlcv, cfg, direction):
+    p = ohlcv['prices']; h = ohlcv['highs']; l = ohlcv['lows']
+    d = ohlcv['dates']; t = ohlcv['times'].astype(np.int64)
+    m = cfg['mode']
+    if direction == 'LONG':
+        if m == 'grace':
+            r = sim_long_grace(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                               EXIT_TIME_MIN, cfg.get('grace_minutes', 0))
+        elif m == 'limit_entry':
+            r = sim_long_limit(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                               EXIT_TIME_MIN, cfg.get('dip_pct', 0), cfg.get('max_wait', 30))
+        else:
+            r = sim_long_static(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                                EXIT_TIME_MIN)
+    else:
+        if m == 'grace':
+            r = sim_short_grace(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                                EXIT_TIME_MIN, cfg.get('grace_minutes', 0))
+        elif m == 'limit_entry':
+            r = sim_short_limit(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                                EXIT_TIME_MIN, cfg.get('dip_pct', 0), cfg.get('max_wait', 30))
+        else:
+            r = sim_short_static(indices, p, h, l, d, t, cfg['tp_pct'], cfg['sl_pct'],
+                                 EXIT_TIME_MIN)
+    pnl, dd, ep, xp, oc = r
+    if len(pnl) > 0 and SLIPPAGE_PCT > 0:
+        pnl = pnl - 2 * SLIPPAGE_PCT
+    return pnl, dd, ep, xp, oc
+
+
+# ==============================================================================
+# CONSENSUS SCORING — generic for both directions
+# ==============================================================================
+def score_ticker_consensus(ticker, df_feat, regime_df, ds, family_fold_cfgs,
+                           consensus_set, df_15m=None):
+    bt_start = pd.Timestamp(BACKTEST_START, tz='UTC')
+    bt_end = pd.Timestamp(BACKTEST_END, tz='UTC') + pd.Timedelta(days=1)
+
+    score_bars = []
+    for i in range(TIME_STEPS, len(df_feat)):
+        ts = df_feat.index[i]
+        if ts < bt_start or ts >= bt_end:
+            continue
+        bar_pst = ts.tz_convert(PST)
+        if bar_pst.hour * 60 + bar_pst.minute != SCORE_MINUTE:
+            continue
+        if 'Volume' in df_feat.columns and float(df_feat['Volume'].iloc[i]) == 0:
+            continue
+        score_bars.append(i)
+
+    if not score_bars:
+        return {}
+
+    scaled_arrays = {}
+    lr_arrays = {}
+    for (fam_name, fold_id), cfgs in family_fold_cfgs.items():
+        if ticker not in cfgs:
+            continue
+        if fam_name not in scaled_arrays:
+            stats = ds.family_meta[fam_name]['scaling_stats']
+            df_s = apply_scaling(df_feat, stats, ALL_COLS)
+            scaled_arrays[fam_name] = df_s[ALL_COLS].values.astype(np.float32)
+        if ds.families[fam_name].get('arch', 'standard') == 'multires' and df_15m is not None:
+            if fam_name not in lr_arrays:
+                stats_15m = ds.family_meta[fam_name].get('scaling_stats_15m')
+                if stats_15m:
+                    df_15m_s = apply_scaling(df_15m, stats_15m, LOWRES_COLS)
+                else:
+                    df_15m_s = df_15m.copy()
+                lr_arrays[fam_name] = df_15m_s[LOWRES_COLS].values.astype(np.float32)
+
+    day_results = {}
+    for row_idx in score_bars:
+        bar_pst = df_feat.index[row_idx].tz_convert(PST)
+        date_int = bar_pst.year * 10000 + bar_pst.month * 100 + bar_pst.day
+
+        regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
+            [df_feat.index[row_idx]], method='pad')[0]]
+
+        all_scores = []
+        for (fam_name, fold_id), cfgs in family_fold_cfgs.items():
+            if ticker not in cfgs:
+                continue
+            cfg = cfgs[ticker]
+            h_idx = cfg['horizon']
+
+            regime_stats = ds.family_meta[fam_name]['regime_stats']
+            regime_scaled = np.zeros(N_REGIME_F, dtype=np.float32)
+            for ri, col in enumerate(REGIME_COLS):
+                val = float(regime_at_entry[col]) if col in regime_at_entry.index else 0.0
+                if col in regime_stats:
+                    s = regime_stats[col]
+                    val = np.clip((val - s['med']) / s['iqr'], -10, 10)
+                regime_scaled[ri] = val
+
+            XA = scaled_arrays[fam_name]
+            seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
+
+            ds.ensure_fold_loaded(fam_name, fold_id)
+            inputs = {'seq_input': seq_batch, 'regime_input': regime_scaled[np.newaxis]}
+
+            is_mr = ds.families[fam_name].get('arch', 'standard') == 'multires'
+            if is_mr and fam_name in lr_arrays:
+                XL = lr_arrays[fam_name]
+                ts_1m = df_feat.index[row_idx]
+                lr_idx = df_15m.index.get_indexer([ts_1m], method='pad')[0]
+                lr_end = lr_idx + 1
+                lr_start = max(0, lr_end - TIME_STEPS_15M)
+                lr_window = XL[lr_start:lr_end]
+                if len(lr_window) < TIME_STEPS_15M:
+                    pad = np.zeros((TIME_STEPS_15M - len(lr_window), N_LOWRES_F),
+                                   dtype=np.float32)
+                    lr_window = np.concatenate([pad, lr_window], axis=0)
+                inputs['seq_15m_input'] = lr_window[np.newaxis]
+
+            model = ds.get_model(fam_name)
+            preds = model(inputs, training=False).numpy().flatten()
+            prob = float(preds[h_idx])
+
+            all_scores.append({
+                'family': fam_name, 'fold': fold_id,
+                'prob': prob, 'thresh': cfg['prob_thresh'],
+                'fired': prob >= cfg['prob_thresh'],
+            })
+
+        consensus = [s for s in all_scores
+                     if (s['family'], s['fold']) in consensus_set]
+        fires = [s for s in consensus if s['fired']]
+
+        if fires:
+            day_results[date_int] = {
+                'n_fires': len(fires),
+                'n_available': len(consensus),
+                'best_fire_prob': max(s['prob'] for s in fires),
+                'sum_conviction': sum(s['prob'] / max(s['thresh'], 1e-6) for s in fires),
+                'row_idx': row_idx,
+            }
+
+    return day_results
+
+
+# ==============================================================================
+# RUN ONE DIRECTION: score → select → simulate
+# ==============================================================================
+def run_direction(direction, ds, deploy_configs, family_fold_cfgs,
+                  consensus_set, market_df, regime_df):
+    tickers = sorted(deploy_configs.keys())
+    print(f"\n  --- {direction}: Scoring {len(tickers)} tickers × "
+          f"{len(consensus_set)} consensus models ---")
+
+    ticker_day_fires = {}
+    for ticker in tickers:
+        df_feat = engineer_asset(ticker, market_df)
+        if df_feat is None:
+            print(f"    {ticker}: SKIP")
+            continue
+        if direction == 'SHORT' and 'Close' in df_feat.columns:
+            last_close = df_feat['Close'].iloc[-1]
+            if last_close < MIN_PRICE:
+                print(f"    {ticker}: SKIP — price ${last_close:.2f} < ${MIN_PRICE:.2f}")
+                continue
+        has_mr = any(
+            ticker in cfgs
+            for (fn, fi), cfgs in family_fold_cfgs.items()
+            if ds.families[fn].get('arch', 'standard') == 'multires'
+        )
+        df_15m = build_15min_features(df_feat) if has_mr else None
+        day_fires = score_ticker_consensus(
+            ticker, df_feat, regime_df, ds, family_fold_cfgs, consensus_set,
+            df_15m)
+        if day_fires:
+            ticker_day_fires[ticker] = day_fires
+            avg_f = np.mean([v['n_fires'] for v in day_fires.values()])
+            print(f"    {ticker}: {len(day_fires)} days, avg {avg_f:.1f} fires")
+        else:
+            print(f"    {ticker}: 0 days")
+        _master_cache.pop((ticker, TAIL_DAYS), None)
+
+    all_fire_dates = sorted(set(d for fires in ticker_day_fires.values()
+                                for d in fires))
+    selected_signals = {}
+    for date_int in all_fire_dates:
+        candidates = []
+        for ticker, day_fires in ticker_day_fires.items():
+            if date_int in day_fires:
+                info = day_fires[date_int]
+                candidates.append((ticker, info['n_fires'], info['sum_conviction']))
+        candidates.sort(key=lambda x: (-x[1], -x[2]))
+        selected_signals[date_int] = candidates[:MAX_TRADES]
+
+    total_sel = sum(len(v) for v in selected_signals.values())
+    print(f"  {direction}: {total_sel} trades selected, {len(selected_signals)} days")
+
+    selected_tickers = set()
+    ticker_selected_dates = {}
+    for date_int, picks in selected_signals.items():
+        for ticker, n_fires, sum_conv in picks:
+            selected_tickers.add(ticker)
+            ticker_selected_dates.setdefault(ticker, set()).add(date_int)
+
+    all_trades = []
+    for ticker in sorted(selected_tickers):
+        cfg = deploy_configs[ticker]
+        df_feat = engineer_asset(ticker, market_df)
+        if df_feat is None:
+            continue
+        bt_start = pd.Timestamp(BACKTEST_START, tz='UTC')
+        bt_end = pd.Timestamp(BACKTEST_END, tz='UTC') + pd.Timedelta(days=1)
+        df_bt = df_feat[(df_feat.index >= bt_start) & (df_feat.index < bt_end)].copy()
+        df_bt_pst = df_bt.index.tz_convert(PST)
+
+        ohlcv = {
+            'prices': df_bt['Close'].values.copy(),
+            'highs': df_bt['High'].values.copy(),
+            'lows': df_bt['Low'].values.copy(),
+            'dates': (df_bt_pst.year * 10000 + df_bt_pst.month * 100 +
+                      df_bt_pst.day).values.astype(np.int64),
+            'times': (df_bt_pst.hour * 60 + df_bt_pst.minute).values,
+        }
+
+        entry_indices = []
+        sel_dates = ticker_selected_dates[ticker]
+        for j in range(len(df_bt)):
+            bt_pst = df_bt_pst[j]
+            bt_date_int = bt_pst.year * 10000 + bt_pst.month * 100 + bt_pst.day
+            bt_min = bt_pst.hour * 60 + bt_pst.minute
+            if bt_date_int in sel_dates and bt_min == ENTRY_MINUTE:
+                entry_indices.append(j)
+
+        if not entry_indices:
+            continue
+
+        pnl, dates, ep, xp, outcomes = _run_sim(
+            np.array(entry_indices, dtype=np.int64), ohlcv, cfg, direction)
+
+        for i in range(len(pnl)):
+            d = int(dates[i])
+            date_str = f"{d//10000}-{(d%10000)//100:02d}-{d%100:02d}"
+            fire_info = ticker_day_fires.get(ticker, {}).get(d, {})
+            all_trades.append({
+                'Ticker': ticker,
+                'Date': date_str,
+                'PnL': float(pnl[i]),
+                'Entry': float(ep[i]),
+                'Exit': float(xp[i]),
+                'Outcome': 'TP' if outcomes[i]==1 else 'SL' if outcomes[i]==-1 else 'EOD',
+                'Mode': cfg['mode'],
+                'Family': f"{cfg['family']} F{cfg['fold']}",
+                'N_Fires': fire_info.get('n_fires', 0),
+                'Direction': direction,
+            })
+        n = len(pnl)
+        avg = np.mean(pnl) if n > 0 else 0
+        print(f"    {ticker} ({cfg['family']} F{cfg['fold']}, {cfg['mode']}): "
+              f"{n}t avg={avg:+.2%}")
+        _master_cache.pop((ticker, TAIL_DAYS), None)
+
+    return all_trades
+
+
+# ==============================================================================
+# STATS HELPER
+# ==============================================================================
+def compute_daily_stats(trades_df, label=''):
+    if len(trades_df) == 0:
+        return [], {}
+    dates = sorted(trades_df['Date'].unique())
+    daily = []
+    for date in dates:
+        day = trades_df[trades_df['Date'] == date]
+        ew = day['PnL'].mean()
+        daily.append({'Date': date, 'EW': ew, 'N': len(day),
+                      'Tickers': sorted(day['Ticker'].unique().tolist())})
+    ew_vals = [d['EW'] for d in daily]
+    cum = np.cumsum(ew_vals)
+    avg = np.mean(ew_vals)
+    std = np.std(ew_vals) if len(ew_vals) > 1 else 0
+    sharpe = (avg / std * np.sqrt(252)) if std > 0 else 0
+    peak = 0; max_dd = 0
+    for c in cum:
+        peak = max(peak, c)
+        max_dd = max(max_dd, peak - c)
+    stats = {
+        'label': label,
+        'cum_ew': cum[-1],
+        'avg_daily': avg,
+        'sharpe': sharpe,
+        'total_trades': len(trades_df),
+        'n_days': len(daily),
+        'win_day_pct': sum(1 for v in ew_vals if v > 0) / len(daily),
+        'max_drawdown': max_dd,
+        'avg_pnl_trade': trades_df['PnL'].mean(),
+        'win_rate': (trades_df['PnL'] > 0).mean(),
     }
+    return daily, stats
 
 
 # ==============================================================================
-# TRADE SIMULATION
+# MAIN
 # ==============================================================================
-def simulate_long_trade(df_feat, entry_idx, cfg):
-    entry_date_pst = df_feat.index[entry_idx].tz_convert(PST).date()
-    close = float(df_feat['Close'].iloc[entry_idx])
-
-    if cfg['mode'] == 'limit_entry':
-        entry_price = close * (1 - cfg.get('dip_pct', 0))
-        max_wait = cfg.get('max_wait', 30)
-        fill_idx = None
-        for k in range(entry_idx + 1, len(df_feat)):
-            bar_pst = df_feat.index[k].tz_convert(PST)
-            if bar_pst.date() != entry_date_pst:
-                break
-            elapsed = (bar_pst.hour * 60 + bar_pst.minute) - (df_feat.index[entry_idx].tz_convert(PST).hour * 60 + df_feat.index[entry_idx].tz_convert(PST).minute)
-            if elapsed > max_wait:
-                break
-            if float(df_feat['Low'].iloc[k]) <= entry_price:
-                fill_idx = k
-                break
-        if fill_idx is None:
-            return None
-        start_idx = fill_idx
-    else:
-        entry_price = close
-        start_idx = entry_idx
-
-    tp_price = entry_price * (1 + cfg['tp_pct'])
-    sl_price = entry_price * (1 - cfg['sl_pct'])
-    grace_minutes = cfg.get('grace_minutes', 0) if cfg['mode'] == 'grace' else 0
-    entry_time_min = df_feat.index[start_idx].tz_convert(PST).hour * 60 + df_feat.index[start_idx].tz_convert(PST).minute
-
-    for k in range(start_idx + 1, len(df_feat)):
-        bar_pst = df_feat.index[k].tz_convert(PST)
-        if bar_pst.date() != entry_date_pst:
-            exit_price = float(df_feat['Close'].iloc[k - 1])
-            pnl = (exit_price - entry_price) / entry_price
-            return {'pnl': pnl, 'entry': entry_price, 'exit': exit_price, 'outcome': 'EOD'}
-        bar_min = bar_pst.hour * 60 + bar_pst.minute
-        high_k = float(df_feat['High'].iloc[k])
-        low_k = float(df_feat['Low'].iloc[k])
-        elapsed = bar_min - entry_time_min
-        sl_active = elapsed >= grace_minutes
-        tp_hit = high_k >= tp_price
-        sl_hit = sl_active and low_k <= sl_price
-        if tp_hit and sl_hit:
-            if np.random.random() < 0.5:
-                return {'pnl': cfg['tp_pct'], 'entry': entry_price, 'exit': tp_price, 'outcome': 'TP'}
-            else:
-                return {'pnl': -cfg['sl_pct'], 'entry': entry_price, 'exit': sl_price, 'outcome': 'SL'}
-        if tp_hit:
-            return {'pnl': cfg['tp_pct'], 'entry': entry_price, 'exit': tp_price, 'outcome': 'TP'}
-        if sl_hit:
-            return {'pnl': -cfg['sl_pct'], 'entry': entry_price, 'exit': sl_price, 'outcome': 'SL'}
-        if bar_min >= EXIT_TIME_MIN:
-            exit_price = float(df_feat['Close'].iloc[k])
-            pnl = (exit_price - entry_price) / entry_price
-            return {'pnl': pnl, 'entry': entry_price, 'exit': exit_price, 'outcome': 'EOD'}
-
-    exit_price = float(df_feat['Close'].iloc[-1])
-    pnl = (exit_price - entry_price) / entry_price
-    return {'pnl': pnl, 'entry': entry_price, 'exit': exit_price, 'outcome': 'EOD'}
-
-
-def simulate_short_trade(df_feat, entry_idx, cfg):
-    entry_date_pst = df_feat.index[entry_idx].tz_convert(PST).date()
-    close = float(df_feat['Close'].iloc[entry_idx])
-
-    if cfg['mode'] == 'limit_entry':
-        entry_price = close * (1 + cfg.get('dip_pct', 0))
-        max_wait = cfg.get('max_wait', 30)
-        fill_idx = None
-        for k in range(entry_idx + 1, len(df_feat)):
-            bar_pst = df_feat.index[k].tz_convert(PST)
-            if bar_pst.date() != entry_date_pst:
-                break
-            elapsed = (bar_pst.hour * 60 + bar_pst.minute) - (df_feat.index[entry_idx].tz_convert(PST).hour * 60 + df_feat.index[entry_idx].tz_convert(PST).minute)
-            if elapsed > max_wait:
-                break
-            if float(df_feat['High'].iloc[k]) >= entry_price:
-                fill_idx = k
-                break
-        if fill_idx is None:
-            return None
-        start_idx = fill_idx
-    else:
-        entry_price = close
-        start_idx = entry_idx
-
-    tp_price = entry_price * (1 - cfg['tp_pct'])
-    sl_price = entry_price * (1 + cfg['sl_pct'])
-    grace_minutes = cfg.get('grace_minutes', 0) if cfg['mode'] == 'grace' else 0
-    entry_time_min = df_feat.index[start_idx].tz_convert(PST).hour * 60 + df_feat.index[start_idx].tz_convert(PST).minute
-
-    for k in range(start_idx + 1, len(df_feat)):
-        bar_pst = df_feat.index[k].tz_convert(PST)
-        if bar_pst.date() != entry_date_pst:
-            exit_price = float(df_feat['Close'].iloc[k - 1])
-            pnl = (entry_price - exit_price) / entry_price
-            return {'pnl': pnl, 'entry': entry_price, 'exit': exit_price, 'outcome': 'EOD'}
-        bar_min = bar_pst.hour * 60 + bar_pst.minute
-        high_k = float(df_feat['High'].iloc[k])
-        low_k = float(df_feat['Low'].iloc[k])
-        elapsed = bar_min - entry_time_min
-        sl_active = elapsed >= grace_minutes
-        tp_hit = low_k <= tp_price
-        sl_hit = sl_active and high_k >= sl_price
-        if tp_hit and sl_hit:
-            if np.random.random() < 0.5:
-                return {'pnl': cfg['tp_pct'], 'entry': entry_price, 'exit': tp_price, 'outcome': 'TP'}
-            else:
-                return {'pnl': -cfg['sl_pct'], 'entry': entry_price, 'exit': sl_price, 'outcome': 'SL'}
-        if tp_hit:
-            return {'pnl': cfg['tp_pct'], 'entry': entry_price, 'exit': tp_price, 'outcome': 'TP'}
-        if sl_hit:
-            return {'pnl': -cfg['sl_pct'], 'entry': entry_price, 'exit': sl_price, 'outcome': 'SL'}
-        if bar_min >= EXIT_TIME_MIN:
-            exit_price = float(df_feat['Close'].iloc[k])
-            pnl = (entry_price - exit_price) / entry_price
-            return {'pnl': pnl, 'entry': entry_price, 'exit': exit_price, 'outcome': 'EOD'}
-
-    exit_price = float(df_feat['Close'].iloc[-1])
-    pnl = (entry_price - exit_price) / entry_price
-    return {'pnl': pnl, 'entry': entry_price, 'exit': exit_price, 'outcome': 'EOD'}
-
-
-# ==============================================================================
-# GET TRADING DAYS
-# ==============================================================================
-def get_trading_days(start, end):
-    spy = load_master('SPY', tail_days=TAIL_DAYS)
-    if spy is None:
-        raise RuntimeError("Cannot load SPY data")
-    spy_pst = spy.index.tz_convert(PST)
-    dates = sorted(set(spy_pst.date))
-    s = pd.to_datetime(start).date()
-    e = pd.to_datetime(end).date()
-    return [d for d in dates if s <= d <= e]
-
-
-# ==============================================================================
-# MAIN BACKTEST
-# ==============================================================================
-np.random.seed(42)
-
 print(f"\n{'='*W}")
 print(f"  COMBINED ST LONG + SHORT — DEPLOYED STRATEGY BACKTEST")
-print(f"  Period: {BACKTEST_START} -> {BACKTEST_END}")
-print(f"  Slippage: {SLIPPAGE_PCT:.2%} each way ({2*SLIPPAGE_PCT:.2%} RT)")
+print(f"  {BACKTEST_START} -> {BACKTEST_END}")
+print(f"  Score: {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} PT | "
+      f"Entry: {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PT | "
+      f"Exit: {EXIT_TIME_MIN//60}:{EXIT_TIME_MIN%60:02d} PT")
+print(f"  Slippage: {2*SLIPPAGE_PCT:.2%} RT | MAX_TRADES: {MAX_TRADES} per direction")
+print(f"  LONG: M_CONS_6NEWEST ({len(LONG_CONSENSUS)} consensus models)")
+print(f"  SHORT: M_MRV2_NEWEST3 ({len(SHORT_CONSENSUS)} consensus models, MR-v2 only)")
 print(f"{'='*W}")
 
-print(f"\n  LONG (fold {LONG_FOLD}):  {len(LONG_TICKERS)} tickers — {', '.join(LONG_TICKERS)}")
-print(f"  SHORT (fold {SHORT_FOLD}): {len(SHORT_TICKERS)} tickers — {', '.join(SHORT_TICKERS)}")
-overlap = sorted(set(LONG_TICKERS) & set(SHORT_TICKERS))
-if overlap:
-    print(f"  Overlap (both LONG & SHORT): {', '.join(overlap)}")
+# --- Load BQ configs ---
+print(f"\n  Loading LONG configs from BQ...")
+long_ffc = load_bq_configs(LONG_FAMILIES, LONG_F7_THRESH, 'LONG')
+long_deploy = select_long_deploy(long_ffc)
 
-# 1. Build market context
+print(f"\n  Loading SHORT configs from BQ...")
+short_ffc = load_bq_configs(SHORT_FAMILIES, SHORT_F7_THRESH, 'SHORT')
+short_deploy = select_short_deploy(short_ffc)
+
+# --- Build models ---
+print(f"\n  Building models...")
+long_ds = DirState('long', LONG_FAMILIES)
+short_ds = DirState('short', SHORT_FAMILIES)
+build_models_for_dir(long_ds, long_deploy, long_ffc)
+build_models_for_dir(short_ds, short_deploy, short_ffc)
+
+# --- Market context + regime ---
 print(f"\n  Building market context...")
 market_df = build_market_context()
+
+_bt_tickers = sorted(set(long_deploy.keys()) | set(short_deploy.keys()))
+print(f"  Building universe returns for regime features ({len(_bt_tickers)} tickers)...")
+_univ_rets = {}
+for _t in _bt_tickers:
+    _df = load_master(_t, tail_days=TAIL_DAYS)
+    if _df is not None:
+        _df = heal_data(_df.sort_index())
+        _univ_rets[_t] = _df['Close'].pct_change(1)
+        _master_cache.pop((_t, TAIL_DAYS), None)
+_univ_ret_df = pd.DataFrame(_univ_rets).reindex(market_df.index).fillna(0)
+print(f"    Universe returns: {_univ_ret_df.shape[1]} tickers loaded")
 _master_cache.clear()
 
-# 2. Compute regime features for both models
-print(f"  Computing regime features (16-col LONG, 22-col SHORT)...")
-long_regime_df = compute_regime_features(market_df, LONG_REGIME_COLS)
-short_regime_df = compute_regime_features(market_df, SHORT_REGIME_COLS)
+print(f"  Computing regime features...")
+regime_df = compute_regime_features(market_df, _univ_ret_df)
+del _univ_ret_df, _univ_rets
 
-# 3. Get trading days
-trading_days = get_trading_days(BACKTEST_START, BACKTEST_END)
-print(f"  Trading days: {len(trading_days)} ({trading_days[0]} -> {trading_days[-1]})")
+# --- Run LONG ---
+long_trades = run_direction('LONG', long_ds, long_deploy, long_ffc,
+                             LONG_CONSENSUS, market_df, regime_df)
+_master_cache.clear()
 
-# 4. Load both models
-print(f"\n  Loading models...")
-long_model, long_scaling, long_regime_stats = load_model(
-    LONG_GCS_DATA, LONG_GCS_MODEL, LONG_FOLD, LONG_N_REGIME_F, 'long')
-short_model, short_scaling, short_regime_stats = load_model(
-    SHORT_GCS_DATA, SHORT_GCS_MODEL, SHORT_FOLD, SHORT_N_REGIME_F, 'short')
+# --- Run SHORT ---
+short_trades = run_direction('SHORT', short_ds, short_deploy, short_ffc,
+                              SHORT_CONSENSUS, market_df, regime_df)
+_master_cache.clear()
 
-# 5. Pre-engineer features for all tickers
-print(f"\n  Engineering features for {len(ALL_TICKERS)} tickers...")
-ticker_features = {}
-for ticker in ALL_TICKERS:
-    df_feat = engineer_asset(ticker, market_df)
-    if df_feat is not None:
-        ticker_features[ticker] = df_feat
-        print(f"    {ticker}: {len(df_feat):,} bars")
-    else:
-        print(f"    {ticker}: FAILED")
-    _master_cache.pop((ticker, TAIL_DAYS), None)
+# --- Combine ---
+all_trades = long_trades + short_trades
 
-# 6. Run backtest day by day
-all_trades = []
-daily_signals = defaultdict(list)
+if not all_trades:
+    print(f"\n  NO TRADES in backtest window.")
+else:
+    df_trades = pd.DataFrame(all_trades)
+    df_long = df_trades[df_trades['Direction'] == 'LONG']
+    df_short = df_trades[df_trades['Direction'] == 'SHORT']
 
-print(f"\n{'='*W}")
-print(f"  SCORING + SIMULATION")
-print(f"{'='*W}")
+    long_daily, long_stats = compute_daily_stats(df_long, 'ST_LONG')
+    short_daily, short_stats = compute_daily_stats(df_short, 'ST_SHORT')
 
-for day in trading_days:
-    day_str = day.strftime('%Y-%m-%d')
-    print(f"\n  --- {day_str} ---")
+    # Combined: equal-weight across ALL trades each day
+    combined_daily, combined_stats = compute_daily_stats(df_trades, 'COMBINED')
 
-    # LONG scoring
-    long_signals = []
-    for ticker in LONG_TICKERS:
-        if ticker not in ticker_features:
+    # ==========================================================================
+    # RESULTS — PER-DIRECTION SUMMARY
+    # ==========================================================================
+    for label, stats, daily in [('ST LONG  (M_CONS_6NEWEST)', long_stats, long_daily),
+                                 ('ST SHORT (M_MRV2_NEWEST3)', short_stats, short_daily),
+                                 ('COMBINED', combined_stats, combined_daily)]:
+        if not stats:
             continue
-        cfg = LONG_DEPLOY_CONFIGS[ticker]
-        result = score_ticker_day(
-            long_model, long_scaling, long_regime_stats,
-            LONG_REGIME_COLS, LONG_N_REGIME_F,
-            ticker, cfg, ticker_features[ticker], long_regime_df,
-            day, LONG_SCORE_MIN)
-        if result is None:
+        print(f"\n\n{'='*W}")
+        print(f"  {label} — {BACKTEST_START} -> {BACKTEST_END}")
+        print(f"{'='*W}")
+        print(f"  Trades:       {stats['total_trades']}")
+        print(f"  Days:         {stats['n_days']}")
+        print(f"  Avg PnL/tr:   {stats['avg_pnl_trade']:+.2%}")
+        print(f"  Win rate:     {stats['win_rate']:.0%}")
+        print(f"  EW Portfolio: {stats['cum_ew']:+.2%}")
+        print(f"  Avg daily:    {stats['avg_daily']:+.2%}")
+        print(f"  Sharpe:       {stats['sharpe']:.1f}")
+        print(f"  Win day %:    {stats['win_day_pct']:.0%}")
+        print(f"  Max DD:       {stats['max_drawdown']:.2%}")
+
+    # ==========================================================================
+    # DAILY PNL TABLE
+    # ==========================================================================
+    all_dates = sorted(df_trades['Date'].unique())
+
+    print(f"\n\n{'='*W}")
+    print(f"  DAILY PNL — LONG vs SHORT vs COMBINED")
+    print(f"{'='*W}\n")
+
+    long_daily_map = {d['Date']: d for d in long_daily}
+    short_daily_map = {d['Date']: d for d in short_daily}
+    combined_daily_map = {d['Date']: d for d in combined_daily}
+
+    print(f"  {'Date':<12} {'L_N':>4} {'L_EW':>8} {'L_Cum':>8}  "
+          f"{'S_N':>4} {'S_EW':>8} {'S_Cum':>8}  "
+          f"{'C_N':>4} {'C_EW':>8} {'C_Cum':>8}")
+    print(f"  {'─'*W}")
+
+    l_cum = s_cum = c_cum = 0.0
+    for date in all_dates:
+        ld = long_daily_map.get(date)
+        sd = short_daily_map.get(date)
+        cd = combined_daily_map.get(date)
+        l_ew = ld['EW'] if ld else 0; l_n = ld['N'] if ld else 0
+        s_ew = sd['EW'] if sd else 0; s_n = sd['N'] if sd else 0
+        c_ew = cd['EW'] if cd else 0; c_n = cd['N'] if cd else 0
+        l_cum += l_ew; s_cum += s_ew; c_cum += c_ew
+        print(f"  {date:<12} {l_n:>4} {l_ew:>+7.2%} {l_cum:>+7.2%}  "
+              f"{s_n:>4} {s_ew:>+7.2%} {s_cum:>+7.2%}  "
+              f"{c_n:>4} {c_ew:>+7.2%} {c_cum:>+7.2%}")
+
+    # ==========================================================================
+    # STRATEGY COMPARISON TABLE
+    # ==========================================================================
+    print(f"\n\n{'='*W}")
+    print(f"  STRATEGY COMPARISON SUMMARY")
+    print(f"{'='*W}\n")
+
+    print(f"  {'Metric':<20} {'ST LONG':>12} {'ST SHORT':>12} {'COMBINED':>12}")
+    print(f"  {'─'*60}")
+    for metric, lv, sv, cv in [
+        ('Trades', f"{long_stats.get('total_trades', 0)}",
+         f"{short_stats.get('total_trades', 0)}",
+         f"{combined_stats.get('total_trades', 0)}"),
+        ('Avg PnL/trade',
+         f"{long_stats.get('avg_pnl_trade', 0):+.2%}" if long_stats else 'N/A',
+         f"{short_stats.get('avg_pnl_trade', 0):+.2%}" if short_stats else 'N/A',
+         f"{combined_stats.get('avg_pnl_trade', 0):+.2%}" if combined_stats else 'N/A'),
+        ('Win rate',
+         f"{long_stats.get('win_rate', 0):.0%}" if long_stats else 'N/A',
+         f"{short_stats.get('win_rate', 0):.0%}" if short_stats else 'N/A',
+         f"{combined_stats.get('win_rate', 0):.0%}" if combined_stats else 'N/A'),
+        ('Cum EW PnL',
+         f"{long_stats.get('cum_ew', 0):+.2%}" if long_stats else 'N/A',
+         f"{short_stats.get('cum_ew', 0):+.2%}" if short_stats else 'N/A',
+         f"{combined_stats.get('cum_ew', 0):+.2%}" if combined_stats else 'N/A'),
+        ('Sharpe',
+         f"{long_stats.get('sharpe', 0):.1f}" if long_stats else 'N/A',
+         f"{short_stats.get('sharpe', 0):.1f}" if short_stats else 'N/A',
+         f"{combined_stats.get('sharpe', 0):.1f}" if combined_stats else 'N/A'),
+        ('Max DD',
+         f"{long_stats.get('max_drawdown', 0):.2%}" if long_stats else 'N/A',
+         f"{short_stats.get('max_drawdown', 0):.2%}" if short_stats else 'N/A',
+         f"{combined_stats.get('max_drawdown', 0):.2%}" if combined_stats else 'N/A'),
+        ('Win day %',
+         f"{long_stats.get('win_day_pct', 0):.0%}" if long_stats else 'N/A',
+         f"{short_stats.get('win_day_pct', 0):.0%}" if short_stats else 'N/A',
+         f"{combined_stats.get('win_day_pct', 0):.0%}" if combined_stats else 'N/A'),
+    ]:
+        print(f"  {metric:<20} {lv:>12} {sv:>12} {cv:>12}")
+
+    # ==========================================================================
+    # PER-TICKER SUMMARY
+    # ==========================================================================
+    print(f"\n\n{'='*W}")
+    print(f"  PER-TICKER SUMMARY")
+    print(f"{'='*W}\n")
+    print(f"  {'Dir':<6} {'Ticker':<7} {'Source':<10} {'Mode':<8} "
+          f"{'#Tr':>4} {'Avg':>7} {'WR':>5} {'TP':>3} {'SL':>3} {'EOD':>3}")
+    print(f"  {'─'*70}")
+    for d_label, sub_df, d_configs in [('LONG', df_long, long_deploy),
+                                        ('SHORT', df_short, short_deploy)]:
+        for ticker in sorted(sub_df['Ticker'].unique()):
+            tk = sub_df[sub_df['Ticker'] == ticker]
+            cfg = d_configs.get(ticker, {})
+            src = f"{cfg.get('family', '?')} F{cfg.get('fold', '?')}"
+            avg = tk['PnL'].mean()
+            wr = (tk['PnL'] > 0).mean()
+            n_tp = (tk['Outcome'] == 'TP').sum()
+            n_sl = (tk['Outcome'] == 'SL').sum()
+            n_eod = (tk['Outcome'] == 'EOD').sum()
+            print(f"  {d_label:<6} {ticker:<7} {src:<10} {cfg.get('mode', '?'):<8} "
+                  f"{len(tk):>4} {avg:>+6.2%} {wr:>4.0%} {n_tp:>3} {n_sl:>3} {n_eod:>3}")
+
+    # ==========================================================================
+    # CHARTS
+    # ==========================================================================
+    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
+
+    l_cum_ew = long_stats.get('cum_ew', 0) if long_stats else 0
+    l_sh = long_stats.get('sharpe', 0) if long_stats else 0
+    s_cum_ew = short_stats.get('cum_ew', 0) if short_stats else 0
+    s_sh = short_stats.get('sharpe', 0) if short_stats else 0
+    c_cum_ew = combined_stats.get('cum_ew', 0) if combined_stats else 0
+    c_sh = combined_stats.get('sharpe', 0) if combined_stats else 0
+
+    fig.suptitle(
+        f'Combined ST LONG + SHORT — Deployed Strategy Backtest\n'
+        f'{BACKTEST_START} -> {BACKTEST_END} | '
+        f'LONG {l_cum_ew:+.2%} (Sh {l_sh:.1f}) | '
+        f'SHORT {s_cum_ew:+.2%} (Sh {s_sh:.1f}) | '
+        f'COMBINED {c_cum_ew:+.2%} (Sh {c_sh:.1f})',
+        fontsize=13, fontweight='bold')
+
+    COL_LONG = '#1565C0'
+    COL_SHORT = '#D32F2F'
+    COL_COMB = '#00897B'
+
+    # [0,0] Equity curves — LONG, SHORT, COMBINED
+    ax = axes[0, 0]
+    for daily, color, label in [
+        (long_daily, COL_LONG, f'LONG ({l_cum_ew:+.2%})'),
+        (short_daily, COL_SHORT, f'SHORT ({s_cum_ew:+.2%})'),
+        (combined_daily, COL_COMB, f'COMBINED ({c_cum_ew:+.2%})'),
+    ]:
+        if not daily:
             continue
+        dates_dt = pd.to_datetime([d['Date'] for d in daily])
+        cum = np.cumsum([d['EW'] for d in daily]) * 100
+        lw = 2.5 if label.startswith('COMBINED') else 1.8
+        ls = '--' if label.startswith('COMBINED') else '-'
+        ax.plot(dates_dt, cum, color=color, linewidth=lw, linestyle=ls,
+                marker='o', markersize=4, label=label)
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.fill_between(
+        pd.to_datetime([d['Date'] for d in combined_daily]),
+        0, np.cumsum([d['EW'] for d in combined_daily]) * 100,
+        alpha=0.08, color=COL_COMB) if combined_daily else None
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    ax.set_ylabel('Cumulative EW PnL (%)')
+    ax.set_title('Equity Curves — LONG vs SHORT vs Combined')
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
-        entry_bar_idx = result['bar_idx']
-        if cfg['mode'] != 'limit_entry':
-            offset = LONG_ENTRY_MIN - LONG_SCORE_MIN
-            entry_bar_idx = result['bar_idx'] + offset
+    # [0,1] Daily PnL bars — stacked LONG + SHORT
+    ax = axes[0, 1]
+    dates_dt_all = pd.to_datetime(all_dates)
+    long_ew = [long_daily_map.get(d, {}).get('EW', 0) * 100 for d in all_dates]
+    short_ew = [short_daily_map.get(d, {}).get('EW', 0) * 100 for d in all_dates]
+    bar_w = 0.35
+    x_pos = np.arange(len(all_dates))
+    ax.bar(x_pos - bar_w/2, long_ew, bar_w, color=COL_LONG, alpha=0.8, label='LONG')
+    ax.bar(x_pos + bar_w/2, short_ew, bar_w, color=COL_SHORT, alpha=0.8, label='SHORT')
+    combined_ew_arr = [combined_daily_map.get(d, {}).get('EW', 0) * 100 for d in all_dates]
+    ax.plot(x_pos, combined_ew_arr, 'ko--', markersize=4, linewidth=1.5, label='Combined')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([d[5:] for d in all_dates], rotation=45, ha='right', fontsize=7)
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.set_ylabel('Daily EW PnL (%)')
+    ax.set_title('Daily PnL — LONG vs SHORT')
+    ax.legend(fontsize=8)
+    ax.grid(axis='y', alpha=0.3)
 
-        if result['signal']:
-            trade = simulate_long_trade(ticker_features[ticker], entry_bar_idx, cfg)
-            if trade is not None:
-                trade['pnl'] -= 2 * SLIPPAGE_PCT
-                all_trades.append({
-                    'Date': day_str, 'Ticker': ticker, 'Strategy': 'ST_LONG',
-                    'Prob': result['prob'], 'Thresh': cfg['prob_thresh'],
-                    'Entry': trade['entry'], 'Exit': trade['exit'],
-                    'PnL': trade['pnl'], 'Outcome': trade['outcome'],
-                    'Mode': cfg['mode'], 'Horizon': HORIZON_LABELS[cfg['horizon']],
-                    'TP_pct': cfg['tp_pct'], 'SL_pct': cfg['sl_pct'],
-                })
-                long_signals.append(f"{ticker}({result['prob']:.2f})")
-            else:
-                long_signals.append(f"{ticker}(no fill)")
-        daily_signals[day_str].append({
-            'ticker': ticker, 'strategy': 'LONG',
-            'prob': result['prob'], 'signal': result['signal'],
-            'close': result['close'], 'probs': result['all_probs']})
+    # [1,0] Per-ticker avg PnL (grouped by direction)
+    ax = axes[1, 0]
+    ticker_data = []
+    for _, row in df_trades.groupby(['Ticker', 'Direction']).agg(
+        avg_pnl=('PnL', 'mean'), count=('PnL', 'count')
+    ).reset_index().iterrows():
+        ticker_data.append(row)
+    if ticker_data:
+        td_df = pd.DataFrame(ticker_data).sort_values('avg_pnl')
+        y_pos = range(len(td_df))
+        bar_colors = [COL_LONG if d == 'LONG' else COL_SHORT
+                      for d in td_df['Direction']]
+        ax.barh(list(y_pos), td_df['avg_pnl'].values * 100, color=bar_colors,
+                alpha=0.8)
+        ax.set_yticks(list(y_pos))
+        labels = [f"{r['Direction'][0]}: {r['Ticker']} ({int(r['count'])}t)"
+                  for _, r in td_df.iterrows()]
+        ax.set_yticklabels(labels, fontsize=7)
+        ax.axvline(0, color='black', linewidth=0.8)
+        ax.set_xlabel('Avg PnL/trade (%)')
+        ax.set_title('Per-Ticker Performance (L=LONG, S=SHORT)')
+        ax.grid(axis='x', alpha=0.3)
 
-    # SHORT scoring
-    short_signals = []
-    for ticker in SHORT_TICKERS:
-        if ticker not in ticker_features:
+    # [1,1] Daily detail table
+    ax = axes[1, 1]
+    ax.axis('off')
+    table_lines = [f"{'Date':<12} {'L':>3} {'S':>3} {'Tot':>4} "
+                   f"{'L_PnL':>7} {'S_PnL':>7} {'Comb':>7} {'Cum':>7}"]
+    table_lines.append('─' * 60)
+    cum_val = 0.0
+    for date in all_dates:
+        ld = long_daily_map.get(date)
+        sd = short_daily_map.get(date)
+        cd = combined_daily_map.get(date)
+        l_n = ld['N'] if ld else 0; l_ew = ld['EW'] if ld else 0
+        s_n = sd['N'] if sd else 0; s_ew = sd['EW'] if sd else 0
+        c_ew = cd['EW'] if cd else 0; c_n = cd['N'] if cd else 0
+        cum_val += c_ew
+        table_lines.append(
+            f"{date:<12} {l_n:>3} {s_n:>3} {c_n:>4} "
+            f"{l_ew*100:>+6.2f}% {s_ew*100:>+6.2f}% "
+            f"{c_ew*100:>+6.2f}% {cum_val*100:>+6.2f}%")
+    table_text = '\n'.join(table_lines)
+    ax.text(0.02, 0.98, table_text, transform=ax.transAxes,
+            fontsize=7, verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+    ax.set_title('Daily Detail', fontsize=11)
+
+    plt.tight_layout()
+    chart_path = '/tmp/combined_st_deployed_backtest.png'
+    plt.savefig(chart_path, dpi=150, bbox_inches='tight')
+    print(f"\n  Chart saved: {chart_path}")
+    if _IN_COLAB:
+        plt.show()
+    plt.close()
+
+    # === Second chart: focused on combined portfolio ===
+    fig2, axes2 = plt.subplots(2, 2, figsize=(20, 14))
+    fig2.suptitle(
+        f'Combined Portfolio Deep Dive\n'
+        f'{BACKTEST_START} -> {BACKTEST_END} | '
+        f'{combined_stats["total_trades"]} trades | '
+        f'EW {c_cum_ew:+.2%} | Sharpe {c_sh:.1f}',
+        fontsize=13, fontweight='bold')
+
+    # [0,0] Combined equity with daily annotations
+    ax = axes2[0, 0]
+    if combined_daily:
+        dates_dt_c = pd.to_datetime([d['Date'] for d in combined_daily])
+        cum_c = np.cumsum([d['EW'] for d in combined_daily]) * 100
+        ax.plot(dates_dt_c, cum_c, 'o-', color=COL_COMB, linewidth=2.5, markersize=6)
+        ax.fill_between(dates_dt_c, 0, cum_c, alpha=0.12, color=COL_COMB)
+        for i, d in enumerate(combined_daily):
+            ax.annotate(f"{d['EW']*100:+.1f}%",
+                        (dates_dt_c[i], cum_c[i]),
+                        textcoords="offset points", xytext=(0, 12),
+                        fontsize=7, ha='center',
+                        color='green' if d['EW'] > 0 else 'red')
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    ax.set_ylabel('Cumulative EW PnL (%)')
+    ax.set_title('Combined Portfolio — Equity Curve')
+    ax.grid(alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # [0,1] Daily PnL bars with trade count
+    ax = axes2[0, 1]
+    if combined_daily:
+        ew_vals = [d['EW'] * 100 for d in combined_daily]
+        bar_colors = ['#2E7D32' if v > 0 else '#C62828' for v in ew_vals]
+        ax.bar(dates_dt_c, ew_vals, color=bar_colors, alpha=0.8, width=0.8)
+        for i, d in enumerate(combined_daily):
+            l_n = long_daily_map.get(d['Date'], {}).get('N', 0)
+            s_n = short_daily_map.get(d['Date'], {}).get('N', 0)
+            ax.text(dates_dt_c[i],
+                    ew_vals[i] + (0.08 if ew_vals[i] >= 0 else -0.25),
+                    f"{l_n}L+{s_n}S", ha='center', fontsize=6)
+    ax.axhline(0, color='black', linewidth=0.8)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    ax.set_ylabel('Daily EW PnL (%)')
+    ax.set_title('Combined — Daily PnL (count = Long + Short)')
+    ax.grid(axis='y', alpha=0.3)
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # [1,0] Outcome distribution by direction
+    ax = axes2[1, 0]
+    outcomes = ['TP', 'SL', 'EOD']
+    x_oc = np.arange(len(outcomes))
+    bar_w_oc = 0.35
+    for i, (d_label, d_df, color) in enumerate([
+        ('LONG', df_long, COL_LONG), ('SHORT', df_short, COL_SHORT)
+    ]):
+        if len(d_df) == 0:
             continue
-        cfg = SHORT_DEPLOY_CONFIGS[ticker]
+        counts = [(d_df['Outcome'] == o).sum() for o in outcomes]
+        ax.bar(x_oc + i * bar_w_oc, counts, bar_w_oc, color=color,
+               alpha=0.8, label=d_label)
+        for j, c in enumerate(counts):
+            if c > 0:
+                avg_p = d_df[d_df['Outcome'] == outcomes[j]]['PnL'].mean()
+                ax.text(x_oc[j] + i * bar_w_oc, c + 0.3,
+                        f"{avg_p:+.1%}", ha='center', fontsize=7)
+    ax.set_xticks(x_oc + bar_w_oc / 2)
+    ax.set_xticklabels(outcomes)
+    ax.set_ylabel('Count')
+    ax.set_title('Outcomes by Direction (labels = avg PnL)')
+    ax.legend(fontsize=9)
+    ax.grid(axis='y', alpha=0.3)
 
-        result = score_ticker_day(
-            short_model, short_scaling, short_regime_stats,
-            SHORT_REGIME_COLS, SHORT_N_REGIME_F,
-            ticker, cfg, ticker_features[ticker], short_regime_df,
-            day, SHORT_SCORE_MIN)
-        if result is None:
-            continue
+    # [1,1] Trades per day stacked
+    ax = axes2[1, 1]
+    long_counts = [long_daily_map.get(d, {}).get('N', 0) for d in all_dates]
+    short_counts = [short_daily_map.get(d, {}).get('N', 0) for d in all_dates]
+    ax.bar(x_pos, long_counts, 0.6, color=COL_LONG, alpha=0.8, label='LONG')
+    ax.bar(x_pos, short_counts, 0.6, bottom=long_counts, color=COL_SHORT,
+           alpha=0.8, label='SHORT')
+    for i, (lc, sc) in enumerate(zip(long_counts, short_counts)):
+        total = lc + sc
+        if total > 0:
+            ax.text(i, total + 0.1, str(total), ha='center', fontsize=8,
+                    fontweight='bold')
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels([d[5:] for d in all_dates], rotation=45, ha='right',
+                        fontsize=7)
+    ax.set_ylabel('Trades')
+    ax.set_title('Trades Per Day (stacked)')
+    ax.legend(fontsize=9)
+    ax.grid(axis='y', alpha=0.3)
 
-        entry_bar_idx = result['bar_idx']
-        if cfg['mode'] != 'limit_entry':
-            offset = SHORT_ENTRY_MIN - SHORT_SCORE_MIN
-            entry_bar_idx = result['bar_idx'] + offset
+    plt.tight_layout()
+    chart2_path = '/tmp/combined_st_deployed_backtest_detail.png'
+    plt.savefig(chart2_path, dpi=150, bbox_inches='tight')
+    print(f"  Detail chart saved: {chart2_path}")
+    if _IN_COLAB:
+        plt.show()
+    plt.close()
 
-        if result['signal']:
-            trade = simulate_short_trade(ticker_features[ticker], entry_bar_idx, cfg)
-            if trade is not None:
-                trade['pnl'] -= 2 * SLIPPAGE_PCT
-                all_trades.append({
-                    'Date': day_str, 'Ticker': ticker, 'Strategy': 'ST_SHORT',
-                    'Prob': result['prob'], 'Thresh': cfg['prob_thresh'],
-                    'Entry': trade['entry'], 'Exit': trade['exit'],
-                    'PnL': trade['pnl'], 'Outcome': trade['outcome'],
-                    'Mode': cfg['mode'], 'Horizon': HORIZON_LABELS[cfg['horizon']],
-                    'TP_pct': cfg['tp_pct'], 'SL_pct': cfg['sl_pct'],
-                })
-                short_signals.append(f"{ticker}({result['prob']:.2f})")
-            else:
-                short_signals.append(f"{ticker}(no fill)")
-        daily_signals[day_str].append({
-            'ticker': ticker, 'strategy': 'SHORT',
-            'prob': result['prob'], 'signal': result['signal'],
-            'close': result['close'], 'probs': result['all_probs']})
 
-    long_str = ', '.join(long_signals) if long_signals else 'none'
-    short_str = ', '.join(short_signals) if short_signals else 'none'
-    print(f"    LONG trades:  {long_str}")
-    print(f"    SHORT trades: {short_str}")
-
-# Free models
+# ==============================================================================
+# CLEANUP
+# ==============================================================================
 keras.backend.clear_session()
 gc.collect()
-
-
-# ==============================================================================
-# RESULTS
-# ==============================================================================
-if not all_trades:
-    print(f"\n  NO TRADES in backtest window — nothing to analyze")
-else:
-    trades_df = pd.DataFrame(all_trades)
-    trades_df['Date_dt'] = pd.to_datetime(trades_df['Date'])
-    trades_df = trades_df.sort_values(['Date_dt', 'Strategy', 'Ticker'])
-
-    # ── Per-strategy breakdown ──
-    for strat in ['ST_LONG', 'ST_SHORT']:
-        sdf = trades_df[trades_df['Strategy'] == strat]
-        if len(sdf) == 0:
-            print(f"\n  {strat}: No trades")
-            continue
-
-        n = len(sdf)
-        n_win = (sdf['PnL'] > 0).sum()
-        n_loss = (sdf['PnL'] <= 0).sum()
-        avg_pnl = sdf['PnL'].mean()
-        total_pnl = sdf['PnL'].sum()
-        wr = n_win / n if n > 0 else 0
-        avg_win = sdf.loc[sdf['PnL'] > 0, 'PnL'].mean() if n_win > 0 else 0
-        avg_loss = sdf.loc[sdf['PnL'] <= 0, 'PnL'].mean() if n_loss > 0 else 0
-        gross_profit = sdf.loc[sdf['PnL'] > 0, 'PnL'].sum() if n_win > 0 else 0
-        gross_loss = abs(sdf.loc[sdf['PnL'] <= 0, 'PnL'].sum()) if n_loss > 0 else 0
-        pf = gross_profit / gross_loss if gross_loss > 0 else float('inf')
-        n_tp = (sdf['Outcome'] == 'TP').sum()
-        n_sl = (sdf['Outcome'] == 'SL').sum()
-        n_eod = (sdf['Outcome'] == 'EOD').sum()
-        n_days = sdf['Date'].nunique()
-        trades_per_day = n / n_days if n_days > 0 else 0
-
-        print(f"\n{'='*W}")
-        print(f"  {strat} RESULTS — {BACKTEST_START} to {BACKTEST_END}")
-        print(f"{'='*W}")
-        print(f"  Trades:          {n}  ({n_days} trading days, {trades_per_day:.1f} trades/day)")
-        print(f"  Avg PnL:         {avg_pnl:+.2%}")
-        print(f"  Total PnL:       {total_pnl:+.2%}")
-        print(f"  Win rate:        {wr:.0%} ({n_win}W / {n_loss}L)")
-        print(f"  Avg win:         {avg_win:+.2%}")
-        print(f"  Avg loss:        {avg_loss:+.2%}")
-        print(f"  Profit factor:   {pf:.2f}")
-        print(f"  Outcomes:        TP={n_tp}  SL={n_sl}  EOD={n_eod}")
-
-        # Sharpe (daily equal-weight PnL)
-        daily_pnl = sdf.groupby('Date')['PnL'].mean()
-        if len(daily_pnl) >= 2:
-            sharpe = daily_pnl.mean() / daily_pnl.std() * np.sqrt(252)
-            print(f"  Sharpe (ann.):   {sharpe:.1f}")
-
-        print(f"\n  TRADE LOG:")
-        print(f"  {'Date':<12} {'Ticker':<7} {'H':>3} {'Mode':<8} "
-              f"{'Prob':>5}/{'Thr':>5}  "
-              f"{'Entry':>9} {'Exit':>9} {'PnL':>8} {'Type':>4}")
-        print(f"  {'─'*90}")
-        for _, t in sdf.iterrows():
-            print(f"  {t['Date']:<12} {t['Ticker']:<7} {t['Horizon']:>3} {t['Mode']:<8} "
-                  f"{t['Prob']:>5.2f}/{t['Thresh']:>5.2f}  "
-                  f"${t['Entry']:>8.2f} ${t['Exit']:>8.2f} {t['PnL']:>+7.2%} {t['Outcome']:>4}")
-
-        print(f"\n  PER-TICKER:")
-        print(f"  {'Ticker':<7} {'N':>3} {'Avg PnL':>8} {'Total':>8} {'WR':>5} {'TP':>3} {'SL':>3} {'EOD':>3}")
-        print(f"  {'─'*50}")
-        for ticker in sorted(sdf['Ticker'].unique()):
-            tdf = sdf[sdf['Ticker'] == ticker]
-            t_n = len(tdf)
-            t_avg = tdf['PnL'].mean()
-            t_tot = tdf['PnL'].sum()
-            t_wr = (tdf['PnL'] > 0).mean()
-            t_tp = (tdf['Outcome'] == 'TP').sum()
-            t_sl = (tdf['Outcome'] == 'SL').sum()
-            t_eod = (tdf['Outcome'] == 'EOD').sum()
-            print(f"  {ticker:<7} {t_n:>3} {t_avg:>+7.2%} {t_tot:>+7.2%} {t_wr:>4.0%} {t_tp:>3} {t_sl:>3} {t_eod:>3}")
-
-    # ── COMBINED portfolio ──
-    print(f"\n{'='*W}")
-    print(f"  COMBINED PORTFOLIO — EQUAL WEIGHT (capital split equally per day)")
-    print(f"{'='*W}")
-    n_all = len(trades_df)
-    if n_all > 0:
-        n_win_all = (trades_df['PnL'] > 0).sum()
-        n_loss_all = (trades_df['PnL'] <= 0).sum()
-        avg_all = trades_df['PnL'].mean()
-        wr_all = n_win_all / n_all
-        gp_all = trades_df.loc[trades_df['PnL'] > 0, 'PnL'].sum()
-        gl_all = abs(trades_df.loc[trades_df['PnL'] <= 0, 'PnL'].sum())
-        pf_all = gp_all / gl_all if gl_all > 0 else float('inf')
-
-        daily = trades_df.groupby('Date').agg(
-            N=('PnL', 'count'),
-            EqW_PnL=('PnL', 'mean'),
-            Additive_PnL=('PnL', 'sum'),
-            Long_N=('Strategy', lambda x: (x == 'ST_LONG').sum()),
-            Short_N=('Strategy', lambda x: (x == 'ST_SHORT').sum()),
-            Long_Avg=('PnL', lambda x: x[trades_df.loc[x.index, 'Strategy'] == 'ST_LONG'].mean() if (trades_df.loc[x.index, 'Strategy'] == 'ST_LONG').any() else 0),
-            Short_Avg=('PnL', lambda x: x[trades_df.loc[x.index, 'Strategy'] == 'ST_SHORT'].mean() if (trades_df.loc[x.index, 'Strategy'] == 'ST_SHORT').any() else 0),
-            Tickers=('Ticker', lambda x: ','.join(sorted(x.unique()))),
-        ).sort_index()
-
-        total_eqw = daily['EqW_PnL'].sum()
-        total_add = daily['Additive_PnL'].sum()
-        n_days_combined = len(daily)
-
-        daily_eqw_series = daily['EqW_PnL']
-        if len(daily_eqw_series) >= 2:
-            sharpe_comb = daily_eqw_series.mean() / daily_eqw_series.std() * np.sqrt(252)
-        else:
-            sharpe_comb = 0
-
-        print(f"  Total trades:     {n_all}  ({n_days_combined} days, {n_all/n_days_combined:.1f} trades/day)")
-        print(f"  LONG:             {(trades_df['Strategy'] == 'ST_LONG').sum()} trades")
-        print(f"  SHORT:            {(trades_df['Strategy'] == 'ST_SHORT').sum()} trades")
-        print(f"  Avg PnL/trade:    {avg_all:+.2%}")
-        print(f"  Win rate:         {wr_all:.0%} ({n_win_all}W / {n_loss_all}L)")
-        print(f"  Profit factor:    {pf_all:.2f}")
-        print(f"  Portfolio PnL:    {total_eqw:+.2%}  (equal-weight)")
-        print(f"  Additive PnL:     {total_add:+.2%}  (100% per trade)")
-        print(f"  Sharpe (ann.):    {sharpe_comb:.1f}")
-
-        # ── TRADES PER DAY PER STRATEGY ──
-        print(f"\n  {'─'*W}")
-        print(f"  TRADES PER DAY PER STRATEGY")
-        print(f"  {'─'*W}")
-        print(f"  {'Date':<12} {'LONG':>5} {'SHORT':>6} {'TOTAL':>6} {'EqW Day':>8} {'Add Day':>8} {'EqW Cum':>8} {'Add Cum':>8}  Tickers")
-        print(f"  {'─'*W}")
-        cum_eqw = 0.0
-        cum_add = 0.0
-        for date, row in daily.iterrows():
-            cum_eqw += row['EqW_PnL']
-            cum_add += row['Additive_PnL']
-            print(f"  {date:<12} {int(row['Long_N']):>5} {int(row['Short_N']):>6} {int(row['N']):>6} "
-                  f"{row['EqW_PnL']:>+7.2%} {row['Additive_PnL']:>+7.2%} {cum_eqw:>+7.2%} {cum_add:>+7.2%}  {row['Tickers']}")
-
-        # ── DAILY BREAKDOWN: Long vs Short PnL ──
-        print(f"\n  {'─'*W}")
-        print(f"  DAILY PnL BY STRATEGY")
-        print(f"  {'─'*W}")
-        print(f"  {'Date':<12} {'L_N':>4} {'L_Avg':>8} {'L_Tot':>8}  |  {'S_N':>4} {'S_Avg':>8} {'S_Tot':>8}  |  {'Day_N':>5} {'Day_Avg':>8}")
-        print(f"  {'─'*W}")
-        for date in sorted(trades_df['Date'].unique()):
-            day_df = trades_df[trades_df['Date'] == date]
-            l_df = day_df[day_df['Strategy'] == 'ST_LONG']
-            s_df = day_df[day_df['Strategy'] == 'ST_SHORT']
-            l_n = len(l_df); l_avg = l_df['PnL'].mean() if l_n > 0 else 0; l_tot = l_df['PnL'].sum()
-            s_n = len(s_df); s_avg = s_df['PnL'].mean() if s_n > 0 else 0; s_tot = s_df['PnL'].sum()
-            d_n = len(day_df); d_avg = day_df['PnL'].mean()
-            print(f"  {date:<12} {l_n:>4} {l_avg:>+7.2%} {l_tot:>+7.2%}  |  {s_n:>4} {s_avg:>+7.2%} {s_tot:>+7.2%}  |  {d_n:>5} {d_avg:>+7.2%}")
-
-        # ── Summary stats ──
-        print(f"\n  {'─'*W}")
-        print(f"  STRATEGY COMPARISON SUMMARY")
-        print(f"  {'─'*W}")
-        print(f"  {'Metric':<20} {'ST_LONG':>12} {'ST_SHORT':>12} {'COMBINED':>12}")
-        print(f"  {'─'*W}")
-        for strat_name, strat_label in [('ST_LONG', 'ST_LONG'), ('ST_SHORT', 'ST_SHORT')]:
-            sdf = trades_df[trades_df['Strategy'] == strat_name]
-            if len(sdf) == 0:
-                continue
-        l_df = trades_df[trades_df['Strategy'] == 'ST_LONG']
-        s_df = trades_df[trades_df['Strategy'] == 'ST_SHORT']
-        for metric, l_val, s_val, c_val in [
-            ('Trades', f"{len(l_df)}", f"{len(s_df)}", f"{n_all}"),
-            ('Avg PnL', f"{l_df['PnL'].mean():+.2%}" if len(l_df) > 0 else 'N/A',
-             f"{s_df['PnL'].mean():+.2%}" if len(s_df) > 0 else 'N/A',
-             f"{avg_all:+.2%}"),
-            ('Win rate', f"{(l_df['PnL']>0).mean():.0%}" if len(l_df) > 0 else 'N/A',
-             f"{(s_df['PnL']>0).mean():.0%}" if len(s_df) > 0 else 'N/A',
-             f"{wr_all:.0%}"),
-            ('PF', f"{l_df.loc[l_df['PnL']>0,'PnL'].sum()/abs(l_df.loc[l_df['PnL']<=0,'PnL'].sum()):.2f}" if (l_df['PnL']<=0).any() else 'inf',
-             f"{s_df.loc[s_df['PnL']>0,'PnL'].sum()/abs(s_df.loc[s_df['PnL']<=0,'PnL'].sum()):.2f}" if (s_df['PnL']<=0).any() else 'inf',
-             f"{pf_all:.2f}"),
-            ('Total PnL', f"{l_df['PnL'].sum():+.2%}" if len(l_df) > 0 else 'N/A',
-             f"{s_df['PnL'].sum():+.2%}" if len(s_df) > 0 else 'N/A',
-             f"{trades_df['PnL'].sum():+.2%}"),
-            ('Trades/day', f"{len(l_df)/l_df['Date'].nunique():.1f}" if len(l_df) > 0 else '0',
-             f"{len(s_df)/s_df['Date'].nunique():.1f}" if len(s_df) > 0 else '0',
-             f"{n_all/n_days_combined:.1f}"),
-            ('EqW PnL', '', '', f"{total_eqw:+.2%}"),
-        ]:
-            print(f"  {metric:<20} {l_val:>12} {s_val:>12} {c_val:>12}")
-
-    # ── Signal log ──
-    print(f"\n{'='*W}")
-    print(f"  FULL SIGNAL LOG (all scored tickers per day)")
-    print(f"{'='*W}")
-    for day_str in sorted(daily_signals.keys()):
-        sigs = daily_signals[day_str]
-        print(f"\n  {day_str}:")
-        for s in sorted(sigs, key=lambda x: (x['strategy'], x['ticker'])):
-            sig_mark = 'GO' if s['signal'] else '--'
-            probs_str = ' '.join(f"{k}={v:.3f}" for k, v in s['probs'].items())
-            print(f"    {s['strategy']:<5} {s['ticker']:<7} [{sig_mark}] "
-                  f"close=${s['close']:>8.2f}  {probs_str}")
-
-    # ── DEPLOY CONFIGS REFERENCE ──
-    print(f"\n{'='*W}")
-    print(f"  DEPLOY CONFIGS")
-    print(f"{'='*W}")
-    print(f"\n  ST LONG — Fold {LONG_FOLD} ({len(LONG_TICKERS)} tickers):")
-    print(f"  {'Ticker':<7} {'H':>3} {'Mode':<12} {'Thr':>5} {'TP':>5} {'SL':>5} {'Dip':>5} {'Wait':>5}")
-    print(f"  {'─'*60}")
-    for tk in LONG_TICKERS:
-        cfg = LONG_DEPLOY_CONFIGS[tk]
-        mode_label = cfg['mode'].upper()
-        if cfg['mode'] == 'limit_entry':
-            mode_label = f"LIMIT {cfg.get('dip_pct',0):.1%}"
-        elif cfg['mode'] == 'grace':
-            mode_label = f"GRACE {cfg.get('grace_minutes',0)}m"
-        dip_str = f"{cfg.get('dip_pct',0):.1%}" if cfg['mode'] == 'limit_entry' else '  --'
-        wait_str = f"{cfg.get('max_wait',0):>3}m" if cfg['mode'] == 'limit_entry' else '  --'
-        print(f"  {tk:<7} {HORIZON_LABELS[cfg['horizon']]:>3} {mode_label:<12} {cfg['prob_thresh']:>5.2f} "
-              f"{cfg['tp_pct']:>4.0%} {cfg['sl_pct']:>4.0%} {dip_str:>5} {wait_str:>5}")
-
-    print(f"\n  ST SHORT — Fold {SHORT_FOLD} F7 Filt >=3.0% ({len(SHORT_TICKERS)} tickers):")
-    print(f"  {'Ticker':<7} {'H':>3} {'Mode':<12} {'Thr':>5} {'TP':>5} {'SL':>5} {'Dip':>5} {'Wait':>5}")
-    print(f"  {'─'*60}")
-    for tk in SHORT_TICKERS:
-        cfg = SHORT_DEPLOY_CONFIGS[tk]
-        mode_label = cfg['mode'].upper()
-        if cfg['mode'] == 'limit_entry':
-            mode_label = f"LIMIT {cfg.get('dip_pct',0):.1%}"
-        elif cfg['mode'] == 'grace':
-            mode_label = f"GRACE {cfg.get('grace_minutes',0)}m"
-        dip_str = f"{cfg.get('dip_pct',0):.1%}" if cfg['mode'] == 'limit_entry' else '  --'
-        wait_str = f"{cfg.get('max_wait',0):>3}m" if cfg['mode'] == 'limit_entry' else '  --'
-        print(f"  {tk:<7} {HORIZON_LABELS[cfg['horizon']]:>3} {mode_label:<12} {cfg['prob_thresh']:>5.2f} "
-              f"{cfg['tp_pct']:>4.0%} {cfg['sl_pct']:>4.0%} {dip_str:>5} {wait_str:>5}")
-
-    # ── Charts ──
-    if HAS_MPL and n_all > 0:
-        fig, axes = plt.subplots(4, 2, figsize=(20, 24))
-
-        # 1. Individual trades scatter
-        ax = axes[0, 0]
-        jitter_map = {}
-        for _, row in trades_df.iterrows():
-            d = row['Date']
-            jitter_map.setdefault(d, []).append(row.name)
-        jitter_offsets = {}
-        for d, idxs in jitter_map.items():
-            n = len(idxs)
-            offsets = np.linspace(-0.25, 0.25, n) if n > 1 else [0.0]
-            for idx, off in zip(idxs, offsets):
-                jitter_offsets[idx] = off
-
-        for strat, color, marker in [('ST_LONG', '#1565C0', 'o'), ('ST_SHORT', '#D32F2F', 's')]:
-            sdf = trades_df[trades_df['Strategy'] == strat]
-            if len(sdf) == 0:
-                continue
-            dates_num = np.array([mdates.date2num(r['Date_dt']) + jitter_offsets.get(i, 0)
-                                  for i, r in sdf.iterrows()])
-            pnl_pct = sdf['PnL'].values * 100
-            winners = pnl_pct >= 0
-            ax.scatter(dates_num[winners], pnl_pct[winners],
-                       c=color, marker=marker, s=100, alpha=0.8, edgecolors='black',
-                       linewidths=0.5, label=f'{strat} win', zorder=3)
-            ax.scatter(dates_num[~winners], pnl_pct[~winners],
-                       c=color, marker=marker, s=100, alpha=0.4, edgecolors='black',
-                       linewidths=0.5, zorder=3)
-            for idx, (i, row) in enumerate(sdf.iterrows()):
-                x = dates_num[idx]
-                y = row['PnL'] * 100
-                ax.annotate(row['Ticker'], (x, y),
-                            fontsize=7, ha='center', va='bottom', alpha=0.7)
-        ax.axhline(0, color='black', linewidth=1)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-        ax.xaxis.set_major_locator(mdates.DayLocator())
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
-        ax.set_ylabel('Trade PnL (%)')
-        ax.set_title('Individual Trades by Date')
-        ax.legend(loc='upper left')
-        ax.grid(alpha=0.3)
-
-        # 2. Daily equal-weight PnL bars
-        ax = axes[0, 1]
-        all_dates = sorted(trades_df['Date'].unique())
-        x_pos = np.arange(len(all_dates))
-        bar_w = 0.35
-        eqw_long = []; eqw_short = []; eqw_combined = []
-        for d in all_dates:
-            day_df = trades_df[trades_df['Date'] == d]
-            n_trades = len(day_df)
-            l_sum = day_df.loc[day_df['Strategy'] == 'ST_LONG', 'PnL'].sum()
-            s_sum = day_df.loc[day_df['Strategy'] == 'ST_SHORT', 'PnL'].sum()
-            eqw_long.append(l_sum / n_trades * 100 if n_trades > 0 else 0)
-            eqw_short.append(s_sum / n_trades * 100 if n_trades > 0 else 0)
-            eqw_combined.append((l_sum + s_sum) / n_trades * 100 if n_trades > 0 else 0)
-        ax.bar(x_pos - bar_w/2, eqw_long, bar_w, color='#1565C0', alpha=0.8, label='LONG share')
-        ax.bar(x_pos + bar_w/2, eqw_short, bar_w, color='#D32F2F', alpha=0.8, label='SHORT share')
-        ax.plot(x_pos, eqw_combined, 'ko--', markersize=5, linewidth=1.5, label='Portfolio')
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels([d[5:] for d in all_dates], rotation=45, ha='right')
-        ax.axhline(0, color='black', linewidth=1)
-        ax.set_ylabel('Daily Portfolio PnL (%)')
-        ax.set_title('Daily PnL — Equal Weight')
-        ax.legend()
-        ax.grid(alpha=0.3, axis='y')
-
-        # 3. Cumulative PnL by strategy (trade sequence)
-        ax = axes[1, 0]
-        for strat, color in [('ST_LONG', '#1565C0'), ('ST_SHORT', '#D32F2F')]:
-            sdf = trades_df[trades_df['Strategy'] == strat].sort_values('Date_dt')
-            if len(sdf) > 0:
-                cum = sdf['PnL'].cumsum().values
-                ax.plot(range(1, len(cum) + 1), cum * 100, color=color,
-                        linewidth=2, label=f'{strat} ({len(sdf)} trades)')
-        combined_cum = trades_df.sort_values('Date_dt')['PnL'].cumsum().values
-        ax.plot(range(1, len(combined_cum) + 1), combined_cum * 100,
-                color='#00897B', linewidth=2, linestyle='--', label='COMBINED')
-        ax.axhline(0, color='black', linewidth=0.8)
-        ax.set_xlabel('Trade #')
-        ax.set_ylabel('Cumulative PnL (%)')
-        ax.set_title(f'Cumulative PnL by Trade Sequence')
-        ax.legend()
-        ax.grid(alpha=0.3)
-
-        # 4. Per-ticker avg PnL
-        ax = axes[1, 1]
-        ticker_pnl = trades_df.groupby(['Ticker', 'Strategy'])['PnL'].mean().unstack(fill_value=0)
-        tickers_sorted = ticker_pnl.sum(axis=1).sort_values().index
-        y_pos = np.arange(len(tickers_sorted))
-        for i, strat in enumerate(['ST_LONG', 'ST_SHORT']):
-            if strat in ticker_pnl.columns:
-                vals = [ticker_pnl.loc[t, strat] * 100 if t in ticker_pnl.index else 0
-                        for t in tickers_sorted]
-                color = '#1565C0' if strat == 'ST_LONG' else '#D32F2F'
-                ax.barh(y_pos + i * 0.35, vals, 0.35, color=color, alpha=0.8, label=strat)
-        ax.set_yticks(y_pos + 0.175)
-        ax.set_yticklabels(tickers_sorted)
-        ax.axvline(0, color='black', linewidth=0.8)
-        ax.set_xlabel('Avg PnL per trade (%)')
-        ax.set_title('Per-Ticker Avg PnL')
-        ax.legend()
-        ax.grid(alpha=0.3, axis='x')
-
-        # 5. Portfolio equity curve by date
-        ax = axes[2, 0]
-        daily_eqw = trades_df.groupby('Date')['PnL'].mean().sort_index()
-        daily_cum = daily_eqw.cumsum() * 100
-        dates_plot = pd.to_datetime(daily_cum.index)
-        ax.fill_between(dates_plot, daily_cum.values, 0,
-                        where=daily_cum.values >= 0, color='#00897B', alpha=0.2)
-        ax.fill_between(dates_plot, daily_cum.values, 0,
-                        where=daily_cum.values < 0, color='crimson', alpha=0.2)
-        ax.plot(dates_plot, daily_cum.values, color='#00897B', linewidth=2.5, marker='o', markersize=6)
-        for i, (d, v) in enumerate(zip(dates_plot, daily_cum.values)):
-            ax.annotate(f'{v:+.1f}%', (d, v), fontsize=8, ha='center',
-                        va='bottom' if v >= 0 else 'top')
-        ax.axhline(0, color='black', linewidth=1)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
-        ax.set_ylabel('Cumulative PnL (%)')
-        ax.set_title('Portfolio Equity Curve — Equal Weight')
-        ax.grid(alpha=0.3)
-
-        # 6. Outcome distribution
-        ax = axes[2, 1]
-        outcomes = ['TP', 'SL', 'EOD']
-        x_oc = np.arange(len(outcomes))
-        bar_w_oc = 0.35
-        for i, (strat, color) in enumerate([('ST_LONG', '#1565C0'), ('ST_SHORT', '#D32F2F')]):
-            sdf = trades_df[trades_df['Strategy'] == strat]
-            if len(sdf) == 0:
-                continue
-            counts = [(sdf['Outcome'] == o).sum() for o in outcomes]
-            ax.bar(x_oc + i * bar_w_oc, counts, bar_w_oc, color=color, alpha=0.8, label=strat)
-        ax.set_xticks(x_oc + bar_w_oc / 2)
-        ax.set_xticklabels(outcomes)
-        ax.set_ylabel('Count')
-        ax.set_title('Outcome Distribution')
-        ax.legend()
-        ax.grid(alpha=0.3, axis='y')
-
-        # 7. Trades per day per strategy (stacked bar)
-        ax = axes[3, 0]
-        long_counts = []
-        short_counts = []
-        for d in all_dates:
-            day_df = trades_df[trades_df['Date'] == d]
-            long_counts.append((day_df['Strategy'] == 'ST_LONG').sum())
-            short_counts.append((day_df['Strategy'] == 'ST_SHORT').sum())
-        ax.bar(x_pos, long_counts, 0.6, color='#1565C0', alpha=0.8, label='LONG')
-        ax.bar(x_pos, short_counts, 0.6, bottom=long_counts, color='#D32F2F', alpha=0.8, label='SHORT')
-        for i, (lc, sc) in enumerate(zip(long_counts, short_counts)):
-            total = lc + sc
-            if total > 0:
-                ax.text(i, total + 0.1, str(total), ha='center', va='bottom', fontsize=9, fontweight='bold')
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels([d[5:] for d in all_dates], rotation=45, ha='right')
-        ax.set_ylabel('Number of Trades')
-        ax.set_title('Trades Per Day Per Strategy')
-        ax.legend()
-        ax.grid(alpha=0.3, axis='y')
-
-        # 8. Cumulative equity: LONG vs SHORT vs Combined (by date)
-        ax = axes[3, 1]
-        for strat, color, label in [('ST_LONG', '#1565C0', 'LONG'), ('ST_SHORT', '#D32F2F', 'SHORT')]:
-            sdf = trades_df[trades_df['Strategy'] == strat]
-            if len(sdf) > 0:
-                d_eqw = sdf.groupby('Date')['PnL'].mean().sort_index()
-                d_cum = d_eqw.cumsum() * 100
-                dp = pd.to_datetime(d_cum.index)
-                ax.plot(dp, d_cum.values, color=color, linewidth=2, marker='o', markersize=4, label=label)
-        ax.plot(dates_plot, daily_cum.values, color='#00897B', linewidth=2.5,
-                linestyle='--', marker='s', markersize=4, label='COMBINED')
-        ax.axhline(0, color='black', linewidth=0.8)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
-        ax.set_ylabel('Cumulative PnL (%)')
-        ax.set_title('Equity Curves — LONG vs SHORT vs Combined')
-        ax.legend()
-        ax.grid(alpha=0.3)
-
-        plt.tight_layout()
-        save_path = '/tmp/combined_st_deployed_backtest.png'
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"\n  Chart saved to {save_path}")
-        plt.show()
-        plt.close()
+try:
+    ctypes.CDLL("libc.so.6").malloc_trim(0)
+except Exception:
+    pass
 
 print(f"\n{'='*W}")
-print(f"  BACKTEST COMPLETE")
+print(f"  COMBINED BACKTEST COMPLETE")
 print(f"{'='*W}")

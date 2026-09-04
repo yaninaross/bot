@@ -390,7 +390,7 @@ def engineer_asset(ticker, market_df):
     return df.replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
-def compute_regime_features(market_df):
+def compute_regime_features(market_df, universe_returns=None):
     rf = pd.DataFrame(index=market_df.index)
     spy_ret = market_df['SPY_Anchor_ROC'].fillna(0)
     for w, name in [(15, 'regime_rvol_15'), (60, 'regime_rvol_60'),
@@ -412,7 +412,10 @@ def compute_regime_features(market_df):
             if sx > 1e-12 and sy > 1e-12:
                 autocorr[i] = ((x - mx) * (y - my)).mean() / (sx * sy)
     rf['regime_autocorr_60'] = autocorr
-    rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        rf['regime_xsect_disp'] = universe_returns.std(axis=1).fillna(0)
+    else:
+        rf['regime_xsect_disp'] = spy_ret.rolling(60).std().fillna(0)
     vix_col = 'VIX_Anchor_ROC'
     if vix_col in market_df.columns:
         vix_cum = market_df[vix_col].cumsum()
@@ -438,7 +441,11 @@ def compute_regime_features(market_df):
                else pd.Series(0.0, index=market_df.index))
     rf['regime_spy_tlt_corr'] = spy_ret.rolling(
         60, min_periods=30).corr(tlt_ret).fillna(0).clip(-1, 1)
-    rf['regime_breadth'] = 0.5
+    if universe_returns is not None and len(universe_returns.columns) > 1:
+        cum_rets_60 = universe_returns.rolling(60, min_periods=30).sum()
+        rf['regime_breadth'] = (cum_rets_60 > 0).mean(axis=1).fillna(0.5)
+    else:
+        rf['regime_breadth'] = 0.5
     rolling_mean = spy_ret.rolling(60, min_periods=30).mean()
     rolling_std = spy_ret.rolling(60, min_periods=30).std().clip(lower=1e-12)
     standardized = (spy_ret - rolling_mean) / rolling_std
@@ -730,8 +737,21 @@ if f5_only:
 # 2. Build market context and regime features
 print(f"\n  Building market context...")
 market_df = build_market_context()
-print(f"  Computing regime features...")
-regime_df = compute_regime_features(market_df)
+_bt_tickers = sorted(f4_tickers | f5_tickers)
+print(f"  Building universe returns for regime features ({len(_bt_tickers)} tickers)...")
+_univ_rets = {}
+for _t in _bt_tickers:
+    _df = load_master(_t, tail_days=TAIL_DAYS)
+    if _df is not None:
+        _df = heal_data(_df.sort_index())
+        _univ_rets[_t] = _df['Close'].pct_change(1)
+        _master_cache.pop((_t, TAIL_DAYS), None)
+_univ_ret_df = pd.DataFrame(_univ_rets).reindex(market_df.index).fillna(0)
+print(f"    Universe returns: {_univ_ret_df.shape[1]} tickers loaded")
+
+print(f"  Computing regime features (22 cols)...")
+regime_df = compute_regime_features(market_df, _univ_ret_df)
+del _univ_ret_df, _univ_rets
 
 # 3. Get trading days
 trading_days = get_trading_days(BACKTEST_START, BACKTEST_END)

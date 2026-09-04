@@ -38,10 +38,10 @@ def _release_memory():
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'GEV', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'MNTS', 'MSTR', 'MXL',
-    'NBIS', 'NEE', 'NTLA', 'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT', 'RDW', 'RIOT',
-    'RKLB', 'RXT', 'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA', 'VOYG', 'VRT',
-    'VST', 'WOLF', 'WULF', 'XOM',
+    'GEV', 'HOOD', 'HUT', 'IREN', 'KEEL', 'KTOS', 'LUNR', 'MARA', 'MNTS', 'MSTR',
+    'MXL', 'NBIS', 'NEE', 'NTLA', 'OKLO', 'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT',
+    'RDW', 'RIOT', 'RKLB', 'RXT', 'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA',
+    'VOYG', 'VRT', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
 CONTEXT_ASSETS = ['ITA']

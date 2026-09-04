@@ -27,9 +27,9 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # ==============================================================================
 TARGET_TICKERS = [
-    'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT', 'RDW', 'RIOT', 'RKLB',
-    'RXT', 'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA', 'VOYG',
-    'VRT', 'VST', 'WOLF', 'WULF', 'XOM',
+    'OKLO', 'ONDS', 'PL', 'PLTR', 'PLUG', 'RCAT', 'RDW', 'RIOT',
+    'RKLB', 'RXT', 'SLS', 'SMCI', 'SMR', 'SNDK', 'SOUN', 'TSLA',
+    'VOYG', 'VRT', 'VST', 'WOLF', 'WULF', 'XOM',
 ]
 
 POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"

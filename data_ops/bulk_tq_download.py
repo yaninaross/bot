@@ -73,30 +73,46 @@ def list_existing_dates(clean_ticker):
 # ==============================================================================
 # ASSET LISTS
 # ==============================================================================
-ALL_TQ_TICKERS = [
-    # --- Exp-97 (Crypto Cluster) — train teachers ---
+def discover_all_tq_tickers():
+    """Auto-discover ALL tickers that have TradesQuotes folders on GCS."""
+    prefix = 'Data/TradesQuotes/'
+    b = _get_bucket()
+    iterator = b.list_blobs(prefix=prefix, delimiter='/')
+    for _ in iterator:
+        pass  # must consume to populate .prefixes
+    tickers = []
+    for p in iterator.prefixes:
+        ticker = p.replace(prefix, '').rstrip('/')
+        if ticker:
+            tickers.append(ticker)
+    return sorted(tickers)
+
+HARDCODED_TQ_TICKERS = [
     'MARA', 'IREN', 'WULF', 'APLD', 'RIOT', 'CLSK', 'CORZ', 'MSTR',
     'COIN', 'HUT', 'CIFR', 'BTBT', 'MIGI', 'HOOD', 'KEEL', 'BITF',
-    # 'SMLR' — REMOVED: delisted ~Jan 2026
-    # --- Exp-97 — additional scoring pool ---
     'SMCI', 'NVDA', 'VRT', 'AMD', 'TSLA',
-    # SMH, TLT, IWM excluded — context-only assets (OHLCV only, no micro needed)
-    # --- Exp-100 (Defense Sector) ---
     'AVAV', 'KTOS', 'PLTR', 'BBAI', 'RKLB', 'ASTS', 'LUNR', 'SPIR',
     'JOBY', 'NNDM', 'MVIS', 'RCAT', 'ACHR',
-    # --- Energy & AI Power ---
     'VST', 'CEG', 'BE', 'GEV', 'NEE', 'DUK', 'CCJ', 'XOM', 'CVX', 'COP',
-    # --- Space & Dual-Use Defense ---
     'PL', 'RDW', 'BKSY', 'MNTS', 'VOYG', 'LMT', 'NOC', 'RTX',
-    # --- Industrials & Infrastructure ---
     'CAT', 'FCX', 'BHP', 'ETN', 'LIN',
-    # --- EXP-151/152 additions (energy expansion + cross-sector spikers) ---
     'OKLO', 'SMR', 'FCEL', 'FLNC', 'PLUG', 'MP', 'POWL', 'MOD', 'ALAB',
-    # --- Exp 230 new teachers ---
     'AEHR', 'CRDO', 'MXL', 'WOLF', 'NEOV', 'NNE', 'ONDS', 'SLS', 'UCTT',
-    # --- Additional scoring pool ---
     'NBIS', 'SOUN', 'GD', 'LHX', 'GE', 'EQIX', 'MU', 'MRNA', 'NTLA', 'TWST', 'BEAM',
 ]
+
+print("  Discovering all tickers from GCS TradesQuotes...")
+ALL_TQ_TICKERS = discover_all_tq_tickers()
+if not ALL_TQ_TICKERS:
+    print("  GCS discovery returned 0 — falling back to hardcoded list")
+    ALL_TQ_TICKERS = list(dict.fromkeys(HARDCODED_TQ_TICKERS))
+else:
+    extra = set(ALL_TQ_TICKERS) - set(HARDCODED_TQ_TICKERS)
+    if extra:
+        print(f"  Found {len(ALL_TQ_TICKERS)} tickers on GCS "
+              f"({len(extra)} beyond hardcoded list: {sorted(extra)[:10]}...)")
+    else:
+        print(f"  Found {len(ALL_TQ_TICKERS)} tickers on GCS")
 
 # Thread-local Polygon clients (RESTClient is not thread-safe)
 _thread_local = threading.local()
@@ -172,26 +188,67 @@ def download_one_day(clean, ticker_dir_unused, gap_date):
         return ('error', date_str, str(e))
 
 # ==============================================================================
+# CONFIG: TICKER FILTER
+# ==============================================================================
+# Set to a list of tickers to process only those, or None to auto-detect stale.
+# Auto-detect scans all tickers and finds those missing recent business days.
+ONLY_TICKERS = None
+
+# Auto-detect: a ticker is "stale" if it's missing more than this many recent biz days
+STALE_THRESHOLD_DAYS = 3
+
+# ==============================================================================
+# STALE TICKER DETECTION
+# ==============================================================================
+def find_stale_tickers(ticker_list, threshold=STALE_THRESHOLD_DAYS):
+    """Scan all tickers, return stale ones sorted by freshness (most recent first)."""
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    recent_biz = pd.bdate_range(end=end_date, periods=threshold + 2, freq='B')
+    recent_strs = {d.strftime('%Y-%m-%d') for d in recent_biz}
+
+    stale = []
+    up_to_date = []
+
+    print(f"  Scanning {len(ticker_list)} tickers for staleness "
+          f"(missing >{threshold} of last {len(recent_strs)} biz days)...")
+
+    for ticker in ticker_list:
+        clean = ticker.replace("I:", "").replace("X:", "")
+        existing = list_existing_dates(clean)
+        missing = recent_strs - existing
+        latest = max(existing) if existing else '1970-01-01'
+        if len(missing) > threshold:
+            stale.append((ticker, len(missing), latest))
+        else:
+            up_to_date.append(ticker)
+
+    # Sort by latest date DESCENDING — most fresh first (smallest gap, fastest to finish)
+    stale.sort(key=lambda x: x[2], reverse=True)
+
+    print(f"  Result: {len(stale)} stale, {len(up_to_date)} up-to-date")
+    if stale:
+        print(f"\n  {'#':<4} {'Ticker':<8} {'Missing':>8} {'Latest':>12}")
+        print(f"  {'─'*34}")
+        for i, (t, miss, latest) in enumerate(stale, 1):
+            print(f"  {i:<4} {t:<8} {miss:>8} {latest:>12}")
+    print()
+
+    return [t for t, _, _ in stale]
+
+
+# ==============================================================================
 # MAIN
 # ==============================================================================
-ONLY_TICKERS = ['GD', 'LHX', 'GE', 'EQIX', 'MU', 'MRNA', 'NTLA']
+end_date = datetime.now().strftime('%Y-%m-%d')
 
-if __name__ == '__main__':
-    end_date = datetime.now().strftime('%Y-%m-%d')
+if ONLY_TICKERS:
+    tickers = ONLY_TICKERS
+else:
+    tickers = find_stale_tickers(list(dict.fromkeys(ALL_TQ_TICKERS)))
 
-    # CLI filter: specific tickers or all
-    # Filter out Jupyter kernel args (e.g. -f kernel.json)
-    cli_args = [a for a in sys.argv[1:] if not a.startswith('-') and not a.endswith('.json')]
-    if cli_args:
-        tickers = [t.upper() for t in cli_args]
-        invalid = [t for t in tickers if t not in ALL_TQ_TICKERS]
-        if invalid:
-            print(f"   Warning: {invalid} not in standard ticker list, downloading anyway")
-    elif ONLY_TICKERS:
-        tickers = ONLY_TICKERS
-    else:
-        tickers = list(dict.fromkeys(ALL_TQ_TICKERS))
-
+if not tickers:
+    print("  All tickers up to date — nothing to download.")
+else:
     total = len(tickers)
     biz_dates = pd.date_range(START_DATE, end_date, freq='B')
 
@@ -218,7 +275,6 @@ if __name__ == '__main__':
         ticker_skipped    = 0
         ticker_errors     = 0
 
-        # Pre-scan via GCS API (FUSE cache can be stale)
         existing_dates = list_existing_dates(clean)
         dates_to_download = []
         for d in biz_dates:
@@ -232,7 +288,6 @@ if __name__ == '__main__':
         else:
             print(f"      {ticker_skipped} cached, {len(dates_to_download)} to download...")
 
-            # First ticker: verify write actually persists to GCS
             if i == 1:
                 test_date = dates_to_download[0]
                 test_ds = test_date.strftime('%Y-%m-%d')
@@ -242,11 +297,12 @@ if __name__ == '__main__':
                 if t_blob.exists() and q_blob.exists():
                     t_blob.reload()
                     q_blob.reload()
-                    print(f"      VERIFY OK: {test_ds} confirmed in GCS ({t_blob.size:,} + {q_blob.size:,} bytes)")
+                    print(f"      VERIFY OK: {test_ds} confirmed in GCS "
+                          f"({t_blob.size:,} + {q_blob.size:,} bytes)")
                 else:
                     print(f"      VERIFY FAILED: {test_ds} NOT found in GCS after write!")
                     print(f"      Check: service account permissions on bucket {BUCKET_NAME}")
-                    sys.exit(1)
+                    raise RuntimeError("GCS write verification failed")
                 dates_to_download = dates_to_download[1:]
                 ticker_downloaded += 1
 
@@ -272,10 +328,12 @@ if __name__ == '__main__':
                             elif status == 'ok':
                                 ticker_downloaded += 1
                                 if done_count % 10 == 0 or done_count == total_to_do:
-                                    print(f"      [{done_count}/{total_to_do}] {date_str}  {info}")
+                                    print(f"      [{done_count}/{total_to_do}] "
+                                          f"{date_str}  {info}")
                             elif status == 'error':
                                 ticker_errors += 1
-                                print(f"      [{done_count}/{total_to_do}] {date_str}  ERROR: {info}")
+                                print(f"      [{done_count}/{total_to_do}] "
+                                      f"{date_str}  ERROR: {info}")
 
                     gc.collect()
 

@@ -96,7 +96,7 @@ FAMILIES = {
     },
 }
 
-DEPLOYED_STRATEGY = 'ST_SHORT_HYB_MCONS'
+DEPLOYED_STRATEGY = 'ST_SHORT_HYB_MCONS5'
 
 NEWEST_5_VERSIONS = {
     'spike_transformer_short_L5_1_fold7',
