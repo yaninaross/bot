@@ -140,20 +140,20 @@ bucket = gcs_client.bucket(BUCKET_NAME)
 # ==============================================================================
 # PROMPTS — STAGE 1 (Gemini + Google Search)
 # ==============================================================================
-SCAN_SYSTEM = """You are a pre-market stock analyst. Your job is to quickly assess whether a stock has any overnight news that could cause significant price movement at today's US market opening.
+SCAN_SYSTEM = """You are a stock news analyst. Your job is to find the MOST RECENT news about a stock that could cause significant price movement.
 
-Search for the most recent news about the given ticker. Focus ONLY on news from the last 12-24 hours (after-hours yesterday through pre-market today). Ignore older news — it is already priced in.
+Search for the most recent news about the given ticker. Prioritize the FRESHEST news first — something from 2 hours ago is far more valuable than something from 16 hours ago. Include news from the last 24 hours: today's market hours, pre-market today, after-hours yesterday, or overnight.
 
 Return ONLY a JSON object with these fields:
 {
-  "catalyst_score": <int 0-10, how likely this causes a significant move at market open. 0=no news, 3=routine, 5=notable, 7=significant, 10=massive>,
+  "catalyst_score": <int 0-10, how likely this causes a significant move. 0=no news, 3=routine, 5=notable, 7=significant, 10=massive>,
   "direction": <"LONG" or "SHORT" or "NEUTRAL">,
   "headline": <most impactful headline found, or "No significant news">,
   "catalyst_type": <"earnings"|"analyst"|"regulatory"|"deal"|"offering"|"insider"|"macro"|"breaking"|"premarket_move"|"none">,
   "summary": <1-2 sentence summary of what's happening>,
-  "news_time": <REQUIRED — EXACT timestamp when the key news broke, format: "YYYY-MM-DD H:MM AM/PM ET". Examples: "2026-09-02 4:15 PM ET", "2026-09-03 5:30 AM ET". NEVER return "unknown". If no exact time, ESTIMATE: earnings after close = "4:05 PM ET", pre-market article = use article publish time, overnight news = "6:00 PM ET", pre-market breaking = "5:00 AM ET". You MUST provide a time estimate.>,
+  "news_time": <REQUIRED — the ACTUAL publish time of the key article/news, format: "YYYY-MM-DD H:MM AM/PM ET". Look at the article's publish timestamp or dateline. Examples: "2026-09-03 11:30 AM ET", "2026-09-03 2:45 PM ET", "2026-09-02 4:15 PM ET". Do NOT default to generic times like "5:00 AM" or "4:00 PM" — find the real publish time from the source article. If the article shows a date but no time, look at the article metadata or other articles about the same event to find the actual time.>,
   "key_articles": [
-    {"title": "<article headline>", "source": "<publisher name>", "time": "<publish time if known>"}
+    {"title": "<article headline>", "source": "<publisher name>", "time": "<ACTUAL publish time from the article>"}
   ]
 }
 
@@ -555,9 +555,10 @@ scan_completed = 0
 
 def _scan_one_ticker(ticker):
     prompt = (
-        f"Search for the latest news about {ticker} stock from the last 24 hours "
-        f"(today is {TODAY_STR}). Include any pre-market price action, "
-        f"analyst notes, earnings, regulatory news, or breaking developments."
+        f"Search for the latest news about {ticker} stock today {TODAY_STR}. "
+        f"What happened in the LAST FEW HOURS? Include any price action today, "
+        f"analyst notes, earnings, regulatory news, or breaking developments. "
+        f"Prioritize the most RECENT news first."
     )
     result = gemini_search(prompt, SCAN_SYSTEM)
     time.sleep(GEMINI_DELAY_S)
@@ -1005,17 +1006,19 @@ def _freshness_multiplier(entry):
     news_time_raw = str(entry.get('news_time', ''))
     news_dt = _parse_news_time(news_time_raw)
     if not news_dt:
-        return 0.5
+        return 0.3
     age_hours = (now_pst - news_dt.astimezone(PST)).total_seconds() / 3600
     if age_hours < 0:
         return 1.0
-    if age_hours <= 6:
+    if age_hours <= 4:
         return 1.0
+    if age_hours <= 8:
+        return 0.7
     if age_hours <= 12:
-        return 0.75
+        return 0.4
     if age_hours <= 18:
-        return 0.5
-    return 0.25
+        return 0.15
+    return 0.05
 
 
 def _print_summary_table(entries, direction_label):

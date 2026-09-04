@@ -194,22 +194,22 @@ bucket = gcs_client.bucket(BUCKET_NAME)
 # ==============================================================================
 # PROMPTS
 # ==============================================================================
-DISCOVER_SYSTEM = """You are a pre-market stock screener. Your job is to extract specific stock tickers and their expected moves from search results about today's biggest movers.
+DISCOVER_SYSTEM = """You are a stock screener. Your job is to extract specific stock tickers and their expected moves from search results about today's biggest movers.
 
-From the search results, identify individual stocks that are likely to move MORE THAN 5% at today's market open. Focus on specific, actionable events from the LAST 12-24 HOURS ONLY (after-hours yesterday through pre-market today). Ignore older news — it is already priced in. Do not include catalysts older than 24 hours.
+From the search results, identify individual stocks that are likely to move MORE THAN 5%. Prioritize the FRESHEST news — something from 2 hours ago is far more valuable than 16 hours ago. Include events from the last 24 hours: today's market hours, pre-market, after-hours yesterday, or overnight. Do not include catalysts older than 24 hours.
 
 Return ONLY a JSON object:
 {
   "discovered": [
     {
-      "ticker": "<stock ticker symbol, e.S. AAPL>",
+      "ticker": "<stock ticker symbol, e.g. AAPL>",
       "company": "<company name>",
       "direction": "LONG" or "SHORT",
-      "expected_move_pct": <float, expected % move at open, e.g. 8.5>,
+      "expected_move_pct": <float, expected % move, e.g. 8.5>,
       "catalyst_strength": <int 1-10, how strong/certain is this catalyst>,
       "catalyst": "<specific event driving the move — cite numbers, %s, deal values>",
       "catalyst_type": "<earnings|analyst|regulatory|deal|offering|insider|halt|squeeze|bankruptcy|macro>",
-      "news_time": "<REQUIRED — EXACT timestamp, format: 'YYYY-MM-DD H:MM AM/PM ET'. NEVER return 'unknown'. ESTIMATE if needed: earnings after close='4:05 PM ET', overnight='6:00 PM ET', pre-market='5:00 AM ET'.>",
+      "news_time": "<REQUIRED — ACTUAL publish time from the source article, format: 'YYYY-MM-DD H:MM AM/PM ET'. Look at the article dateline/timestamp. Do NOT default to generic times like '5:00 AM' or '4:00 PM'. Find the real time.>",
       "source_headline": "<actual headline from the search result>",
       "premarket_move": "<pre-market % change if mentioned, or 'unknown'>",
       "market_cap_tier": "<mega|large|mid|small|micro|unknown>"
@@ -698,12 +698,12 @@ if deep_candidates:
 
         pd_info = price_data.get(ticker)
         price_str = ""
-        if pd_info and 'change_pct' in pd_info:
+        if pd_info and pd_info.get('change_pct') is not None:
             price_str = (
                 f"\nACTUAL PRICE DATA (verified):\n"
                 f"- Current/pre-market price: ${pd_info.get('current_price', 'N/A')}\n"
                 f"- Previous close: ${pd_info.get('prev_close', 'N/A')}\n"
-                f"- Change from prev close: {pd_info.get('change_pct', 0):+.1f}%\n"
+                f"- Change from prev close: {float(pd_info['change_pct']):+.1f}%\n"
                 f"USE THIS ACTUAL % CHANGE as the move_already_priced_pct. "
                 f"Do NOT guess the priced-in amount from news articles.\n"
             )
@@ -948,17 +948,19 @@ def _freshness_multiplier(entry):
     news_time_raw = str(entry.get('news_time', ''))
     news_dt = _parse_news_time(news_time_raw)
     if not news_dt:
-        return 0.5
+        return 0.3
     age_hours = (now_pst - news_dt.astimezone(PST)).total_seconds() / 3600
     if age_hours < 0:
         return 1.0
-    if age_hours <= 6:
+    if age_hours <= 4:
         return 1.0
+    if age_hours <= 8:
+        return 0.7
     if age_hours <= 12:
-        return 0.75
+        return 0.4
     if age_hours <= 18:
-        return 0.5
-    return 0.25
+        return 0.15
+    return 0.05
 
 
 def _print_summary_table(entries, direction_label):
