@@ -33,6 +33,8 @@ except ImportError:
     from google.cloud import bigquery
 
 warnings.filterwarnings('ignore')
+import logging
+logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
 
 try:
     from google import genai
@@ -61,6 +63,14 @@ except ImportError:
     from google.cloud import storage as gcs_storage
 
 try:
+    import yfinance
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install",
+                           "yfinance", "--quiet"])
+    import yfinance
+
+try:
     from google.colab import auth
     try:
         auth.authenticate_user()
@@ -85,11 +95,15 @@ CLAUDE_MODEL   = "claude-sonnet-4-6"
 BUCKET_NAME = "time-series-bucket-ys"
 OUTPUT_DIR  = "Data/Scanner"
 BQ_SCANNER_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
+BQ_PATTERNS_TABLE = "ys-time-series.scoring_logs.scanner_patterns"
 
 PST = pytz.timezone('America/Los_Angeles')
+_ET = pytz.timezone('America/New_York')
 NOW_PT = datetime.now(PST)
+NOW_ET = NOW_PT.astimezone(_ET)
 TODAY_STR = NOW_PT.strftime('%Y-%m-%d')
 TIME_STR = NOW_PT.strftime('%H:%M')
+TIME_ET_STR = NOW_ET.strftime('%I:%M %p ET')
 
 # --- Test mode: small ticker list for quick testing ---
 TEST_MODE = False
@@ -115,7 +129,7 @@ SCAN_TICKERS = TEST_TICKERS if TEST_MODE else DEPLOY_TICKERS
 MAX_WORKERS_SCAN   = 5
 TOP_N_DEEP         = 15
 MAX_NEWS_AGE_HOURS = 16
-SCANNER_VERSION    = 'V1'
+SCANNER_VERSION    = 'V3'
 FINAL_LONG         = 5
 FINAL_SHORT        = 5
 GEMINI_DELAY_S     = 0.3
@@ -140,12 +154,24 @@ bucket = gcs_client.bucket(BUCKET_NAME)
 # ==============================================================================
 # PROMPTS — STAGE 1 (Gemini + Google Search)
 # ==============================================================================
-SCAN_SYSTEM = """You are a stock news analyst. Your job is to find the MOST RECENT news about a stock that could cause significant price movement.
+CUTOFF_4H = (NOW_ET - timedelta(hours=4)).strftime('%Y-%m-%d %I:%M %p ET')
+CUTOFF_16H = (NOW_ET - timedelta(hours=16)).strftime('%Y-%m-%d %I:%M %p ET')
 
-Search for the most recent news about the given ticker. Prioritize the FRESHEST news first — something from 2 hours ago is far more valuable than something from 12 hours ago. Include news from the last 16 hours only. Do not include catalysts older than 16 hours.
+SCAN_SYSTEM = f"""You are a stock news analyst. Your job is to find the MOST RECENT news about a stock that could cause significant price movement.
+
+CURRENT TIME: {NOW_ET.strftime('%Y-%m-%d %I:%M %p ET')} ({NOW_PT.strftime('%I:%M %p PT')})
+PRIORITY WINDOW: News published AFTER {CUTOFF_4H} (last 4 hours) is highest priority.
+HARD CUTOFF: Do NOT include any news published BEFORE {CUTOFF_16H} (older than 16 hours).
+
+FRESHNESS SCORING:
+  - Published within last 2 hours: MOST VALUABLE — always include, boost catalyst_score by +2
+  - Published 2-4 hours ago: HIGH VALUE — include with normal scoring
+  - Published 4-8 hours ago: MODERATE — include only if catalyst_score >= 5
+  - Published 8-16 hours ago: LOW VALUE — include only if catalyst_score >= 7
+  - Published >16 hours ago: EXCLUDE — do not return
 
 Return ONLY a JSON object with these fields:
-{
+{{
   "catalyst_score": <int 0-10, how likely this causes a significant move. 0=no news, 3=routine, 5=notable, 7=significant, 10=massive>,
   "direction": <"LONG" or "SHORT" or "NEUTRAL">,
   "headline": <most impactful headline found, or "No significant news">,
@@ -153,12 +179,12 @@ Return ONLY a JSON object with these fields:
   "summary": <1-2 sentence summary of what's happening>,
   "news_time": <REQUIRED — the ACTUAL publish time of the key article/news, format: "YYYY-MM-DD H:MM AM/PM ET". Look at the article's publish timestamp or dateline. Examples: "2026-09-03 11:30 AM ET", "2026-09-03 2:45 PM ET", "2026-09-02 4:15 PM ET". Do NOT default to generic times like "5:00 AM" or "4:00 PM" — find the real publish time from the source article. If the article shows a date but no time, look at the article metadata or other articles about the same event to find the actual time.>,
   "key_articles": [
-    {"title": "<article headline>", "source": "<publisher name>", "time": "<ACTUAL publish time from the article>"}
+    {{"title": "<article headline>", "source": "<publisher name>", "time": "<ACTUAL publish time from the article>"}}
   ]
-}
+}}
 
 CATALYST WEIGHT SCALE — use this to calibrate catalyst_score:
-  TIER 1 (score 8-10): earnings surprise (beat/miss), FDA approval/rejection,
+  TIER 1 (score 8-10): earnings surprise (beat/miss >5%), FULL FDA APPROVAL of a drug,
          massive contract win (>$100M), bankruptcy/fraud, stock halt/resume,
          M&A deal where THIS TICKER IS THE TARGET (being acquired at a premium)
   TIER 2 (score 6-8):  analyst upgrade/downgrade with NEW price target, secondary offering,
@@ -169,9 +195,27 @@ CATALYST WEIGHT SCALE — use this to calibrate catalyst_score:
          M&A deal where THIS TICKER IS THE ACQUIRER and deal size < 10% of market cap
   TIER 4 (score 2-4):  routine analyst reiteration, insider buying/selling (Form 4/144),
          conference participation, routine SEC filings, index inclusion/exclusion rumors,
-         APPROVAL/VOTE/CLOSE of an already-announced acquisition (procedural, priced in)
+         APPROVAL/VOTE/CLOSE of an already-announced acquisition (procedural, priced in),
+         FDA PROCEDURAL STEPS (BLA/NDA/IND acceptance, Priority Review granted, PDUFA date set,
+         AdCom scheduled) — these are NOT the same as FDA approval, they are routine milestones
   TIER 5 (score 0-2):  no news, aggregator articles restating old info, law firm
-         "investigation" announcements (ambulance-chasing), price-reporting articles
+         "investigation" announcements (ambulance-chasing), price-reporting articles,
+         Goldman/analyst sector notes with no new data, Forbes/editorial opinion pieces
+
+CATALYST EXPECTED IMPACT TABLE — use this to cap total_catalyst_impact:
+  Earnings beat >10% revenue surprise:        +8% to +20% (small cap), +3% to +8% (mega cap >$100B)
+  Earnings beat 2-10% revenue surprise:       +3% to +10% (small cap), +1% to +4% (mega cap)
+  Earnings beat on NON-RECURRING items only:   +1% to +3% max — market fades quickly
+  Full FDA drug APPROVAL:                     +5% to +30% (depends on drug revenue potential)
+  FDA BLA/NDA acceptance or Priority Review:  +2% to +5% max — procedural, NOT approval
+  FDA AdCom positive vote:                    +10% to +40%
+  FDA rejection / CRL:                        -15% to -50%
+  Contract win >$100M:                        +3% to +10%
+  Analyst upgrade with NEW target:            +2% to +5%
+  Analyst sector note / reiteration:          +0% to +1% — NOT a real catalyst
+  Product/platform announcement (no revenue): +1% to +3% (mega cap), +2% to +6% (small cap)
+  Partnership with no financial terms:        +0% to +2% — noise unless transformative
+  Editorial/opinion article:                  +0% — NOT a catalyst, do not trade
 
 M&A/ACQUISITION RULES:
 - If the ticker is the ACQUIRER (buyer): acquisitions are often NEUTRAL or NEGATIVE
@@ -195,11 +239,13 @@ Search for the latest US stock market conditions as of right now.
 Return ONLY a JSON object:
 {
   "futures": "<S&P 500 / Nasdaq / Dow futures direction and %>",
+  "spy_futures_pct": <float, S&P 500 futures % change, e.g. 0.45 or -0.8. MUST be a number>,
   "overnight_theme": "<1-2 sentence summary of overnight market theme>",
   "key_sectors": "<which sectors are moving and why>",
   "macro_events": "<any scheduled economic data releases or Fed events today>",
   "risk_sentiment": "<risk-on|risk-off|mixed>",
   "vix_level": "<VIX level if found, or 'not found'>",
+  "vix_level_float": <float, VIX numeric value, e.g. 14.5 or 22.3. MUST be a number>,
   "top_premarket_movers": "<any stocks moving 3%+ in pre-market>"
 }"""
 
@@ -233,6 +279,7 @@ You will receive:
 2. Initial scan results (headline, catalyst type, summary, source articles)
 3. Market context (futures, macro, risk sentiment)
 4. CURRENT PRICE DATA: pre-market % change from previous close (when available)
+5. HISTORICAL PATTERN EXAMPLES: similar past trades with actual outcomes (when available)
 
 Based on this information, provide a deep analysis for intraday trading.
 
@@ -264,7 +311,7 @@ Return ONLY a JSON object:
 }
 
 CATALYST CONFIDENCE SCALE — calibrate confidence based on catalyst tier:
-  TIER 1 (conf 7-10): earnings surprise, FDA action, massive contract,
+  TIER 1 (conf 7-10): earnings surprise >5%, FULL FDA APPROVAL, massive contract >$100M,
          bankruptcy/fraud — these move stocks 5-20%.
          M&A where THIS TICKER IS THE TARGET (being acquired at premium).
   TIER 2 (conf 5-8):  analyst upgrade/downgrade with NEW target, offering, regulatory action,
@@ -274,7 +321,28 @@ CATALYST CONFIDENCE SCALE — calibrate confidence based on catalyst tier:
          M&A where THIS TICKER IS THE ACQUIRER and deal < 10% of market cap.
   TIER 4 (conf 1-3):  insider Form 4/144 filings, conference attendance, routine filings.
          VOTE APPROVAL / REGULATORY CLEARANCE / EXPECTED CLOSE of already-announced deal.
-  TIER 5 (conf 0-1):  no real catalyst, aggregator noise, law firm investigations
+         FDA PROCEDURAL STEPS: BLA/NDA acceptance, Priority Review, PDUFA date set, AdCom
+         scheduled — these are NOT the same as full FDA approval. Max conf 4.
+  TIER 5 (conf 0-1):  no real catalyst, aggregator noise, law firm investigations,
+         analyst sector notes without new data, editorial/opinion articles.
+
+CATALYST EXPECTED IMPACT TABLE — use this to cap remaining_move_pct:
+  Full FDA drug APPROVAL:                     +5% to +30% (depends on drug TAM)
+  FDA BLA/NDA acceptance or Priority Review:  +2% to +5% max — procedural, NOT approval
+  FDA AdCom positive vote:                    +10% to +40%
+  FDA rejection / CRL:                        -15% to -50%
+  Earnings beat >10% revenue surprise:        +8% to +20% (small cap), +3% to +8% (mega cap >$100B)
+  Earnings beat on NON-RECURRING items only:   +1% to +3% max — fades fast
+  Contract win >$100M:                        +3% to +10%
+  Product/platform announcement (no revenue): +1% to +3% (mega cap >$100B)
+  Partnership with no financial terms:        +0% to +2% — noise unless transformative
+  Analyst sector note / reiteration:          +0% to +1%
+  Editorial/opinion article:                  +0% — NOT a catalyst
+
+CRITICAL — FDA procedural milestones (BLA acceptance, Priority Review, PDUFA date set)
+are NOT the same as FDA APPROVAL. They are routine regulatory checkboxes. Do NOT assign
+confidence > 4 or remaining_move > 5% for these events. The premarket gap on FDA procedural
+news is typically the ENTIRE move — it fades at open.
 
 ACQUISITION / M&A ANALYSIS — CRITICAL:
 When the catalyst involves an acquisition or merger, you MUST determine:
@@ -308,6 +376,69 @@ EARNINGS MISS/BEAT — DIRECTION RULES:
   >15% and the beat was modest relative to expectations.
 - When in doubt about direction after earnings: FOLLOW THE CATALYST DIRECTION, not the bounce thesis.
 
+PROVEN TRADE OUTCOME PATTERNS — learn from actual past results:
+
+PARTNERSHIP ASYMMETRY:
+  When a mega-cap ($100B+) announces a partnership with a smaller company ($10-50B):
+  → Trade the SMALLER partner LONG (expect +3-8% intraday)
+  → Do NOT trade the larger partner — move is <1% and often negative
+  Real example: 2026-09-08 PLTR ($174B) named NBIS ($50B) as preferred sovereign AI partner.
+    NBIS: gap +3.7%, MFE +6.2%, EOD +6.2% → STRONG TP
+    PLTR: gap -0.7%, EOD -1.0% → FP (partnership immaterial to mega-cap revenue)
+  Why: the deal represents a much larger % of the smaller company's TAM/validation.
+
+NON-RECURRING EARNINGS:
+  When earnings beat is driven by one-time gains (derivative gains, mark-to-market investments,
+  asset sales, legal settlements) rather than organic revenue growth:
+  → Cap confidence at 4, cap remaining_move at +2%
+  → Market discounts non-recurring items quickly — the spike fades at open
+  Real example: 2026-09-08 GME Q2 "beat" from $166M derivative gain + $72M unrealized eBay gain.
+    GME: gap +1.4%, ret_60m -2.9%, EOD -2.9% → FP
+
+PRE-EARNINGS SPECULATION:
+  When earnings have NOT YET been reported (scheduled for after close or later this week):
+  → There is NO catalyst to trade. Confidence should be ≤2.
+  → Options-implied moves are volatility estimates, NOT directional signals.
+  Real example: 2026-09-08 BRZE earnings after close. Scanner: conf=3, remain=+18%.
+    BRZE: ret_60m -5.5% → FP (no catalyst = no edge = random walk)
+
+CLINICAL TRIAL DATA TRAP:
+  When a biotech/pharma stock spikes on Phase 1/2/3 clinical trial data with words like
+  "positive results", "outperforms standard of care", "doubles response rate":
+  → Do NOT go LONG. Institutions SELL clinical data events. Cap confidence at 3.
+  → Four reasons this pattern fails: (1) Valuation exhaustion — biotech runs up into scheduled
+    readouts, data release removes uncertainty → immediate profit-taking. (2) "Positive" Phase 2
+    does NOT guarantee Phase 3 success, especially with small sample sizes (N<100). (3) Trial
+    expansion announcements = delayed timeline + higher cash burn. (4) P/S ratios >100x with
+    negative EPS mean the data is already priced in.
+  Real example: 2026-09-08 INBX Phase 2 HexAgon: INBRX-106 + Keytruda in HNSCC.
+    Headlines: "48.3% ORR vs 26.5% Keytruda alone", "nearly doubles response rate"
+    Scanner prediction: LONG conf=7, expected +36.1%
+    INBX: entry $117.22, ret_30m -14.11%, ret_60m -14.55%, EOD -5.49% → MASSIVE FP
+    Institutions sold the pop. Phase 2 expansion (not Phase 3) announced. N=63 too small.
+
+MOMENTUM vs. MEAN REVERSION (GAP RULES) — CRITICAL:
+1. THE "GAP AND GO": If a stock is gapping up >3% pre-market on a real catalyst, momentum
+   is established. DO NOT fade (SHORT) purely because it "overshot" the catalyst's fair value.
+   Retail FOMO, algorithmic momentum, and short covering frequently drive gap-ups HIGHER in
+   the first 60 minutes. Evaluate for a continuation LONG.
+2. SHORT SQUEEZE DANGER: If Short Interest is >10% AND the stock is gapping up >3%, heavily
+   bias toward LONG. Short sellers will be forced to cover at the open, amplifying the move.
+   A stock with 20%+ SI gapping up is almost NEVER a SHORT.
+3. RECOVERY BOUNCES: If the stock is >10% below its 20-day high and gapping up, it's recovering
+   lost ground — not overshooting. Default LONG, not SHORT.
+4. WHEN TO ACTUALLY SHORT A GAP-UP ("GAP AND CRAP"): ONLY call SHORT on a gap-up if:
+   (a) The catalyst is demonstrably deceptive (fake partnership, pump-and-dump), OR
+   (b) The stock is a micro-cap (<$500M) with a promotional/dilutive catalyst, OR
+   (c) The stock is AT or ABOVE its 20-day high AND the catalyst is weak (editorial, procedural)
+   Even then, confidence for shorting a gap-up should rarely exceed 4.
+5. EXHAUSTED ≠ SHORT: When move_is_exhausted is True, it means the gap has absorbed the
+   catalyst's estimated impact. The correct default is NEUTRAL (skip), NOT SHORT (fade).
+   Only call SHORT if you have specific evidence beyond fair-value math.
+   Real data: On 2026-09-08, ALL 12 stocks flagged as exhausted SHORTs continued UP from open.
+   KEEL +8.6%, AXTI +7.9%, BE +5.2%, CLSK +5.3%, FLNC +4.8%, IREN +4.6%, AMD +4.0%.
+   Fading gap-ups is a proven losing strategy in the first 60 minutes.
+
 IMPORTANT:
 - direction and expected_move_pct must reflect the REMAINING move, not the catalyst direction
 - If a stock already crashed 13% pre-market, the remaining move MAY be LONG (bounce) — but only
@@ -321,6 +452,8 @@ IMPORTANT:
 - expected_move_pct should be realistic (most stocks move 1-3%, only major events cause 5%+)
 - The reasoning field is the most important — explain the full logic chain
 - news_timeline should list key events in chronological order with timestamps
+- If HISTORICAL PATTERN EXAMPLES are provided below the prompt, use them to calibrate your
+  confidence and expected move. Patterns with confirmed outcomes are more reliable than theory.
 - Return ONLY the JSON"""
 
 
@@ -397,16 +530,74 @@ Return ONLY the JSON, no other text."""
 
 
 def fetch_price_data(ticker):
+    # Primary: Polygon (verified exchange data)
+    if _POLYGON_OK:
+        try:
+            prev = get_prev_session_close(ticker)
+            if prev and prev['close'] > 0:
+                prev_close = prev['close']
+                bars_1m = list(_polygon_client.get_aggs(
+                    ticker=ticker, multiplier=1, timespan="minute",
+                    from_=TODAY_STR, to=TODAY_STR, limit=500,
+                ))
+                premarket_volume = 0
+                if bars_1m:
+                    current_price = float(bars_1m[-1].close)
+                    premarket_volume = sum(int(getattr(b, 'volume', 0) or 0) for b in bars_1m)
+                else:
+                    bars_5m = list(_polygon_client.get_aggs(
+                        ticker=ticker, multiplier=5, timespan="minute",
+                        from_=prev['date'], to=TODAY_STR, limit=500,
+                    ))
+                    current_price = float(bars_5m[-1].close) if bars_5m else prev_close
+                change_pct = ((current_price - prev_close) / prev_close) * 100
+                return {
+                    'current_price': round(current_price, 2),
+                    'prev_close': round(prev_close, 2),
+                    'change_pct': round(change_pct, 2),
+                    'premarket_price': round(current_price, 2),
+                    'premarket_volume': premarket_volume,
+                    'source': 'polygon',
+                }
+        except Exception as e:
+            print(f"    [PRICE] Polygon failed for {ticker}: {e}")
+    # Fallback: yfinance (real market data, never an LLM)
     try:
-        result = gemini_search(
-            f"What is the current stock price and pre-market price for {ticker}? "
-            f"What was yesterday's closing price? What is the % change?",
-            PRICE_SYSTEM,
-        )
-        if 'error' not in result:
-            return result
-    except Exception:
-        pass
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        hist = t.history(period='2d', prepost=True)
+        if len(hist) >= 2:
+            last_date = hist.index[-1].tz_convert(PST).date()
+            today_date = NOW_PT.date()
+            if last_date == today_date:
+                prev_close = round(float(hist['Close'].iloc[-2]), 2)
+                current_price = round(float(hist['Close'].iloc[-1]), 2)
+                premarket_volume = int(hist['Volume'].iloc[-1]) if 'Volume' in hist.columns else 0
+            else:
+                current_price = round(float(hist['Close'].iloc[-1]), 2)
+                prev_close = current_price
+                premarket_volume = 0
+            change_pct = round(((current_price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
+            return {
+                'current_price': current_price,
+                'prev_close': prev_close,
+                'change_pct': change_pct,
+                'premarket_price': current_price,
+                'premarket_volume': premarket_volume,
+                'source': 'yfinance',
+            }
+        elif len(hist) == 1:
+            current_price = round(float(hist['Close'].iloc[-1]), 2)
+            return {
+                'current_price': current_price,
+                'prev_close': current_price,
+                'change_pct': 0.0,
+                'premarket_price': current_price,
+                'premarket_volume': 0,
+                'source': 'yfinance (single day)',
+            }
+    except Exception as e:
+        print(f"    [PRICE] yfinance failed for {ticker}: {e}")
     return None
 
 
@@ -446,6 +637,297 @@ def verify_earnings(ticker, today_str):
     return None
 
 
+# ==============================================================================
+# PATTERN LIBRARY — BQ-backed few-shot retrieval (batch prefetch)
+# ==============================================================================
+_PATTERN_CACHE_DF = None
+
+CAT_MAP = {
+    'earnings': 'earnings', 'analyst': 'deal', 'regulatory': 'regulatory',
+    'deal': 'deal', 'offering': 'offering', 'insider': 'deal',
+    'breaking': 'deal', 'premarket_move': 'deal',
+}
+
+
+def prefetch_all_patterns():
+    global _PATTERN_CACHE_DF
+    try:
+        bq_client = bigquery.Client()
+        q = f"""
+        SELECT pattern_id, event_date, pattern_type, catalyst_type, tickers,
+               primary_ticker, secondary_ticker, catalyst_summary,
+               primary_direction, primary_gap_pct, primary_ret_60m, primary_mfe_pct, primary_eod_pct, primary_outcome,
+               secondary_direction, secondary_gap_pct, secondary_ret_60m, secondary_eod_pct, secondary_outcome,
+               lesson, pattern_rule
+        FROM `{BQ_PATTERNS_TABLE}`
+        ORDER BY event_date DESC
+        LIMIT 50
+        """
+        _PATTERN_CACHE_DF = bq_client.query(q).to_dataframe()
+        print(f"  Pattern library: loaded {len(_PATTERN_CACHE_DF)} patterns from BQ")
+    except Exception as e:
+        print(f"  Pattern library: failed to load ({e})")
+        _PATTERN_CACHE_DF = pd.DataFrame()
+
+
+def fetch_similar_patterns(catalyst_type, ticker=None, max_results=3):
+    global _PATTERN_CACHE_DF
+    if _PATTERN_CACHE_DF is None:
+        prefetch_all_patterns()
+    df = _PATTERN_CACHE_DF
+    if df is None or df.empty:
+        return ""
+    try:
+        mask = pd.Series(False, index=df.index)
+        if catalyst_type:
+            mapped = CAT_MAP.get(catalyst_type, catalyst_type)
+            mask = mask | (df['catalyst_type'] == mapped)
+        if ticker:
+            mask = mask | df['tickers'].str.contains(ticker, na=False)
+            mask = mask | (df['primary_ticker'] == ticker)
+            mask = mask | (df['secondary_ticker'] == ticker)
+        matched = df[mask].head(max_results)
+        if matched.empty:
+            return ""
+        lines = ["\n\nHISTORICAL PATTERN EXAMPLES (from verified past trades):"]
+        for _, p in matched.iterrows():
+            lines.append(f"\n  PATTERN: {p['pattern_type']} ({p['event_date']})")
+            lines.append(f"  Tickers: {p['tickers']} | Catalyst: {p['catalyst_type']}")
+            lines.append(f"  {str(p['catalyst_summary'])[:200]}")
+            lines.append(f"  → {p['primary_ticker']} ({p['primary_direction']}): "
+                         f"gap {p['primary_gap_pct']:+.1f}%, 60m {p['primary_ret_60m']:+.1f}%, "
+                         f"MFE {p['primary_mfe_pct']:+.1f}%, EOD {p['primary_eod_pct']:+.1f}% → {p['primary_outcome']}")
+            lines.append(f"  → {p['secondary_ticker']} ({p['secondary_direction']}): "
+                         f"gap {p['secondary_gap_pct']:+.1f}%, 60m {p['secondary_ret_60m']:+.1f}%, "
+                         f"EOD {p['secondary_eod_pct']:+.1f}% → {p['secondary_outcome']}")
+            lines.append(f"  LESSON: {str(p['lesson'])[:200]}")
+            if p.get('pattern_rule'):
+                lines.append(f"  RULE: {str(p['pattern_rule'])[:200]}")
+        return "\n".join(lines)
+    except Exception as e:
+        print(f"    [PATTERNS] Failed to filter: {e}")
+        return ""
+
+
+# ==============================================================================
+# POLYGON-BASED EVENT TIMING & ABSORPTION TOOLS
+# ==============================================================================
+POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+
+try:
+    from polygon import RESTClient as _PolygonClient
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install",
+                           "polygon-api-client", "--quiet"])
+    from polygon import RESTClient as _PolygonClient
+
+try:
+    _polygon_client = _PolygonClient(POLYGON_API_KEY)
+    _POLYGON_OK = True
+except Exception:
+    _POLYGON_OK = False
+    _polygon_client = None
+
+
+def get_prev_session_close(ticker, ref_date_str=None):
+    if not _POLYGON_OK:
+        return None
+    ref = ref_date_str or TODAY_STR
+    try:
+        from_date = (datetime.strptime(ref, '%Y-%m-%d') - timedelta(days=5)).strftime('%Y-%m-%d')
+        bars = list(_polygon_client.get_aggs(
+            ticker=ticker, multiplier=1, timespan="day",
+            from_=from_date, to=ref, limit=10,
+        ))
+        if not bars:
+            return None
+        ref_dt = datetime.strptime(ref, '%Y-%m-%d')
+        prev_bars = [b for b in bars
+                     if pd.Timestamp(b.timestamp, unit='ms', tz='UTC').date()
+                     < ref_dt.date()]
+        if prev_bars:
+            last = prev_bars[-1]
+            return {
+                'close': float(last.close),
+                'date': pd.Timestamp(last.timestamp, unit='ms', tz='UTC').strftime('%Y-%m-%d'),
+            }
+        return None
+    except Exception:
+        return None
+
+
+def fetch_20d_high(ticker, ref_date_str=None):
+    if not _POLYGON_OK:
+        return None
+    ref = ref_date_str or TODAY_STR
+    try:
+        ref_dt = datetime.strptime(ref, '%Y-%m-%d')
+        from_date = (ref_dt - timedelta(days=30)).strftime('%Y-%m-%d')
+        to_date = (ref_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+        bars = list(_polygon_client.get_aggs(
+            ticker=ticker, multiplier=1, timespan="day",
+            from_=from_date, to=to_date, limit=30,
+        ))
+        if not bars:
+            return None
+        bars_sorted = sorted(bars, key=lambda b: b.timestamp)
+        recent_20 = bars_sorted[-20:] if len(bars_sorted) >= 20 else bars_sorted
+        high_20d = max(float(b.high) for b in recent_20)
+        prev_close = float(bars_sorted[-1].close)
+        drawdown_pct = ((prev_close - high_20d) / high_20d) * 100
+        return {
+            'high_20d': round(high_20d, 2),
+            'prev_close': round(prev_close, 2),
+            'drawdown_pct': round(drawdown_pct, 1),
+            'n_bars': len(recent_20),
+        }
+    except Exception:
+        return None
+
+
+def get_actual_event_time(ticker, ref_date_str=None, move_threshold_pct=3.0):
+    if not _POLYGON_OK:
+        return None
+    ref = ref_date_str or TODAY_STR
+    try:
+        ref_dt = datetime.strptime(ref, '%Y-%m-%d')
+        from_date = (ref_dt - timedelta(days=7)).strftime('%Y-%m-%d')
+        daily_bars = list(_polygon_client.get_aggs(
+            ticker=ticker, multiplier=1, timespan="day",
+            from_=from_date, to=ref, limit=10,
+        ))
+        if len(daily_bars) < 2:
+            return None
+        prev_bars = [b for b in daily_bars
+                     if pd.Timestamp(b.timestamp, unit='ms', tz='UTC').date()
+                     < ref_dt.date()]
+        if not prev_bars:
+            return None
+        t_minus_1 = prev_bars[-1]
+        prev_close = float(t_minus_1.close)
+        t_minus_1_date = pd.Timestamp(t_minus_1.timestamp, unit='ms', tz='UTC').date()
+        if len(prev_bars) >= 2:
+            prev_close_before = float(prev_bars[-2].close)
+        else:
+            prev_close_before = prev_close
+        t_minus_1_from = t_minus_1_date.strftime('%Y-%m-%d')
+        minute_bars = list(_polygon_client.get_aggs(
+            ticker=ticker, multiplier=5, timespan="minute",
+            from_=t_minus_1_from, to=ref, limit=500,
+        ))
+        if not minute_bars:
+            return None
+        _ET_tz = pytz.timezone('America/New_York')
+        threshold = move_threshold_pct / 100.0
+        event_time = None
+        event_price = None
+        peak_price = prev_close
+        peak_time = None
+        current_price = prev_close
+        ref_close = prev_close_before
+        for bar in minute_bars:
+            ts = pd.Timestamp(bar.timestamp, unit='ms', tz='UTC').tz_convert(_ET_tz)
+            bar_date = ts.date()
+            if bar_date == t_minus_1_date:
+                ref_close = prev_close_before
+            else:
+                ref_close = prev_close
+            close_val = float(bar.close)
+            high_val = float(bar.high)
+            pct_change = abs(close_val - ref_close) / ref_close if ref_close > 0 else 0
+            if pct_change >= threshold and event_time is None:
+                event_time = ts
+                event_price = close_val
+            if close_val > peak_price:
+                peak_price = close_val
+                peak_time = ts
+            if high_val > peak_price:
+                peak_price = high_val
+                peak_time = ts
+            current_price = close_val
+        if event_time is None:
+            return None
+        return {
+            'event_time_et': event_time.strftime('%Y-%m-%d %I:%M %p ET'),
+            'event_time_dt': event_time,
+            'prev_close': prev_close,
+            'prev_close_before': prev_close_before,
+            'event_price': event_price,
+            'peak_price': peak_price,
+            'peak_time_et': peak_time.strftime('%Y-%m-%d %I:%M %p ET') if peak_time else None,
+            'current_price': current_price,
+            'ref_close_for_day': ref_close,
+        }
+    except Exception as e:
+        print(f"      [EVENT_TIME] Error for {ticker}: {e}")
+        return None
+
+
+def calculate_absorption(prev_close, peak_price, current_price):
+    total_move = (peak_price - prev_close) / prev_close if prev_close > 0 else 0
+    remaining = (current_price - prev_close) / prev_close if prev_close > 0 else 0
+    if abs(total_move) < 0.001:
+        return {'total_move_pct': 0, 'remaining_pct': 0, 'absorbed_pct': 0, 'is_exhausted': False}
+    absorbed_frac = 1.0 - (remaining / total_move) if total_move != 0 else 0
+    return {
+        'total_move_pct': round(total_move * 100, 2),
+        'remaining_pct': round(remaining * 100, 2),
+        'absorbed_pct': round(absorbed_frac * 100, 1),
+        'is_exhausted': absorbed_frac > 0.80 or (total_move > 0 and remaining <= 0),
+    }
+
+
+def verify_and_correct_event_timing(entry):
+    ticker = entry.get('ticker', '')
+    if not ticker or not _POLYGON_OK:
+        return
+
+    print(f"    [{ticker}] Verifying event timing via Polygon...", end=' ')
+    event_info = get_actual_event_time(ticker, TODAY_STR)
+    if not event_info:
+        print("no spike found")
+        return
+
+    event_dt = event_info['event_time_dt']
+    event_age_hours = (NOW_ET - event_dt).total_seconds() / 3600
+    news_time_raw = str(entry.get('news_time', ''))
+    article_dt = _parse_news_time(news_time_raw)
+    article_age_hours = None
+    if article_dt:
+        article_age_hours = (NOW_ET - article_dt.astimezone(_ET)).total_seconds() / 3600
+
+    corrected = False
+    if article_age_hours is not None and event_age_hours > article_age_hours + 1.0:
+        entry['news_time_original'] = entry.get('news_time', '')
+        entry['news_time'] = event_info['event_time_et']
+        corrected = True
+
+    prev_close = event_info['prev_close']
+    absorption = calculate_absorption(prev_close, event_info['peak_price'],
+                                       event_info['current_price'])
+    entry['polygon_prev_close'] = prev_close
+    entry['polygon_peak_price'] = event_info['peak_price']
+    entry['polygon_current_price'] = event_info['current_price']
+    entry['polygon_total_move_pct'] = absorption['total_move_pct']
+    entry['polygon_remaining_pct'] = absorption['remaining_pct']
+    entry['polygon_absorbed_frac'] = absorption['absorbed_pct']
+    entry['polygon_event_time'] = event_info['event_time_et']
+
+    if absorption['is_exhausted']:
+        entry['move_is_exhausted'] = True
+
+    if corrected:
+        print(f"CORRECTED: event at {event_info['event_time_et']} "
+              f"({event_age_hours:.1f}h ago, was {article_age_hours:.1f}h), "
+              f"absorbed={absorption['absorbed_pct']:.0f}%"
+              f"{' EXHAUSTED' if absorption['is_exhausted'] else ''}")
+    else:
+        print(f"OK: event ~{event_age_hours:.1f}h ago, "
+              f"absorbed={absorption['absorbed_pct']:.0f}%"
+              f"{' EXHAUSTED' if absorption['is_exhausted'] else ''}")
+
+
 def gemini_search(prompt, system_prompt, retries=MAX_RETRIES):
     for attempt in range(retries):
         try:
@@ -478,6 +960,55 @@ def gemini_search(prompt, system_prompt, retries=MAX_RETRIES):
     return {'error': 'max_retries'}
 
 
+DEEP_ANALYSIS_TOOL = {
+    "name": "record_analysis",
+    "description": "Record the deep analysis result for a stock ticker",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "ticker": {"type": "string"},
+            "direction": {"type": "string", "enum": ["LONG", "SHORT"]},
+            "confidence": {"type": "integer", "description": "1-10 confidence in direction of remaining move"},
+            "total_catalyst_impact_pct": {"type": "number", "description": "Total expected % impact of the catalyst"},
+            "move_already_absorbed_pct": {"type": "number", "description": "How much % has already moved pre-market/AH"},
+            "remaining_move_pct": {"type": "number", "description": "Expected remaining % move after entry"},
+            "expected_move_pct": {"type": "number", "description": "Same as remaining_move_pct"},
+            "move_is_exhausted": {"type": "boolean", "description": "True if catalyst move is fully priced in"},
+            "reasoning": {"type": "string", "description": "3-5 sentences: catalyst, absorption, remaining edge, continuation vs reversal"},
+            "catalyst": {"type": "string", "description": "Specific catalyst with numbers, targets, deal values"},
+            "catalyst_type": {"type": "string", "enum": ["earnings", "analyst", "regulatory", "deal", "offering", "insider", "macro", "breaking", "premarket_move"]},
+            "acquirer_or_target": {"type": "string", "enum": ["acquirer", "target", "n/a"]},
+            "deal_materiality": {"type": "string", "enum": ["immaterial", "notable", "transformative", "n/a"]},
+            "catalyst_is_new": {"type": "boolean"},
+            "news_timeline": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "time": {"type": "string"},
+                        "event": {"type": "string"},
+                    },
+                    "required": ["time", "event"],
+                },
+            },
+            "timing": {"type": "string", "enum": ["breaking", "overnight", "pre_earnings", "post_earnings", "developing", "scheduled"]},
+            "bull_case": {"type": "string"},
+            "bear_case": {"type": "string"},
+            "risks": {"type": "string"},
+            "pre_market_action": {"type": "string"},
+            "related_tickers": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "ticker", "direction", "confidence", "total_catalyst_impact_pct",
+            "move_already_absorbed_pct", "remaining_move_pct", "expected_move_pct",
+            "move_is_exhausted", "reasoning", "catalyst", "catalyst_type",
+            "catalyst_is_new", "news_timeline", "timing",
+            "bull_case", "bear_case", "risks",
+        ],
+    },
+}
+
+
 def claude_analyze(prompt, system_prompt, claude_client, retries=MAX_RETRIES):
     for attempt in range(retries):
         try:
@@ -485,13 +1016,18 @@ def claude_analyze(prompt, system_prompt, claude_client, retries=MAX_RETRIES):
                 model=CLAUDE_MODEL,
                 max_tokens=4096,
                 system=system_prompt,
+                tools=[DEEP_ANALYSIS_TOOL],
+                tool_choice={"type": "tool", "name": "record_analysis"},
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = response.content[0].text
+            for block in response.content:
+                if block.type == "tool_use":
+                    return block.input
+            text = response.content[0].text if response.content else ''
             parsed = _parse_json(text)
             if parsed:
                 return parsed
-            return {'error': f'parse_failed: {str(text)[:100]}', 'raw': text}
+            return {'error': f'no_tool_use: {str(text)[:100]}'}
         except Exception as e:
             err = str(e)
             if '429' in err or 'overloaded' in err.lower():
@@ -555,10 +1091,10 @@ scan_completed = 0
 
 def _scan_one_ticker(ticker):
     prompt = (
-        f"Search for the latest news about {ticker} stock today {TODAY_STR}. "
-        f"What happened in the LAST FEW HOURS? Include any price action today, "
+        f"Search for the latest news about {ticker} stock as of {TIME_ET_STR} on {TODAY_STR}. "
+        f"What happened in the LAST FEW HOURS? Include any price action, "
         f"analyst notes, earnings, regulatory news, or breaking developments. "
-        f"Prioritize the most RECENT news first."
+        f"Prioritize the most RECENT news first — news from the last 4 hours is most valuable."
     )
     result = gemini_search(prompt, SCAN_SYSTEM)
     time.sleep(GEMINI_DELAY_S)
@@ -659,22 +1195,82 @@ if deep_candidates:
             f"- VIX: {market_ctx.get('vix_level', 'unknown')}"
         )
 
-    # Stage 1.5: Fetch current price data for deep candidates (parallel)
-    print(f"\n  Fetching price data for {len(deep_candidates)} candidates...", end=' ')
+    # Stage 1.5: Fetch price data + float/short interest for deep candidates
+    def _fetch_price_and_fundamentals(ticker):
+        pd_info = fetch_price_data(ticker)
+        fund = {}
+        try:
+            import yfinance as yf
+            info = yf.Ticker(ticker).info
+            if info.get('floatShares'):
+                fund['float_shares'] = info['floatShares']
+            if info.get('shortPercentOfFloat'):
+                fund['short_pct_float'] = round(info['shortPercentOfFloat'] * 100, 1)
+            if info.get('marketCap'):
+                fund['market_cap'] = info['marketCap']
+        except Exception:
+            pass
+        return pd_info, fund
+
+    prefetch_all_patterns()
+
+    print(f"\n  Fetching price data + fundamentals for {len(deep_candidates)} candidates...", end=' ')
     price_data = {}
+    fund_data = {}
     tp = time.time()
     with ThreadPoolExecutor(max_workers=MAX_WORKERS_SCAN) as executor:
-        price_futures = {executor.submit(fetch_price_data, t): t
+        price_futures = {executor.submit(_fetch_price_and_fundamentals, t): t
                          for t in deep_candidates}
         for fut in as_completed(price_futures):
             ticker_p = price_futures[fut]
             try:
-                price_data[ticker_p] = fut.result()
+                pd_info, fund = fut.result()
+                price_data[ticker_p] = pd_info
+                fund_data[ticker_p] = fund
             except Exception:
                 price_data[ticker_p] = None
+                fund_data[ticker_p] = {}
     n_prices = sum(1 for v in price_data.values() if v and 'change_pct' in v)
-    print(f"done ({time.time()-tp:.0f}s, {n_prices}/{len(deep_candidates)} found)")
+    n_funds = sum(1 for v in fund_data.values() if v.get('float_shares'))
+    print(f"done ({time.time()-tp:.0f}s, {n_prices}/{len(deep_candidates)} prices, {n_funds} with float data)")
 
+    # ── GAP SCREENER: fetch 20d context for gap-up tickers ───────────────────
+    GAP_MIN_PCT = 3.0
+    gap_context = {}
+    gap_tickers = [t for t in deep_candidates
+                   if price_data.get(t) and price_data[t].get('change_pct', 0) >= GAP_MIN_PCT]
+    if gap_tickers:
+        print(f"\n  Gap screener: checking {len(gap_tickers)} tickers with gap >= {GAP_MIN_PCT}%...")
+        for t in gap_tickers:
+            hist = fetch_20d_high(t)
+            if hist:
+                gap_pct = price_data[t]['change_pct']
+                dd = hist['drawdown_pct']
+                if dd <= -20:
+                    zone = "DEEP_RECOVERY"
+                elif dd <= -10:
+                    zone = "MODERATE_RECOVERY"
+                elif dd <= -5:
+                    zone = "MILD_DIP"
+                else:
+                    zone = "NEAR_HIGHS"
+                recovery_target = hist['prev_close'] + (hist['high_20d'] - hist['prev_close']) * 0.5
+                gap_context[t] = {
+                    'gap_pct': gap_pct,
+                    'high_20d': hist['high_20d'],
+                    'prev_close': hist['prev_close'],
+                    'drawdown_pct': dd,
+                    'premarket_price': price_data[t].get('premarket_price', 0),
+                    'recovery_target': round(recovery_target, 2),
+                    'zone': zone,
+                }
+                print(f"    {'✓' if 'RECOVERY' in zone else '○'} {t}: gap +{gap_pct:.1f}%, "
+                      f"20d-high ${hist['high_20d']}, drawdown {dd:.0f}% → {zone}")
+        if not gap_context:
+            print(f"    No gap tickers with 20d history available")
+
+    # ── Phase A: Build all prompts (sequential — earnings verification + progress) ──
+    stage2_prompts = {}
     for i, ticker in enumerate(deep_candidates):
         scan = scan_results[ticker]
         pd_info = price_data.get(ticker)
@@ -682,11 +1278,10 @@ if deep_candidates:
               f"(scan: {scan.get('catalyst_score',0)}/10, "
               f"{scan.get('direction','?')})", end='')
         if pd_info and 'change_pct' in pd_info:
-            print(f"  [price: {pd_info.get('change_pct', 0):+.1f}% from prev close]...")
+            print(f"  [price: {pd_info.get('change_pct', 0):+.1f}% from prev close]")
         else:
-            print(f"...")
+            print()
 
-        # Build source articles section
         articles_str = ""
         scan_articles = scan.get('key_articles', [])
         scan_sources = scan.get('_sources', [])
@@ -708,11 +1303,10 @@ if deep_candidates:
             for j, src in enumerate(scan_sources[:5]):
                 articles_str += f"  {j+1}. {src.get('title', 'unknown')}: {src.get('url', '')}\n"
 
-        # Build price context section
         price_str = ""
         if pd_info and 'change_pct' in pd_info:
             price_str = (
-                f"\n\nCURRENT PRICE DATA:\n"
+                f"\n\nCURRENT PRICE DATA (from Polygon, verified):\n"
                 f"- Current/pre-market price: ${pd_info.get('current_price', 'N/A')}\n"
                 f"- Previous close: ${pd_info.get('prev_close', 'N/A')}\n"
                 f"- Change from prev close: {pd_info.get('change_pct', 0):+.1f}%\n"
@@ -722,7 +1316,21 @@ if deep_candidates:
         else:
             price_str = "\n\nCURRENT PRICE DATA: Not available — estimate from news reports."
 
-        # Earnings verification: confirm if earnings have actually been released
+        fd = fund_data.get(ticker, {})
+        if fd:
+            fund_str = "\n\nFUNDAMENTAL DATA (from Yahoo Finance):"
+            if 'float_shares' in fd:
+                float_m = fd['float_shares'] / 1e6
+                fund_str += f"\n- Float: {float_m:.1f}M shares"
+            if 'short_pct_float' in fd:
+                fund_str += f"\n- Short interest: {fd['short_pct_float']:.1f}% of float"
+                if fd['short_pct_float'] > 20:
+                    fund_str += " (HIGH — short squeeze potential)"
+            if 'market_cap' in fd:
+                mcap_b = fd['market_cap'] / 1e9
+                fund_str += f"\n- Market cap: ${mcap_b:.1f}B"
+            price_str += fund_str
+
         earnings_str = ""
         scan_cat = str(scan.get('catalyst_type', '')).lower()
         if scan_cat in ('earnings', 'post_earnings', 'pre_earnings'):
@@ -765,6 +1373,42 @@ if deep_candidates:
                 print(f"lookup failed, proceeding without verification")
 
         news_time = scan.get('news_time', 'unknown')
+        scan_cat = str(scan.get('catalyst_type', '')).lower()
+        pattern_str = fetch_similar_patterns(scan_cat, ticker)
+
+        bounce_str = ""
+        if ticker in gap_context:
+            _gc = gap_context[ticker]
+            _zone = _gc['zone']
+            bounce_str = (
+                f"\n\n20-DAY TECHNICAL CONTEXT (all prices from Polygon API, verified):\n"
+                f"- 20-day high: ${_gc['high_20d']}\n"
+                f"- Previous close: ${_gc['prev_close']}\n"
+                f"- Drawdown from 20d high: {_gc['drawdown_pct']:.0f}%\n"
+                f"- Current premarket gap: +{_gc['gap_pct']:.1f}%\n"
+                f"- Recovery target (50% retracement): ${_gc['recovery_target']}\n"
+                f"- Zone: {_zone}\n"
+            )
+            _fd = fund_data.get(ticker, {})
+            _si = _fd.get('short_pct_float', 0)
+            if _si > 10:
+                bounce_str += (
+                    f"- SHORT SQUEEZE WARNING: {_si:.1f}% short interest. With a +{_gc['gap_pct']:.1f}% "
+                    f"gap, short covering will amplify the move. Do NOT go SHORT.\n"
+                )
+            if 'RECOVERY' in _zone or _zone == 'MILD_DIP':
+                bounce_str += (
+                    f"- MOMENTUM BIAS: Stock is {abs(_gc['drawdown_pct']):.0f}% below its 20d high. "
+                    f"This gap-up is recovery, NOT overextension. Continuation LONG is more "
+                    f"likely than fade. Do NOT default to SHORT."
+                )
+            else:
+                bounce_str += (
+                    f"- Stock is near its 20-day highs ({_gc['drawdown_pct']:.0f}% from peak). "
+                    f"Gap-up momentum can still continue, but if the catalyst is weak "
+                    f"(editorial, procedural), a fade is more plausible at these levels."
+                )
+
         prompt = (
             f"Analyze {ticker} for intraday trading today ({TODAY_STR}).\n\n"
             f"SCAN RESULTS:\n"
@@ -777,19 +1421,64 @@ if deep_candidates:
             f"{articles_str}"
             f"{earnings_str}"
             f"{price_str}"
-            f"{market_context_str}\n\n"
+            f"{bounce_str}"
+            f"{market_context_str}"
+            f"{pattern_str}\n\n"
             f"Provide your deep analysis. Remember: direction and expected_move_pct "
             f"must reflect the REMAINING move at 6:25 AM PT entry, not the catalyst "
             f"direction. If the stock already moved significantly, the remaining move "
             f"may be a reversal."
         )
+        stage2_prompts[ticker] = prompt
 
+    # ── Phase B: Fire all API calls in parallel ──────────────────────────────
+    MAX_WORKERS_DEEP = 3
+    print(f"\n  Submitting {len(stage2_prompts)} deep analyses in parallel "
+          f"(max {MAX_WORKERS_DEEP} workers)...")
+
+    def _deep_analyze_one(ticker_prompt_pair):
+        _ticker, _prompt = ticker_prompt_pair
         if claude_ok:
-            result = claude_analyze(prompt, DEEP_SYSTEM, claude_client)
+            return _ticker, claude_analyze(_prompt, DEEP_SYSTEM, claude_client)
         else:
-            result = gemini_search(prompt, DEEP_SYSTEM)
+            return _ticker, gemini_search(_prompt, DEEP_SYSTEM)
+
+    raw_results = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS_DEEP) as executor:
+        deep_futures = {executor.submit(_deep_analyze_one, (t, p)): t
+                        for t, p in stage2_prompts.items()}
+        for fut in as_completed(deep_futures):
+            _tk = deep_futures[fut]
+            try:
+                _, _res = fut.result()
+                raw_results[_tk] = _res
+                print(f"    ✓ {_tk} done")
+            except Exception as e:
+                raw_results[_tk] = {'error': str(e)[:200]}
+                print(f"    ✗ {_tk} failed: {str(e)[:60]}")
+
+    # ── Phase C: Post-process results (sequential — clean output) ────────────
+    for ticker in deep_candidates:
+        result = raw_results.get(ticker)
+        if result is None:
+            continue
+        pd_info = price_data.get(ticker)
 
         if 'error' not in result:
+            claude_total = float(result.get('total_catalyst_impact_pct', 0))
+            polygon_absorbed = float(pd_info.get('change_pct', 0)) if pd_info and 'change_pct' in pd_info else None
+            if polygon_absorbed is not None and abs(claude_total) > 0.1:
+                computed_remaining = claude_total - polygon_absorbed
+                result['move_already_absorbed_pct'] = polygon_absorbed
+                result['remaining_move_pct'] = round(computed_remaining, 2)
+                result['expected_move_pct'] = round(computed_remaining, 2)
+                result['_remaining_source'] = 'python_math'
+                if abs(polygon_absorbed / claude_total) > 0.80 or (
+                    (claude_total > 0 and polygon_absorbed > claude_total) or
+                    (claude_total < 0 and polygon_absorbed < claude_total)
+                ):
+                    result['move_is_exhausted'] = True
+
             direction = result.get('direction', '?')
             confidence = result.get('confidence', 0)
             remaining = float(result.get('remaining_move_pct',
@@ -799,13 +1488,12 @@ if deep_candidates:
             catalyst = str(result.get('catalyst', ''))[:70]
             exh_tag = ' [EXHAUSTED]' if exhausted else ''
             abs_str = f" (absorbed: {absorbed:+.1f}%)" if isinstance(absorbed, (int, float)) else ''
-            print(f"    → {direction} conf={confidence}/10 "
+            print(f"    {ticker}: {direction} conf={confidence}/10 "
                   f"remaining={remaining:+.1f}%{abs_str}{exh_tag}  |  {catalyst}")
         else:
-            print(f"    → ERROR: {result['error'][:80]}")
+            print(f"    {ticker}: ERROR: {result['error'][:80]}")
 
         deep_results[ticker] = result
-        time.sleep(0.5)
 
     elapsed_s2 = time.time() - t2
     print(f"\n  Stage 2 complete: {elapsed_s2:.0f}s")
@@ -880,11 +1568,143 @@ for ticker, r in deep_results.items():
         'sources': scan_data.get('_sources', []),
         'key_articles': scan_data.get('key_articles', []),
         'composite': int(r.get('confidence', 0)) * abs(_remaining),
+        '_price_data': price_data.get(ticker),
     }
     if entry['direction'] == 'LONG':
         longs.append(entry)
     elif entry['direction'] == 'SHORT':
         shorts.append(entry)
+
+# ==============================================================================
+# POST-LLM QUALITY GATES — override LLM output when reasoning contradicts signal
+# ==============================================================================
+SELF_CONTRADICTION_PHRASES = [
+    'untradeable', 'un-tradeable', 'zero remaining edge', 'zero edge',
+    'no remaining edge', 'tier 4', 'tier 5', 'tier 4/5',
+    'not a new actionable catalyst', 'no new catalyst', 'no new information',
+    'very low-conviction', 'very low conviction', 'essentially noise',
+    'not yet occurred', 'not yet released', 'has not yet materialized',
+    'working against the catalyst', 'contradicts the',
+    'immaterial', 'noise catalyst',
+]
+MIN_CONFIDENCE_FOR_SELECTION = 4
+
+all_candidates = longs + shorts
+_gate_log = []
+for entry in all_candidates:
+    ticker = entry['ticker']
+    reasoning_lower = entry.get('reasoning', '').lower()
+    risks_lower = entry.get('risks', '').lower()
+    bear_lower = entry.get('bear_case', '').lower()
+    combined_text = reasoning_lower + ' ' + risks_lower
+
+    # Gate 1: Self-consistency — reasoning says "don't trade" but LLM traded
+    contradictions = [p for p in SELF_CONTRADICTION_PHRASES if p in combined_text]
+    if contradictions and entry['confidence'] <= 4:
+        _gate_log.append(f"  GATE: {ticker} {entry['direction']} conf={entry['confidence']} "
+                         f"→ KILLED (self-contradiction: '{contradictions[0]}')")
+        entry['confidence'] = 0
+        entry['_gate_reason'] = f"self_contradiction: {contradictions[0]}"
+
+    # Gate 2: Premarket direction mismatch — LONG but stock clearly red, SHORT but stock clearly green
+    # Use hard Polygon/yfinance data, not LLM's estimate
+    _pd = entry.get('_price_data', {})
+    _absorbed = float(_pd.get('change_pct', 0)) if _pd else float(entry.get('move_already_absorbed_pct', 0))
+    if entry['direction'] == 'LONG' and isinstance(_absorbed, (int, float)) and _absorbed < -2.0:
+        if entry['confidence'] <= 5:
+            _gate_log.append(f"  GATE: {ticker} LONG conf={entry['confidence']} "
+                             f"→ KILLED (premarket is {_absorbed:+.1f}%, opposing LONG)")
+            entry['confidence'] = 0
+            entry['_gate_reason'] = f"premarket_direction_mismatch: {_absorbed:+.1f}%"
+    elif entry['direction'] == 'SHORT' and isinstance(_absorbed, (int, float)) and _absorbed > 2.0:
+        if entry['confidence'] <= 5:
+            _gate_log.append(f"  GATE: {ticker} SHORT conf={entry['confidence']} "
+                             f"→ KILLED (premarket is {_absorbed:+.1f}%, opposing SHORT)")
+            entry['confidence'] = 0
+            entry['_gate_reason'] = f"premarket_direction_mismatch: {_absorbed:+.1f}%"
+
+    # Gate 3: Momentum flip — exhausted SHORTs on gap-ups flip to LONG in risk-on regime
+    if (entry['direction'] == 'SHORT' and entry.get('move_is_exhausted')
+            and isinstance(_absorbed, (int, float)) and _absorbed > 3.0
+            and not entry.get('_gate_reason')):
+        _spy_pct = 0.0
+        _vix = 20.0
+        try:
+            _spy_pct = float(market_ctx.get('spy_futures_pct', 0))
+        except (TypeError, ValueError):
+            _futures_str = str(market_ctx.get('futures', ''))
+            _spy_match = re.search(r'S&P\s*500?\s*([+-]?\d+\.?\d*)%', _futures_str)
+            _spy_pct = float(_spy_match.group(1)) if _spy_match else 0.0
+        try:
+            _vix = float(market_ctx.get('vix_level_float', 20))
+        except (TypeError, ValueError):
+            _vix_str = str(market_ctx.get('vix_level', '20'))
+            _vix_match = re.search(r'(\d+\.?\d*)', _vix_str)
+            _vix = float(_vix_match.group(1)) if _vix_match else 20.0
+        _is_risk_on = _spy_pct > -0.5 and _vix < 25
+
+        _gc = gap_context.get(ticker, {})
+        _drawdown = _gc.get('drawdown_pct', 0)
+        _original_conf = entry['confidence']
+
+        if _is_risk_on:
+            if _drawdown <= -15:
+                _new_conf = _original_conf
+            elif _drawdown <= -5:
+                _new_conf = max(4, _original_conf - 1)
+            else:
+                _new_conf = min(4, _original_conf)
+
+            entry['direction'] = 'LONG'
+            entry['confidence'] = _new_conf
+            entry['expected_move_pct'] = abs(entry.get('remaining_move_pct', 0))
+            entry['_gate_reason'] = (f"momentum_flip_risk_on: gap +{_absorbed:.1f}%, "
+                                     f"drawdown {_drawdown:.0f}%, SPY {_spy_pct:+.1f}%")
+            entry['_flipped'] = True
+            _gate_log.append(
+                f"  GATE: {ticker} SHORT conf={_original_conf} "
+                f"→ FLIPPED to LONG conf={_new_conf} (momentum: gap +{_absorbed:.1f}%, "
+                f"{_drawdown:.0f}% below 20d high, SPY {_spy_pct:+.1f}%, VIX {_vix:.0f})")
+        else:
+            entry['confidence'] = 0
+            entry['_gate_reason'] = (f"exhausted_short_killed_risk_off: gap +{_absorbed:.1f}%, "
+                                     f"SPY {_spy_pct:+.1f}%, VIX {_vix:.0f}")
+            _gate_log.append(
+                f"  GATE: {ticker} SHORT conf={_original_conf} "
+                f"→ KILLED (risk-off: SPY {_spy_pct:+.1f}%, VIX {_vix:.0f})")
+
+    # Gate 4: Clinical trial data trap — biotech "positive data" events get sold by institutions
+    CLINICAL_KEYWORDS = [
+        'phase 1', 'phase 2', 'phase 3', 'phase i', 'phase ii', 'phase iii',
+        'clinical trial', 'clinical data', 'trial results', 'trial data',
+        'objective response rate', 'overall response rate', ' orr ',
+        'complete response', 'progression-free survival', 'overall survival',
+        'primary endpoint', 'secondary endpoint', 'pivotal trial',
+        'fda approval', 'fda accepted', 'bla ', 'nda ', 'pdufa',
+    ]
+    catalyst_lower = entry.get('catalyst', '').lower()
+    cat_type_lower = entry.get('catalyst_type', '').lower()
+    is_clinical = any(kw in catalyst_lower or kw in reasoning_lower for kw in CLINICAL_KEYWORDS)
+    if (is_clinical and entry['direction'] == 'LONG' and cat_type_lower in ('regulatory', 'breaking')
+            and not entry.get('_gate_reason')):
+        _gate_log.append(f"  GATE: {ticker} LONG conf={entry['confidence']} "
+                         f"→ CAPPED at 3 (clinical trial data trap: institutions sell these events)")
+        entry['confidence'] = min(entry['confidence'], 3)
+        entry['_gate_reason'] = f"clinical_data_trap"
+
+    # Recalculate composite after gates
+    entry['composite'] = entry['confidence'] * abs(entry.get('remaining_move_pct', 0))
+
+# Move momentum-flipped entries from shorts to longs
+_flipped = [e for e in shorts if e.get('_flipped')]
+for e in _flipped:
+    shorts.remove(e)
+    longs.append(e)
+
+if _gate_log:
+    print(f"\n  POST-LLM QUALITY GATES:")
+    for msg in _gate_log:
+        print(msg)
 
 longs.sort(key=lambda x: x['composite'], reverse=True)
 shorts.sort(key=lambda x: x['composite'], reverse=True)
@@ -1053,10 +1873,11 @@ def _print_summary_table(entries, direction_label):
         absorbed = e.get('move_already_absorbed_pct', 0)
         abs_str = f"{absorbed:+.1f}%" if absorbed else '—'
         exh = ' EXH' if e.get('move_is_exhausted') else ''
+        gated = ' GATED' if e.get('_gate_reason') else ''
         catalyst_short = str(e.get('catalyst', '') or e.get('scan_summary', '') or e.get('scan_headline', '') or e.get('reasoning', ''))[:80]
         print(f"    {i:>2} {e['ticker']:<6} {e['composite']:>5.0f} "
               f"{e['confidence']:>3}/10 {e['expected_move_pct']:>+6.1f}% "
-              f"{abs_str:>7} {cat:<5} {ts_str:<18} {age:>8}{exh}  {catalyst_short}")
+              f"{abs_str:>7} {cat:<5} {ts_str:<18} {age:>8}{exh}{gated}  {catalyst_short}")
     print()
 
 
@@ -1124,6 +1945,14 @@ def _print_detail_cards(entries, direction_label):
                 print(f"  │    {j+1}. {src.get('title', '')[:60]} — {src.get('url', '')[:70]}")
         print(f"  └{'─'*99}")
 
+
+# ── Verify event timing via Polygon for candidates with large absorbed moves ──
+if _POLYGON_OK:
+    print(f"\n  Verifying event timing via Polygon...")
+    for e in longs + shorts:
+        verify_and_correct_event_timing(e)
+else:
+    print(f"\n  Polygon not available — skipping event timing verification")
 
 # ── Filter stale news (>MAX_NEWS_AGE_HOURS) ──
 
@@ -1239,6 +2068,7 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
         ('news_timeline_json', 'STRING'),
         ('freshness_multiplier', 'FLOAT64'),
         ('scanner_version', 'STRING'),
+        ('gate_reason', 'STRING'),
     ]:
         try:
             bq_client.query(f"ALTER TABLE `{BQ_SCANNER_TABLE}` ADD COLUMN {col_name} {col_type}").result()
@@ -1261,7 +2091,7 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
                 'ticker': e['ticker'],
                 'direction': direction_label,
                 'rank_in_direction': rank,
-                'selected': rank <= (FINAL_LONG if direction_label == 'LONG' else FINAL_SHORT),
+                'selected': rank <= (FINAL_LONG if direction_label == 'LONG' else FINAL_SHORT) and e['confidence'] >= MIN_CONFIDENCE_FOR_SELECTION,
                 'confidence': e['confidence'],
                 'expected_move_pct': e['expected_move_pct'],
                 'remaining_move_pct': e.get('remaining_move_pct', e['expected_move_pct']),
@@ -1290,9 +2120,11 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
                 'news_timeline_json': json.dumps(e.get('news_timeline', []), default=str)[:2000],
                 'freshness_multiplier': e.get('freshness_mult', 1.0),
                 'scanner_version': SCANNER_VERSION,
+                'gate_reason': str(e.get('_gate_reason', ''))[:200],
             })
 
     # Also log scan-only tickers (no deep analysis) for coverage tracking
+    # Direction set to NEUTRAL — Stage 1 direction is a rough classification, not a signal
     deep_tickers = set(e['ticker'] for e in longs + shorts)
     for ticker, sr in scan_results.items():
         if ticker in deep_tickers or 'error' in sr:
@@ -1302,7 +2134,7 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
             'scan_date': run_ts_str,
             'scan_time_pt': time_str,
             'ticker': ticker,
-            'direction': sr.get('direction', 'NEUTRAL'),
+            'direction': 'NEUTRAL',
             'rank_in_direction': 0,
             'selected': False,
             'confidence': 0,
