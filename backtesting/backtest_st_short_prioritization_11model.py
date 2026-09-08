@@ -16,6 +16,9 @@
 #   F. M_MRV2_NEWEST4 (4): MR-v2 F7/F8/F9/F10 (drop oldest F6)
 #   G. M_CONS5_F10_REPLACE (5): L5-1 F7 + L5-2 F7 + MR-v2 F8/F9/F10
 #   H. M_MRV2_NEWEST3 (3): MR-v2 F8/F9/F10 (newest 3 only)
+#   I. M_MRV2_N3_MIN2 (3): MR-v2 F8/F9/F10, require >= 2 folds fired
+#   J. M_MRV2_N3_MARGIN (3): MR-v2 F8/F9/F10, require fire margin >= 0.05
+#   K. M_MRV2_N3_M2_MARGIN (3): MR-v2 F8/F9/F10, >= 2 folds + margin >= 0.05
 #
 # SHORT = price down is profit. TP hit when Low <= tp_price.
 # GPU recommended. Colab-ready.
@@ -83,8 +86,8 @@ WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
 INFERENCE_DIR    = "Data/Inference_v2"
 PST              = pytz.timezone('America/Los_Angeles')
 
-BACKTEST_START   = '2026-08-25'
-BACKTEST_END     = '2026-08-31'
+BACKTEST_START   = '2026-08-18'
+BACKTEST_END     = '2026-09-07'
 
 TAIL_DAYS        = 45
 
@@ -96,6 +99,8 @@ SLIPPAGE_PCT     = 0.0015
 BASE_PNL_THRESH  = 0.018
 F7_VAL_B_THRESH  = 0.030
 MIN_TRADES_PER_MONTH = 2.0
+
+CONSENSUS_FOLDS  = {('MR-v2', 8), ('MR-v2', 9), ('MR-v2', 10)}
 
 MAX_TRADES       = 3
 RANDOM_ITERS     = 50
@@ -1372,6 +1377,17 @@ print(f"{'='*W}")
 
 print(f"\n  Loading deploy configs from BQ (Hybrid F5+F6+F7+F8, 3 families)...")
 DEPLOY_CONFIGS, FAMILY_FOLD_CFGS = load_deploy_configs()
+
+consensus_covered = set()
+for fam_fold in CONSENSUS_FOLDS:
+    consensus_covered |= set(FAMILY_FOLD_CFGS.get(fam_fold, {}).keys())
+ghost = sorted(set(DEPLOY_CONFIGS) - consensus_covered)
+if ghost:
+    for tk in ghost:
+        del DEPLOY_CONFIGS[tk]
+    print(f"    Removed {len(ghost)} ghost tickers (no consensus fold coverage): "
+          f"{', '.join(ghost)}")
+
 DEPLOY_TICKERS = sorted(DEPLOY_CONFIGS.keys())
 
 ALL_MODEL_CONFIGS = {}
@@ -1971,6 +1987,122 @@ else:
             filtered = [t for t in day_trades_multi if _match(t)]
             return select_multi_consensus(filtered, max_k, rng)
 
+        # ==================================================================
+        # CONSENSUS FILTER FACTORY — generates filter variants for any base
+        # ==================================================================
+        MIN_FIRE_MARGIN = 0.05
+
+        def _make_version_filter(versions):
+            def _match(t):
+                parts = t.get('Model_Source', '').split()
+                return (parts[0], parts[1]) in versions if len(parts) >= 2 else False
+            return _match
+
+        def _make_margin_strategy(versions):
+            _match = _make_version_filter(versions)
+            def _fn(day_trades_multi, max_k, rng=None):
+                filtered = [t for t in day_trades_multi
+                            if _match(t) and (t['Prob'] - t['Thresh']) >= MIN_FIRE_MARGIN]
+                return select_multi_consensus(filtered, max_k, rng)
+            return _fn
+
+        def _make_min2_strategy(versions):
+            _match = _make_version_filter(versions)
+            def _fn(day_trades_multi, max_k, rng=None):
+                filtered = [t for t in day_trades_multi if _match(t)]
+                by_ticker = defaultdict(list)
+                for t in filtered:
+                    by_ticker[t['Ticker']].append(t)
+                resolved = []
+                for ticker, cands in by_ticker.items():
+                    folds_fired = set()
+                    for c in cands:
+                        parts = c.get('Model_Source', '').split()
+                        if len(parts) >= 2:
+                            folds_fired.add(parts[1])
+                    if len(folds_fired) < 2:
+                        continue
+                    best = _resolve_ticker_model(cands, 'max_prob')
+                    best = dict(best)
+                    best['N_Models'] = len(cands)
+                    best['N_Folds_Fired'] = len(folds_fired)
+                    resolved.append(best)
+                resolved.sort(key=lambda t: (-t['N_Folds_Fired'], -t['Prob']))
+                return resolved[:max_k]
+            return _fn
+
+        def _make_min2_margin_strategy(versions):
+            _match = _make_version_filter(versions)
+            def _fn(day_trades_multi, max_k, rng=None):
+                filtered = [t for t in day_trades_multi
+                            if _match(t) and (t['Prob'] - t['Thresh']) >= MIN_FIRE_MARGIN]
+                by_ticker = defaultdict(list)
+                for t in filtered:
+                    by_ticker[t['Ticker']].append(t)
+                resolved = []
+                for ticker, cands in by_ticker.items():
+                    folds_fired = set()
+                    for c in cands:
+                        parts = c.get('Model_Source', '').split()
+                        if len(parts) >= 2:
+                            folds_fired.add(parts[1])
+                    if len(folds_fired) < 2:
+                        continue
+                    best = _resolve_ticker_model(cands, 'max_prob')
+                    best = dict(best)
+                    best['N_Models'] = len(cands)
+                    best['N_Folds_Fired'] = len(folds_fired)
+                    resolved.append(best)
+                resolved.sort(key=lambda t: (-t['N_Folds_Fired'], -t['Prob']))
+                return resolved[:max_k]
+            return _fn
+
+        def _make_wfire_strategy(versions):
+            _match = _make_version_filter(versions)
+            def _fn(day_trades_multi, max_k, rng=None):
+                filtered = [t for t in day_trades_multi if _match(t)]
+                by_ticker = defaultdict(list)
+                for t in filtered:
+                    by_ticker[t['Ticker']].append(t)
+                resolved = []
+                for ticker, cands in by_ticker.items():
+                    margins = [(c['Prob'] - c['Thresh']) for c in cands if (c['Prob'] - c['Thresh']) > 0]
+                    n_fires = len(margins)
+                    if n_fires == 0:
+                        continue
+                    sum_conviction = sum(margins)
+                    best = _resolve_ticker_model(cands, 'max_prob')
+                    best = dict(best)
+                    best['N_Models'] = n_fires
+                    best['Sum_Conviction'] = sum_conviction
+                    resolved.append(best)
+                resolved.sort(key=lambda t: (-t['N_Models'], -t['Sum_Conviction']))
+                return resolved[:max_k]
+            return _fn
+
+        FILTER_BASE_CONFIGS = {
+            'CONS11':      None,
+            'CONS5_F9R':   {('L5-1', 'F7'), ('L5-2', 'F7'), ('MR-v2', 'F7'), ('MR-v2', 'F8'), ('MR-v2', 'F9')},
+            'CONS5_F10R':  {('L5-1', 'F7'), ('L5-2', 'F7'), ('MR-v2', 'F8'), ('MR-v2', 'F9'), ('MR-v2', 'F10')},
+            'MRV2_ALL':    {('MR-v2', 'F6'), ('MR-v2', 'F7'), ('MR-v2', 'F8'), ('MR-v2', 'F9'), ('MR-v2', 'F10')},
+            'MRV2_N4':     {('MR-v2', 'F7'), ('MR-v2', 'F8'), ('MR-v2', 'F9'), ('MR-v2', 'F10')},
+            'MRV2_N3':     {('MR-v2', 'F8'), ('MR-v2', 'F9'), ('MR-v2', 'F10')},
+        }
+
+        FILTER_VARIANTS = {}
+        for base_name, versions in FILTER_BASE_CONFIGS.items():
+            if versions is None:
+                all_versions = {
+                    (fam, f'F{fold}')
+                    for fam in ('L5-1', 'L5-2', 'MR-v2')
+                    for fold in range(5, 11)
+                }
+                versions = all_versions
+            FILTER_VARIANTS[f'X_{base_name}_MARGIN']  = _make_margin_strategy(versions)
+            FILTER_VARIANTS[f'X_{base_name}_MIN2']    = _make_min2_strategy(versions)
+            FILTER_VARIANTS[f'X_{base_name}_M2_MARG'] = _make_min2_margin_strategy(versions)
+            FILTER_VARIANTS[f'X_{base_name}_WFIRE']   = _make_wfire_strategy(versions)
+
         MULTI_STRATEGIES = {
             'M_CONSENSUS':          select_multi_consensus,
             'M_CONS5_BASELINE':     select_consensus_5newest,
@@ -1989,6 +2121,7 @@ else:
             'M_NEWEST_FOLD':        select_multi_newest_fold,
             'M_AGREEMENT':          select_multi_agreement,
         }
+        MULTI_STRATEGIES.update(FILTER_VARIANTS)
 
 
         # ==================================================================
@@ -2109,14 +2242,14 @@ else:
         # ==================================================================
         SWEEP_RANGE = range(1, 12)
         TOP5_STRATS = {
-            'M_CONS5_BASELINE':    ('multi',  select_consensus_5newest),
-            'M_CONS5_F10_REPLACE': ('multi',  select_cons5_f10_replace),
             'M_MRV2_ONLY':         ('multi',  select_mrv2_only),
             'M_MRV2_NEWEST4':      ('multi',  select_mrv2_newest4),
             'M_MRV2_NEWEST3':      ('multi',  select_mrv2_newest3),
-            'M_CONSENSUS':         ('multi',  select_multi_consensus),
+            'M_CONS5_F9_REPLACE':  ('multi',  select_cons5_f9_replace),
             'M_AGREEMENT':         ('multi',  select_multi_agreement),
         }
+        for vname in sorted(FILTER_VARIANTS.keys()):
+            TOP5_STRATS[vname] = ('multi', FILTER_VARIANTS[vname])
 
         print(f"\n\n{'='*W}")
         print(f"  PHASE 7: MAX_TRADES SWEEP (1 → 11) — F10 STRATEGY COMPARISON")
@@ -2164,7 +2297,7 @@ else:
                     })
                 sweep_results[sname][max_k] = compute_stats(daily_ew)
 
-        print(f"  {'Strategy':<16}", end="")
+        print(f"  {'Strategy':<22}", end="")
         for k in SWEEP_RANGE:
             print(f"  {'K='+str(k):>10}", end="")
         print()
@@ -2194,7 +2327,7 @@ else:
                 rows.append((sname, vals, best_k))
 
             for sname, vals, best_k in rows:
-                print(f"  {sname:<16}", end="")
+                print(f"  {sname:<22}", end="")
                 for i, v in enumerate(vals):
                     marker = ' *' if (i + 1) == best_k and metric_key in ('cum_ew', 'sharpe') else '  '
                     print(f"{fmt_fn(v)}{marker}", end="")
@@ -2223,70 +2356,91 @@ else:
         print(f"  BEST by Sharpe:  {best_sharpe_combo[0]} @ K={best_sharpe_combo[1]} "
               f"(Sharpe {best_overall_sharpe:.1f})")
 
+        print(f"\n  TOP 15 (Strategy, K) BY CUM EW:")
+        print(f"  {'Rank':<5} {'Strategy':<22} {'K':>3} {'Cum EW':>9} {'Sharpe':>7} {'Trades':>7} {'CapUtil':>8}")
+        print(f"  {'─'*70}")
+        all_combos = []
+        for sname in TOP5_STRATS:
+            for k in SWEEP_RANGE:
+                s = sweep_results[sname].get(k, {})
+                if s:
+                    all_combos.append((sname, k, s))
+        all_combos.sort(key=lambda x: x[2].get('cum_ew', -999), reverse=True)
+        for rank, (sname, k, s) in enumerate(all_combos[:15], 1):
+            trades = s.get('total_trades', 0)
+            cu = s.get('cap_util', 1.0)
+            print(f"  {rank:<5} {sname:<22} {k:>3} {s.get('cum_ew',0):>+8.2%} "
+                  f"{s.get('sharpe',0):>7.1f} {trades:>7.0f} {cu:>7.0%}")
+
         # Sweep chart
         fig3, axes3 = plt.subplots(2, 2, figsize=(20, 14))
         fig3.suptitle(f'ST SHORT — MAX_TRADES Sweep (1→11) — F10 Strategy Comparison\n'
                       f'{BACKTEST_START} → {BACKTEST_END}',
                       fontsize=13, fontweight='bold')
 
-        sweep_colors = {
-            'M_CONS5_BASELINE': '#FF6F00',
-            'M_CONS5_F10_REPLACE': '#D81B60',
-            'M_MRV2_ONLY': '#00ACC1',
-            'M_MRV2_NEWEST4': '#7B1FA2',
-            'M_MRV2_NEWEST3': '#E65100',
-            'M_CONSENSUS': '#1E88E5',
-            'M_AGREEMENT': '#43A047',
-        }
+        _cmap = plt.cm.get_cmap('tab20', len(TOP5_STRATS))
+        sweep_colors = {sname: _cmap(i) for i, sname in enumerate(TOP5_STRATS)}
 
         ks = list(SWEEP_RANGE)
 
+        sweep_ranked = sorted(
+            TOP5_STRATS.keys(),
+            key=lambda s: max(sweep_results.get(s, {}).get(k, {}).get('cum_ew', -999) for k in SWEEP_RANGE),
+            reverse=True,
+        )
+        TOP_N_CHART = 10
+        chart_strats = sweep_ranked[:TOP_N_CHART]
+
         ax = axes3[0, 0]
-        for sname in TOP5_STRATS:
+        for sname in chart_strats:
             vals = [sweep_results[sname].get(k, {}).get('cum_ew', 0) * 100 for k in ks]
-            ax.plot(ks, vals, 'o-', color=sweep_colors[sname], linewidth=2,
-                    markersize=8, label=sname)
+            lw = 2.5 if not sname.startswith('X_') else 1.2
+            ax.plot(ks, vals, 'o-', color=sweep_colors[sname], linewidth=lw,
+                    markersize=5, label=sname)
         ax.set_xlabel('MAX_TRADES (K)')
         ax.set_ylabel('Cumulative EW PnL (%)')
-        ax.set_title('Cumulative PnL vs Position Cap')
+        ax.set_title(f'Cumulative PnL vs Position Cap (top {TOP_N_CHART})')
         ax.set_xticks(ks)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=6, ncol=2)
         ax.grid(alpha=0.3)
 
         ax = axes3[0, 1]
-        for sname in TOP5_STRATS:
+        for sname in chart_strats:
             vals = [sweep_results[sname].get(k, {}).get('sharpe', 0) for k in ks]
-            ax.plot(ks, vals, 's-', color=sweep_colors[sname], linewidth=2,
-                    markersize=8, label=sname)
+            lw = 2.5 if not sname.startswith('X_') else 1.2
+            ax.plot(ks, vals, 's-', color=sweep_colors[sname], linewidth=lw,
+                    markersize=5, label=sname)
         ax.set_xlabel('MAX_TRADES (K)')
         ax.set_ylabel('Sharpe Ratio')
-        ax.set_title('Sharpe vs Position Cap')
+        ax.set_title(f'Sharpe vs Position Cap (top {TOP_N_CHART})')
         ax.set_xticks(ks)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=6, ncol=2)
         ax.grid(alpha=0.3)
 
         ax = axes3[1, 0]
-        for sname in TOP5_STRATS:
+        for sname in chart_strats:
             vals = [sweep_results[sname].get(k, {}).get('avg_daily', 0) * 100 for k in ks]
-            ax.plot(ks, vals, '^-', color=sweep_colors[sname], linewidth=2,
-                    markersize=8, label=sname)
+            lw = 2.5 if not sname.startswith('X_') else 1.2
+            ax.plot(ks, vals, '^-', color=sweep_colors[sname], linewidth=lw,
+                    markersize=5, label=sname)
         ax.set_xlabel('MAX_TRADES (K)')
         ax.set_ylabel('Avg Daily EW PnL (%)')
-        ax.set_title('Avg Daily PnL vs Position Cap')
+        ax.set_title(f'Avg Daily PnL vs Position Cap (top {TOP_N_CHART})')
         ax.set_xticks(ks)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=6, ncol=2)
         ax.grid(alpha=0.3)
 
         ax = axes3[1, 1]
-        for sname in TOP5_STRATS:
+        for sname in chart_strats:
             vals = [sweep_results[sname].get(k, {}).get('max_drawdown', 0) * 100 for k in ks]
-            ax.plot(ks, vals, 'D-', color=sweep_colors[sname], linewidth=2,
-                    markersize=8, label=sname)
+            lw = 2.5 if not sname.startswith('X_') else 1.2
+            ax.plot(ks, vals, 'D-', color=sweep_colors[sname], linewidth=lw,
+                    markersize=5, label=sname)
         ax.set_xlabel('MAX_TRADES (K)')
         ax.set_ylabel('Max Drawdown (%)')
-        ax.set_title('Max Drawdown vs Position Cap')
+        ax.set_title(f'Max Drawdown vs Position Cap (top {TOP_N_CHART})')
         ax.set_xticks(ks)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=6, ncol=2)
         ax.grid(alpha=0.3)
         ax.invert_yaxis()
 
@@ -3829,6 +3983,315 @@ else:
         plt.close()
     else:
         print(f"\n  Phase 11 skipped — no multi_trades data available.")
+
+
+# ==============================================================================
+# PHASE DIAGNOSTIC: MODEL PERFORMANCE vs MARKET OPPORTUNITY
+# ==============================================================================
+print(f"\n\n{'='*W}")
+print(f"  DIAGNOSTIC: WHY IS PERFORMANCE DEGRADING?")
+print(f"  Model metrics vs market opportunity — SHORT")
+print(f"  {BACKTEST_START} → {BACKTEST_END}")
+print(f"{'='*W}")
+
+if 'df_all' in dir() and len(df_all) > 0:
+
+    # ── D1: Signal count & probability by week ──
+    df_all['Date_dt'] = pd.to_datetime(df_all['Date'])
+    df_all['Week'] = df_all['Date_dt'].dt.isocalendar().week.astype(int)
+    df_all['Year_Week'] = (df_all['Date_dt'].dt.isocalendar().year.astype(str) + '-W' +
+                            df_all['Date_dt'].dt.isocalendar().week.astype(str).str.zfill(2))
+
+    print(f"\n  ── D1: Signal Volume & Probability by Week ──\n")
+    print(f"  {'Week':>8}  {'Signals':>8} {'Filled':>7} {'Avg Prob':>9} {'Med Prob':>9} "
+          f"{'Avg Margin':>10} {'TP Rate':>8} {'Avg PnL':>8}")
+    print(f"  {'─'*85}")
+
+    for wk in sorted(df_all['Year_Week'].unique()):
+        wk_df = df_all[df_all['Year_Week'] == wk]
+        wk_filled = wk_df[wk_df['Filled'] == True] if 'Filled' in wk_df.columns else wk_df
+        n_sig = len(wk_df)
+        n_fill = len(wk_filled)
+        avg_prob = wk_df['Prob'].mean()
+        med_prob = wk_df['Prob'].median()
+        avg_margin = (wk_df['Prob'] - wk_df['Thresh']).mean()
+        tp_rate = (wk_filled['Outcome'] == 'TP').mean() * 100 if len(wk_filled) > 0 else 0
+        avg_pnl = wk_filled['PnL'].mean() if len(wk_filled) > 0 else 0
+        print(f"  {wk:>8}  {n_sig:>8} {n_fill:>7} {avg_prob:>9.4f} {med_prob:>9.4f} "
+              f"{avg_margin:>+9.4f} {tp_rate:>7.1f}% {avg_pnl:>+7.2f}%")
+
+    # ── D2: Trade outcome decomposition by week ──
+    print(f"\n  ── D2: Outcome Breakdown by Week ──\n")
+    print(f"  {'Week':>8}  {'TP':>5} {'SL':>5} {'EOD':>5} {'NO_FILL':>8} {'TP%':>6} {'SL%':>6} {'EOD%':>6}")
+    print(f"  {'─'*60}")
+
+    for wk in sorted(df_all['Year_Week'].unique()):
+        wk_df = df_all[df_all['Year_Week'] == wk]
+        n_tp = (wk_df['Outcome'] == 'TP').sum()
+        n_sl = (wk_df['Outcome'] == 'SL').sum()
+        n_eod = (wk_df['Outcome'] == 'EOD').sum()
+        n_nf = (wk_df['Outcome'] == 'NO_FILL').sum()
+        n_filled = n_tp + n_sl + n_eod
+        tp_pct = n_tp / n_filled * 100 if n_filled > 0 else 0
+        sl_pct = n_sl / n_filled * 100 if n_filled > 0 else 0
+        eod_pct = n_eod / n_filled * 100 if n_filled > 0 else 0
+        print(f"  {wk:>8}  {n_tp:>5} {n_sl:>5} {n_eod:>5} {n_nf:>8} {tp_pct:>5.1f}% {sl_pct:>5.1f}% {eod_pct:>5.1f}%")
+
+    # ── D3: Per-model family firing rates ──
+    print(f"\n  ── D3: Per-Model Family Performance ──\n")
+    if 'Family' in df_all.columns:
+        print(f"  {'Family':<20} {'N':>5} {'Filled':>7} {'TP%':>6} {'Avg PnL':>8} {'Avg Prob':>9}")
+        print(f"  {'─'*60}")
+        for fam in sorted(df_all['Family'].unique()):
+            fam_df = df_all[df_all['Family'] == fam]
+            fam_filled = fam_df[fam_df['Filled'] == True] if 'Filled' in fam_df.columns else fam_df
+            n = len(fam_df)
+            n_fill = len(fam_filled)
+            tp_rate = (fam_filled['Outcome'] == 'TP').mean() * 100 if len(fam_filled) > 0 else 0
+            avg_pnl = fam_filled['PnL'].mean() if len(fam_filled) > 0 else 0
+            avg_prob = fam_df['Prob'].mean()
+            print(f"  {fam:<20} {n:>5} {n_fill:>7} {tp_rate:>5.1f}% {avg_pnl:>+7.2f}% {avg_prob:>9.4f}")
+
+    # ── D4: MFE at 15m/30m/60m for signal days vs ALL days ──
+    # SHORT: favorable MFE = DOWN (price dropping from entry)
+    print(f"\n  ── D4: MFE Analysis — Signal Days vs Market Opportunity (SHORT) ──")
+    print(f"  Loading price data for MFE computation...\n")
+
+    _deploy_tickers_diag = sorted(df_all['Ticker'].unique())
+    _bt_s = pd.Timestamp(BACKTEST_START).date()
+    _bt_e = pd.Timestamp(BACKTEST_END).date()
+
+    _signal_mfe = []
+    _market_mfe = []
+
+    for _tk in _deploy_tickers_diag:
+        _df = load_master(_tk, tail_days=TAIL_DAYS)
+        if _df is None:
+            continue
+        try:
+            _df_pst = _df.index.tz_convert(PST)
+        except Exception:
+            continue
+        _mins = _df_pst.hour * 60 + _df_pst.minute
+        _df = _df.copy()
+        _df['_min'] = _mins
+        _df['_date'] = _df_pst.date
+
+        _signal_dates = set(
+            pd.to_datetime(df_all[df_all['Ticker'] == _tk]['Date']).dt.date
+        )
+        _tk_trades = df_all[df_all['Ticker'] == _tk]
+
+        for _dv, _day_df in _df.groupby('_date'):
+            if _dv < _bt_s or _dv > _bt_e:
+                continue
+            _entry_bars = _day_df[_day_df['_min'] == ENTRY_MINUTE]
+            if len(_entry_bars) == 0:
+                _entry_bars = _day_df[(_day_df['_min'] >= ENTRY_MINUTE - 2) &
+                                      (_day_df['_min'] <= ENTRY_MINUTE + 2)]
+            if len(_entry_bars) == 0:
+                continue
+            _ep = float(_entry_bars.iloc[0]['Close'])
+            if _ep <= 0:
+                continue
+
+            _mfe_row = {'Ticker': _tk, 'Date': str(_dv),
+                        'Is_Signal': _dv in _signal_dates}
+
+            for _wmin, _wlabel in [(15, '15m'), (30, '30m'), (60, '60m')]:
+                _after = _day_df[(_day_df['_min'] > ENTRY_MINUTE) &
+                                  (_day_df['_min'] <= ENTRY_MINUTE + _wmin)]
+                if len(_after) >= 2:
+                    _mfe_up = (float(_after['High'].max()) - _ep) / _ep * 100
+                    _mfe_dn = (_ep - float(_after['Low'].min())) / _ep * 100
+                else:
+                    _mfe_up = _mfe_dn = 0
+                _mfe_row[f'MFE_Up_{_wlabel}'] = _mfe_up
+                _mfe_row[f'MFE_Dn_{_wlabel}'] = _mfe_dn
+
+            if _dv in _signal_dates:
+                _trade_row = _tk_trades[_tk_trades['Date'] == str(_dv)]
+                if len(_trade_row) > 0:
+                    _mfe_row['Trade_PnL'] = float(_trade_row.iloc[0]['PnL'])
+                    _mfe_row['Trade_Outcome'] = _trade_row.iloc[0]['Outcome']
+                    _mfe_row['Trade_TP'] = float(_trade_row.iloc[0]['TP_Pct'])
+                    _mfe_row['Trade_Prob'] = float(_trade_row.iloc[0]['Prob'])
+                _signal_mfe.append(_mfe_row)
+            _market_mfe.append(_mfe_row)
+
+        _master_cache.pop((_tk, TAIL_DAYS), None)
+        del _df
+        gc.collect()
+
+    if _signal_mfe and _market_mfe:
+        _df_sig = pd.DataFrame(_signal_mfe)
+        _df_mkt = pd.DataFrame(_market_mfe)
+
+        print(f"  {'Metric':<30} {'Signal Days':>12} {'ALL Days':>12} {'Delta':>10}")
+        print(f"  {'─'*70}")
+        for _wl in ['15m', '30m', '60m']:
+            _s_dn = _df_sig[f'MFE_Dn_{_wl}'].mean()
+            _m_dn = _df_mkt[f'MFE_Dn_{_wl}'].mean()
+            print(f"  {'Avg MFE DN (favorable) ' + _wl:<30} {_s_dn:>11.2f}% {_m_dn:>11.2f}% {_s_dn - _m_dn:>+9.2f}%")
+        for _wl in ['15m', '30m', '60m']:
+            _s_up = _df_sig[f'MFE_Up_{_wl}'].mean()
+            _m_up = _df_mkt[f'MFE_Up_{_wl}'].mean()
+            print(f"  {'Avg MFE UP (adverse) ' + _wl:<30} {_s_up:>11.2f}% {_m_up:>11.2f}% {_s_up - _m_up:>+9.2f}%")
+
+        print(f"\n  {'':30} {'Signal':>12} {'Market':>12}")
+        print(f"  {'─'*58}")
+        for _wl in ['15m', '30m', '60m']:
+            _s3 = (_df_sig[f'MFE_Dn_{_wl}'] >= 3.0).mean() * 100
+            _m3 = (_df_mkt[f'MFE_Dn_{_wl}'] >= 3.0).mean() * 100
+            print(f"  {'≥3% DN rate ' + _wl:<30} {_s3:>11.1f}% {_m3:>11.1f}%")
+
+        print(f"\n  Signal days: {len(_df_sig)}  |  All days: {len(_df_mkt)}")
+
+        # ── D5: TP Reachability ──
+        if 'Trade_TP' in _df_sig.columns:
+            print(f"\n  ── D5: TP Reachability (signal days only) ──\n")
+            _sig_with_tp = _df_sig[_df_sig['Trade_TP'].notna()]
+            if len(_sig_with_tp) > 0:
+                for _wl in ['15m', '30m', '60m']:
+                    _reached = (_sig_with_tp[f'MFE_Dn_{_wl}'] >= _sig_with_tp['Trade_TP'] * 100).mean() * 100
+                    _avg_mfe = _sig_with_tp[f'MFE_Dn_{_wl}'].mean()
+                    _avg_tp = _sig_with_tp['Trade_TP'].mean() * 100
+                    print(f"  {_wl}: {_reached:>5.1f}% of signal days reached TP "
+                          f"(avg MFE: {_avg_mfe:.2f}%, avg TP: {_avg_tp:.2f}%)")
+
+        # ── D6: Probability calibration ──
+        print(f"\n  ── D6: Probability Calibration ──")
+        print(f"  (binned probability vs actual 60m MFE DN ≥ 3%)\n")
+        if 'Trade_Prob' in _df_sig.columns:
+            _sig_cal = _df_sig[_df_sig['Trade_Prob'].notna()].copy()
+            _sig_cal['Hit_3pct'] = _sig_cal['MFE_Dn_60m'] >= 3.0
+            _bins = [0, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+            _sig_cal['Prob_Bin'] = pd.cut(_sig_cal['Trade_Prob'], bins=_bins)
+            _cal = _sig_cal.groupby('Prob_Bin', observed=True).agg(
+                N=('Hit_3pct', 'count'),
+                Hit_Rate=('Hit_3pct', 'mean'),
+                Avg_MFE=('MFE_Dn_60m', 'mean'),
+                Avg_PnL=('Trade_PnL', 'mean'),
+            )
+            print(f"  {'Prob Bin':<15} {'N':>5} {'Hit Rate':>10} {'Avg MFE':>9} {'Avg PnL':>9}")
+            print(f"  {'─'*52}")
+            for idx, row in _cal.iterrows():
+                print(f"  {str(idx):<15} {row['N']:>5.0f} {row['Hit_Rate']:>9.1%} "
+                      f"{row['Avg_MFE']:>8.2f}% {row['Avg_PnL']:>+8.2f}%")
+
+        # ── D7: Diagnostic charts ──
+        print(f"\n  Generating diagnostic charts...")
+        fig_d, axes_d = plt.subplots(2, 3, figsize=(22, 12))
+        fig_d.suptitle(f'SHORT Diagnostic: Model Performance vs Market Opportunity\n'
+                       f'{BACKTEST_START} → {BACKTEST_END}', fontsize=13, fontweight='bold')
+
+        # D7a: Weekly PnL + signal count
+        ax = axes_d[0, 0]
+        weeks = sorted(df_all['Year_Week'].unique())
+        wk_pnl = []
+        wk_cnt = []
+        for wk in weeks:
+            wk_df = df_all[(df_all['Year_Week'] == wk) & (df_all['Filled'] == True)]
+            wk_pnl.append(wk_df['PnL'].mean() if len(wk_df) > 0 else 0)
+            wk_cnt.append(len(wk_df))
+        ax.bar(range(len(weeks)), wk_pnl,
+               color=['#2E7D32' if p >= 0 else '#C62828' for p in wk_pnl], alpha=0.7)
+        ax.set_xticks(range(len(weeks)))
+        ax.set_xticklabels([w.split('-W')[1] for w in weeks], fontsize=8)
+        ax.set_ylabel('Avg PnL per Trade (%)')
+        ax.set_title('Weekly Avg PnL')
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.grid(axis='y', alpha=0.3)
+        ax2 = ax.twinx()
+        ax2.plot(range(len(weeks)), wk_cnt, 'ko-', markersize=4, alpha=0.5)
+        ax2.set_ylabel('Signal Count', color='grey')
+
+        # D7b: MFE distribution — signal days vs all days (DN for SHORT)
+        ax = axes_d[0, 1]
+        ax.hist(_df_mkt['MFE_Dn_60m'], bins=50, alpha=0.5, color='grey', label='All days', density=True)
+        ax.hist(_df_sig['MFE_Dn_60m'], bins=30, alpha=0.7, color='#1565C0', label='Signal days', density=True)
+        ax.axvline(3, color='red', linewidth=1.5, linestyle='--', label='3% spike')
+        if 'Trade_TP' in _df_sig.columns and _df_sig['Trade_TP'].notna().any():
+            _avg_tp_pct = _df_sig['Trade_TP'].mean() * 100
+            ax.axvline(_avg_tp_pct, color='darkred', linewidth=1.5, linestyle=':', label=f'Avg TP ({_avg_tp_pct:.1f}%)')
+        ax.set_xlabel('60m MFE DN (%)')
+        ax.set_ylabel('Density')
+        ax.set_title('60m MFE DN: Signal Days vs All Days')
+        ax.legend(fontsize=8)
+        ax.set_xlim(-1, 15)
+
+        # D7c: Probability distribution
+        ax = axes_d[0, 2]
+        if 'Trade_Prob' in _df_sig.columns:
+            ax.hist(_df_sig['Trade_Prob'], bins=20, color='#FF6F00', alpha=0.7, edgecolor='black')
+        ax.set_xlabel('Model Probability')
+        ax.set_ylabel('Count')
+        ax.set_title('Signal Probability Distribution')
+        ax.grid(axis='y', alpha=0.3)
+
+        # D7d: TP reachability by time window
+        ax = axes_d[1, 0]
+        if 'Trade_TP' in _df_sig.columns and _df_sig['Trade_TP'].notna().any():
+            _reach_rates = []
+            _windows = ['15m', '30m', '60m']
+            for _wl in _windows:
+                _r = (_sig_with_tp[f'MFE_Dn_{_wl}'] >= _sig_with_tp['Trade_TP'] * 100).mean() * 100
+                _reach_rates.append(_r)
+            ax.bar(range(3), _reach_rates, color=['#C62828', '#FF6F00', '#2E7D32'], alpha=0.7)
+            ax.set_xticks(range(3))
+            ax.set_xticklabels(_windows)
+            ax.set_ylabel('% of signal days reaching TP')
+            ax.set_title('TP Reachability by Window')
+            for i, r in enumerate(_reach_rates):
+                ax.text(i, r + 1, f'{r:.1f}%', ha='center', fontsize=10)
+            ax.grid(axis='y', alpha=0.3)
+
+        # D7e: Outcome by week (stacked)
+        ax = axes_d[1, 1]
+        outcomes_by_wk = {'TP': [], 'SL': [], 'EOD': []}
+        for wk in weeks:
+            wk_df = df_all[(df_all['Year_Week'] == wk) & (df_all['Filled'] == True)]
+            n = len(wk_df) if len(wk_df) > 0 else 1
+            outcomes_by_wk['TP'].append((wk_df['Outcome'] == 'TP').sum() / n * 100)
+            outcomes_by_wk['SL'].append((wk_df['Outcome'] == 'SL').sum() / n * 100)
+            outcomes_by_wk['EOD'].append((wk_df['Outcome'] == 'EOD').sum() / n * 100)
+        x = range(len(weeks))
+        ax.bar(x, outcomes_by_wk['TP'], color='#2E7D32', alpha=0.7, label='TP')
+        ax.bar(x, outcomes_by_wk['SL'], bottom=outcomes_by_wk['TP'], color='#C62828', alpha=0.7, label='SL')
+        _bot = [a + b for a, b in zip(outcomes_by_wk['TP'], outcomes_by_wk['SL'])]
+        ax.bar(x, outcomes_by_wk['EOD'], bottom=_bot, color='#757575', alpha=0.7, label='EOD')
+        ax.set_xticks(x)
+        ax.set_xticklabels([w.split('-W')[1] for w in weeks], fontsize=8)
+        ax.set_ylabel('Outcome %')
+        ax.set_title('Trade Outcome by Week')
+        ax.legend(fontsize=8)
+
+        # D7f: Calibration scatter
+        ax = axes_d[1, 2]
+        if 'Trade_Prob' in _df_sig.columns and 'Trade_PnL' in _df_sig.columns:
+            _sig_plot = _df_sig[_df_sig['Trade_PnL'].notna()]
+            colors = ['#2E7D32' if p > 0 else '#C62828' for p in _sig_plot['Trade_PnL']]
+            ax.scatter(_sig_plot['Trade_Prob'], _sig_plot['MFE_Dn_60m'],
+                      c=colors, alpha=0.5, s=20)
+            ax.axhline(3, color='red', linewidth=1, linestyle='--', alpha=0.5)
+            ax.set_xlabel('Model Probability')
+            ax.set_ylabel('60m MFE DN (%)')
+            ax.set_title('Probability vs Actual MFE\n(green=profit, red=loss)')
+            ax.grid(alpha=0.3)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        _diag_path = '/tmp/backtest_short_diagnostic.png'
+        plt.savefig(_diag_path, dpi=150, bbox_inches='tight')
+        print(f"  Diagnostic chart saved: {_diag_path}")
+        if _IN_COLAB:
+            plt.show()
+        plt.close()
+
+    else:
+        print(f"  No MFE data computed — skipping diagnostic charts.")
+
+else:
+    print(f"  No trades found — diagnostic skipped.")
 
 
 # ==============================================================================

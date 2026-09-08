@@ -87,8 +87,8 @@ WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
 INFERENCE_DIR    = "Data/Inference_v2"
 PST              = pytz.timezone('America/Los_Angeles')
 
-BACKTEST_START   = '2026-08-03'
-BACKTEST_END     = '2026-08-24'
+BACKTEST_START   = '2026-08-10'
+BACKTEST_END     = '2026-09-07'
 
 TAIL_DAYS        = 45
 

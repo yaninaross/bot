@@ -1,12 +1,12 @@
-# %% ── Daily Scoring — ST SHORT MR-v2 M_MRV2_NEWEST3 ─────────────────────────
+# %% ── Daily Scoring — ST SHORT X_CONS5_F10R_MIN2 ─────────────────────────
 #
-# Spike Transformer SHORT — MR-v2 only, 3 newest folds for consensus
+# Spike Transformer SHORT — X_CONS5_F10R_MIN2 (5 models, ≥2 folds fired)
 #
 #   - 5 models loaded: MR-v2 F6/F7/F8/F9/F10
 #   - Hybrid config: best val_b_avg_pnl across all 5 MR-v2 folds
-#   - Consensus: 3 newest count — MR-v2 F8/F9/F10
+#   - Consensus: 5 models — L5-1 F7, L5-2 F7, MR-v2 F8/F9/F10, require ≥2 folds fired
 #   - F7+ tickers only included if val_b_avg_pnl >= 3.0%
-#   - M_MRV2_NEWEST3: score ALL tickers, count fires from 3 newest models,
+#   - X_CONS5_F10R_MIN2: score ALL tickers with 5 consensus models, require ≥2 folds fired,
 #     rank by (n_fires DESC, best_prob DESC), pick top MAX_TRADES
 #   - Score at minute 375 (6:15 AM PT), entry at minute 385 (6:25 AM PT)
 #   - FiLM regime conditioning (no separate regime filter)
@@ -86,6 +86,8 @@ FAMILIES = {
 }
 
 CONSENSUS_MODELS = {
+    ('L5-1', 7),
+    ('L5-2', 7),
     ('MR-v2', 8),
     ('MR-v2', 9),
     ('MR-v2', 10),
@@ -1020,9 +1022,9 @@ def print_dashboard(results, deploy_configs, run_ts):
 
     print()
     print(f"  {'='*W}")
-    print(f"  ST SHORT SIGNALS — MR-v2 M_MRV2_NEWEST3 (3 newest MR-v2)   {pst_str}")
+    print(f"  ST SHORT SIGNALS — X_CONS5_F10R_MIN2 (5 models, ≥2 folds fired)   {pst_str}")
     print(f"  {'='*W}")
-    print(f"  Strategy: M_MRV2_NEWEST3 (3 newest MR-v2, rank by n_fires+prob, max={MAX_TRADES})  |  "
+    print(f"  Strategy: X_CONS5_F10R_MIN2 (5 models, ≥2 folds fired, max={MAX_TRADES})  |  "
           f"Score: {SCORE_MINUTE // 60}:{SCORE_MINUTE % 60:02d} PST  |  "
           f"Entry: {ENTRY_MINUTE // 60}:{ENTRY_MINUTE % 60:02d} PST")
     for src in sorted(source_counts):
@@ -1131,7 +1133,7 @@ def print_dashboard(results, deploy_configs, run_ts):
                       f"[{r['horizon']} dump prob={r['prob']:.3f}]")
 
     print()
-    print(f"  Strategy: M_MRV2_NEWEST3 (3 newest MR-v2, max={MAX_TRADES})  |  "
+    print(f"  Strategy: X_CONS5_F10R_MIN2 (5 models, ≥2 folds fired, max={MAX_TRADES})  |  "
           f"Score {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} -> Entry {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PST  |  "
           f"FiLM conditioning")
     print(f"  {'='*W}")
@@ -1192,7 +1194,7 @@ def log_to_bigquery(results, run_ts):
             'close': r['close'],
             'filter_status': 'OK',
             'tpsl_mode': r['mode'],
-            'strategy': 'ST_SHORT_MRV2_NEWEST3',
+            'strategy': 'ST_SHORT_CONS5_F10R_MIN2',
             'model_version': mv,
         })
     bq_client = bigquery.Client()
@@ -1202,7 +1204,7 @@ def log_to_bigquery(results, run_ts):
         if errors:
             print(f"   BigQuery errors: {errors}")
         else:
-            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_MRV2_NEWEST3)")
+            print(f"   Logged {len(rows)} rows to {BQ_PREDICTIONS} (strategy=ST_SHORT_CONS5_F10R_MIN2)")
     except Exception as e:
         print(f"   BigQuery failed: {e}")
 
@@ -1235,7 +1237,7 @@ def _check_stitch_freshness():
 run_ts = datetime.now(pytz.utc)
 pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
 print(f"\n{'='*80}")
-print(f"  DAILY SCORING — ST SHORT MR-v2 M_MRV2_NEWEST3 (3 newest MR-v2) — {pst_str}")
+print(f"  DAILY SCORING — ST SHORT X_CONS5_F10R_MIN2 (5 models, ≥2 folds fired) — {pst_str}")
 print(f"{'='*80}")
 
 _check_stitch_freshness()
@@ -1247,6 +1249,16 @@ if now_minutes < SCORE_MINUTE:
 else:
     print(f"\n  Loading deploy configs from BQ (MR-v2 F6-F10)...")
     DEPLOY_CONFIGS, FAMILY_FOLD_CFGS = load_deploy_configs()
+
+    consensus_covered = set()
+    for fam_fold in CONSENSUS_MODELS:
+        consensus_covered |= set(FAMILY_FOLD_CFGS.get(fam_fold, {}).keys())
+    ghost = sorted(set(DEPLOY_CONFIGS) - consensus_covered)
+    if ghost:
+        for tk in ghost:
+            del DEPLOY_CONFIGS[tk]
+        print(f"    Removed {len(ghost)} ghost tickers (no consensus fold coverage): "
+              f"{', '.join(ghost)}")
 
     print(f"\n  Loading models and scaling stats...")
     load_models_and_meta(DEPLOY_CONFIGS, FAMILY_FOLD_CFGS)
@@ -1328,11 +1340,11 @@ else:
                       f"[{', '.join(fire_strs)}]"
                       + (f"  skip=[{', '.join(skip_strs)}]" if skip_strs else ""))
 
-    # --- Phase 3: M_CONSENSUS selection — rank by (n_fires DESC, conviction DESC) ---
-    candidates = [r for r in results if r['n_fires'] > 0]
+    # --- Phase 3: X_CONS5_F10R_MIN2 selection — require ≥2 folds fired, rank by (n_fires DESC, conviction DESC) ---
+    candidates = [r for r in results if r['n_fires'] >= 2]
     candidates.sort(key=lambda r: (-r['n_fires'], -r['sum_conviction']))
 
-    print(f"\n  M_CONSENSUS: {len(candidates)} tickers with ≥1 model firing")
+    print(f"\n  X_CONS5_F10R_MIN2: {len(candidates)} tickers with ≥2 models firing")
     if candidates:
         for i, r in enumerate(candidates):
             marker = " <- SELECTED" if i < MAX_TRADES else ""

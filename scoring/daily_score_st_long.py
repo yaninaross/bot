@@ -1,15 +1,18 @@
-# %% ── Daily Scoring — ST LONG M_CONS_6NEWEST (L5-1 + ASL6 + MR-v2) ──────────
+# %% ── Daily Scoring — ST LONG X_CONS_5NEWEST_MIN2 (5 newest models, ≥2 folds) ─
 #
-# Spike Transformer LONG — 3-Family Hybrid + M_CONS_6NEWEST selection
+# Spike Transformer LONG — 4-Family Hybrid + X_CONS_5NEWEST_MIN2 selection
 #
-#   - 10 models: L5-1 F5/F6/F7 + ASL6 F5/F6/F7 + MR-v2 F6/F7/F8/F9
-#   - 6 consensus models (top 6 newest):
-#       MR-v2 F9/F8/F7 (multires), L5-1 F7 (standard), ASL6 F7 (standard), L5-1 F6
-#   - Newest First priority for deploy config: MR-v2 F9 > F8 > F7 > L5-1/ASL6 F7 > F6
-#   - M_CONS_6NEWEST: score ALL tickers with all available models,
-#     count fires from 6 newest, rank by (n_fires DESC, best_prob DESC),
-#     pick top MAX_TRADES
-#   - MR-v2: MultiResSpikeTransformer (dual backbone 1m+15m, 153K params)
+#   - Models: L5-1 F5/F6/F7 + ASL6 F5/F6/F7 + MR-v2 F6/F7/F8/F9 + MR-v2-ADV F8
+#   - 5 consensus models (newest folds):
+#       L5-1 F7 (standard), ASL6 F7 (standard),
+#       MR-v2 F6 (multires 33f), MR-v2 F7 (multires 33f),
+#       MR-v2-ADV F8 (multires 45f)
+#   - MIN2 filter: require ≥2 DISTINCT FOLDS to fire before selecting a ticker
+#   - Newest First priority: MR-v2-ADV F8 > MR-v2 F9 > MR-v2 F7 > L5-1/ASL6 F7 > F6
+#   - X_CONS_5NEWEST_MIN2: score ALL tickers with all available models,
+#     count fires from 5 consensus models, require ≥2 distinct folds,
+#     rank by (n_folds_fired DESC, sum_conviction DESC), pick top MAX_TRADES
+#   - MR-v2-ADV: MultiResSpikeTransformer (dual 1m+15m, 45 features, 157K params)
 #   - Score at minute 375 (6:15 AM PT), entry at minute 385 (6:25 AM PT)
 #   - FiLM regime conditioning (no separate regime filter)
 #
@@ -94,22 +97,29 @@ FAMILIES = {
             9: 'spike_transformer_long_L5_1_multires_v2_fold9',
         },
     },
+    'MR-v2-ADV': {
+        'gcs_data':   'Algos/RA_MoE/long_L5_1_multires_v2_adv_data',
+        'gcs_models': 'Algos/RA_MoE/long_L5_1_multires_v2_adv_models',
+        'arch': 'multires_adv',
+        'bq_versions': {
+            8: 'spike_transformer_long_L5_1_multires_v2_adv_fold8',
+        },
+    },
 }
 
 CONSENSUS_MODELS = {
-    ('MR-v2', 9), ('MR-v2', 8), ('MR-v2', 7),
-    ('L5-1', 7), ('ASL6', 7),
-    ('L5-1', 6),
+    ('L5-1', 7), ('ASL6', 7), ('MR-v2', 6), ('MR-v2', 7), ('MR-v2-ADV', 8),
 }
+MIN_FOLDS_FIRED = 2
 
 NEWEST_FIRST_ORDER = [
-    ('MR-v2', 9), ('MR-v2', 8), ('MR-v2', 7),
+    ('MR-v2-ADV', 8), ('MR-v2', 9), ('MR-v2', 7),
     ('L5-1', 7), ('ASL6', 7),
     ('L5-1', 6), ('ASL6', 6),
 ]
 SCORE_MINUTE     = 375
 ENTRY_MINUTE     = 385
-MAX_TRADES       = 3
+MAX_TRADES       = 2
 TIME_STEPS       = 128
 D_MODEL          = 64
 N_HEADS          = 4
@@ -119,6 +129,7 @@ DROPOUT_RATE     = 0.1
 FILM_HIDDEN      = 64
 N_HORIZONS       = 3
 N_ASSET_F        = 33
+N_ASSET_F_ADV    = 45
 N_REGIME_F       = 22
 
 N_BLOCKS_15M     = 1
@@ -152,6 +163,17 @@ for _t in CONTEXT_ASSETS_LIST:
 CONTEXT_COLS.append('Time_Pos')
 
 ALL_COLS = ASSET_COLS + CONTEXT_COLS
+
+MICRO_COLS_ADVANCED = [
+    'LR_OFI', 'LR_VPIN', 'LR_Buy_Ratio', 'LR_Size_Imbalance',
+    'PE', 'LZC', 'Tick_Volatility', 'Shock_Persist',
+    'Trade_Size_CV', 'Trade_Intensity', 'Quote_Intensity', 'Spread_CV',
+]
+
+ASSET_COLS_ADV = (['Gap_Pct', 'RSI_14', 'RVOL', 'ATR_14', 'Bar_Is_Real'] +
+                  [f'ROC_{h}m' for h in ROC_HORIZONS] +
+                  MICRO_COLS + MICRO_COLS_ADVANCED)
+ALL_COLS_ADV = ASSET_COLS_ADV + CONTEXT_COLS  # 28 + 17 = 45
 
 REGIME_COLS = [
     'regime_rvol_15', 'regime_rvol_60', 'regime_rvol_128',
@@ -389,6 +411,50 @@ def engineer_asset(ticker, market_df):
     df['Time_Pos'] = np.clip((mins - 390) / 390, 0, 1)
     df['Bar_Is_Real'] = (df['Volume'] > 0).astype(float)
     return df.replace([np.inf, -np.inf], np.nan).fillna(0)
+
+
+def engineer_asset_adv(ticker, market_df):
+    df_feat = engineer_asset(ticker, market_df)
+    if df_feat is None:
+        return None
+    clean = ticker.replace("I:", "").replace("X:", "")
+    file_ticker = TICKER_FILE_MAP.get(clean, clean)
+    blob_path = f"Data/Inference/Microstructure_Advanced/{file_ticker}_1m_advanced_micro.parquet"
+    local_path = f"/tmp/_score_long_adv_{file_ticker}_adv_micro.parquet"
+    try:
+        gcs_client.bucket(BUCKET_NAME).blob(blob_path).download_to_filename(local_path)
+        df_adv = pd.read_parquet(local_path)
+        os.remove(local_path)
+        df_adv = df_adv.reset_index()
+        if isinstance(df_adv.columns, pd.MultiIndex):
+            df_adv.columns = [c[0] if isinstance(c, tuple) else c for c in df_adv.columns]
+        dt_cols = [c for c in df_adv.columns if pd.api.types.is_datetime64_any_dtype(df_adv[c])]
+        if dt_cols:
+            df_adv['Datetime'] = pd.to_datetime(df_adv[dt_cols[0]], utc=True)
+        else:
+            cand = next(
+                (c for c in df_adv.columns
+                 if c in ('Datetime', 'Date', 'Time', 'Timestamp', 'Level_0')),
+                df_adv.columns[0])
+            df_adv['Datetime'] = pd.to_datetime(df_adv[cand], utc=True)
+        df_adv = df_adv.set_index('Datetime')
+        df_adv = df_adv[~df_adv.index.duplicated(keep='first')].sort_index()
+        avail = [c for c in MICRO_COLS_ADVANCED if c in df_adv.columns]
+        if avail:
+            df_feat = df_feat.join(df_adv[avail], how='left')
+    except Exception as e:
+        print(f"      [ADV] Failed to load advanced micro for {ticker}: {e}")
+    for c in MICRO_COLS_ADVANCED:
+        if c not in df_feat.columns:
+            df_feat[c] = 0.0
+        else:
+            df_feat[c] = df_feat[c].fillna(0.0)
+    if os.path.exists(local_path):
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+    return df_feat.replace([np.inf, -np.inf], np.nan).fillna(0)
 
 
 def build_15min_features(df_1m):
@@ -661,9 +727,11 @@ class MultiResSpikeTransformer(keras.Model):
 # ==============================================================================
 _model_std = None
 _model_mr = None
+_model_adv = None
 _fold_weights = {}
 _current_key_std = None
 _current_key_mr = None
+_current_key_adv = None
 _family_meta = {}
 
 
@@ -719,14 +787,22 @@ def _ensure_file(gcs_path, local_path):
 
 def _get_model_for_family(family):
     arch = FAMILIES[family].get('arch', 'standard')
-    return _model_mr if arch == 'multires' else _model_std
+    if arch == 'multires_adv':
+        return _model_adv
+    elif arch == 'multires':
+        return _model_mr
+    return _model_std
 
 
 def _ensure_fold_loaded(family, fold_id):
-    global _current_key_std, _current_key_mr
+    global _current_key_std, _current_key_mr, _current_key_adv
     key = (family, fold_id)
     arch = FAMILIES[family].get('arch', 'standard')
-    if arch == 'multires':
+    if arch == 'multires_adv':
+        if _current_key_adv != key:
+            _load_keras3_weights(_model_adv, _fold_weights[key])
+            _current_key_adv = key
+    elif arch == 'multires':
         if _current_key_mr != key:
             _load_keras3_weights(_model_mr, _fold_weights[key])
             _current_key_mr = key
@@ -737,7 +813,8 @@ def _ensure_fold_loaded(family, fold_id):
 
 
 def load_models_and_meta(deploy_configs, family_fold_cfgs=None):
-    global _model_std, _model_mr, _fold_weights, _current_key_std, _current_key_mr, _family_meta
+    global _model_std, _model_mr, _model_adv, _fold_weights
+    global _current_key_std, _current_key_mr, _current_key_adv, _family_meta
 
     all_cfgs = list(deploy_configs.values())
     if family_fold_cfgs:
@@ -762,14 +839,15 @@ def load_models_and_meta(deploy_configs, family_fold_cfgs=None):
     gc.collect()
 
     need_std = any(FAMILIES[f].get('arch', 'standard') == 'standard' for f in needed_families)
-    need_mr = any(FAMILIES[f].get('arch', 'standard') == 'multires' for f in needed_families)
+    need_mr  = any(FAMILIES[f].get('arch', 'standard') == 'multires' for f in needed_families)
+    need_adv = any(FAMILIES[f].get('arch', 'standard') == 'multires_adv' for f in needed_families)
 
     if need_std:
         _model_std = SpikeTransformer(name='spike_transformer')
         dummy_seq = tf.zeros((1, TIME_STEPS, N_ASSET_F))
         dummy_reg = tf.zeros((1, N_REGIME_F))
         _model_std({'seq_input': dummy_seq, 'regime_input': dummy_reg})
-        print(f"   Standard SpikeTransformer: {_model_std.count_params():,} params")
+        print(f"   Standard SpikeTransformer (33f): {_model_std.count_params():,} params")
 
     if need_mr:
         _model_mr = MultiResSpikeTransformer(name='multires_spike_transformer')
@@ -777,7 +855,15 @@ def load_models_and_meta(deploy_configs, family_fold_cfgs=None):
         dummy_15m = tf.zeros((1, TIME_STEPS_15M, N_LOWRES_F))
         dummy_reg = tf.zeros((1, N_REGIME_F))
         _model_mr({'seq_input': dummy_seq, 'seq_15m_input': dummy_15m, 'regime_input': dummy_reg})
-        print(f"   MultiResSpikeTransformer: {_model_mr.count_params():,} params")
+        print(f"   MultiResSpikeTransformer (33f): {_model_mr.count_params():,} params")
+
+    if need_adv:
+        _model_adv = MultiResSpikeTransformer(name='multires_adv')
+        dummy_seq_45 = tf.zeros((1, TIME_STEPS, N_ASSET_F_ADV))
+        dummy_15m = tf.zeros((1, TIME_STEPS_15M, N_LOWRES_F))
+        dummy_reg = tf.zeros((1, N_REGIME_F))
+        _model_adv({'seq_input': dummy_seq_45, 'seq_15m_input': dummy_15m, 'regime_input': dummy_reg})
+        print(f"   MultiResSpikeTransformer ADV (45f): {_model_adv.count_params():,} params")
 
     needed_keys = sorted(set((cfg['family'], cfg['fold']) for cfg in all_cfgs))
     for family_name, fold_id in needed_keys:
@@ -799,7 +885,10 @@ def load_models_and_meta(deploy_configs, family_fold_cfgs=None):
     first_key = needed_keys[0]
     first_model = _get_model_for_family(first_key[0])
     _load_keras3_weights(first_model, _fold_weights[first_key])
-    if FAMILIES[first_key[0]].get('arch', 'standard') == 'multires':
+    first_arch = FAMILIES[first_key[0]].get('arch', 'standard')
+    if first_arch == 'multires_adv':
+        _current_key_adv = first_key
+    elif first_arch == 'multires':
         _current_key_mr = first_key
     else:
         _current_key_std = first_key
@@ -843,10 +932,13 @@ def score_all_models(ticker, df_feat, regime_df, run_ts, family_fold_cfgs, df_15
 
         scaling_stats = _family_meta[family_name]['scaling_stats']
         regime_stats = _family_meta[family_name]['regime_stats']
-        is_multires = FAMILIES[family_name].get('arch', 'standard') == 'multires'
+        arch = FAMILIES[family_name].get('arch', 'standard')
+        is_multires = arch in ('multires', 'multires_adv')
+        is_adv = arch == 'multires_adv'
 
-        df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
-        XA = df_scaled[ALL_COLS].values.astype(np.float32)
+        feature_cols = ALL_COLS_ADV if is_adv else ALL_COLS
+        df_scaled = apply_scaling(df_feat, scaling_stats, feature_cols)
+        XA = df_scaled[feature_cols].values.astype(np.float32)
         seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
 
         regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
@@ -942,11 +1034,14 @@ def score_ticker(ticker, cfg, df_feat, regime_df, run_ts, df_15m=None):
     family = cfg['family']
     scaling_stats = _family_meta[family]['scaling_stats']
     regime_stats = _family_meta[family]['regime_stats']
-    is_multires = FAMILIES[family].get('arch', 'standard') == 'multires'
+    arch = FAMILIES[family].get('arch', 'standard')
+    is_multires = arch in ('multires', 'multires_adv')
+    is_adv = arch == 'multires_adv'
 
-    df_scaled = apply_scaling(df_feat, scaling_stats, ALL_COLS)
+    feature_cols = ALL_COLS_ADV if is_adv else ALL_COLS
+    df_scaled = apply_scaling(df_feat, scaling_stats, feature_cols)
 
-    XA = df_scaled[ALL_COLS].values.astype(np.float32)
+    XA = df_scaled[feature_cols].values.astype(np.float32)
     seq_batch = XA[row_idx - TIME_STEPS:row_idx][np.newaxis]
 
     regime_at_entry = regime_df.iloc[regime_df.index.get_indexer(
@@ -1044,9 +1139,9 @@ def print_dashboard(results, deploy_configs, run_ts):
 
     print()
     print(f"  {'='*W}")
-    print(f"  ST LONG SIGNALS — M_CONS_6NEWEST (L5-1 + ASL6 + MR-v2)   {pst_str}")
+    print(f"  ST LONG SIGNALS — X_CONS_5NEWEST_MIN2 (L5-1 F7 + ASL6 F7 + MR-v2 F6/F7 + ADV F8, ≥2 folds)   {pst_str}")
     print(f"  {'='*W}")
-    print(f"  Strategy: M_CONS_6NEWEST (6 newest consensus, max={MAX_TRADES})  |  "
+    print(f"  Strategy: X_CONS_5NEWEST_MIN2 (5 consensus, ≥{MIN_FOLDS_FIRED} folds, max={MAX_TRADES})  |  "
           f"Score: {SCORE_MINUTE // 60}:{SCORE_MINUTE % 60:02d} PST  |  "
           f"Entry: {ENTRY_MINUTE // 60}:{ENTRY_MINUTE % 60:02d} PST")
     for src in sorted(source_counts):
@@ -1099,7 +1194,7 @@ def print_dashboard(results, deploy_configs, run_ts):
     print(f"  Signals:   {len(signals)}/{len(results)}" +
           (f"  ({', '.join(r['ticker'] for r in signals)})" if signals else ""))
     if signals:
-        print(f"  Consensus: {len(CONSENSUS_MODELS)} models (6 newest)")
+        print(f"  Consensus: {len(CONSENSUS_MODELS)} models (5NEWEST_MIN2, ≥{MIN_FOLDS_FIRED} folds)")
 
     if signals:
         for family, fold in NEWEST_FIRST_ORDER:
@@ -1152,7 +1247,7 @@ def print_dashboard(results, deploy_configs, run_ts):
                       f"[{r['horizon']} spike prob={r['prob']:.3f}]")
 
     print()
-    print(f"  Strategy: M_CONS_6NEWEST (6 newest consensus, max={MAX_TRADES})  |  "
+    print(f"  Strategy: X_CONS_5NEWEST_MIN2 (5 consensus, ≥{MIN_FOLDS_FIRED} folds, max={MAX_TRADES})  |  "
           f"Score {SCORE_MINUTE//60}:{SCORE_MINUTE%60:02d} -> Entry {ENTRY_MINUTE//60}:{ENTRY_MINUTE%60:02d} PST  |  "
           f"FiLM conditioning")
     print(f"  {'='*W}")
@@ -1213,7 +1308,7 @@ def log_to_bigquery(results, run_ts):
             'close': r['close'],
             'filter_status': 'OK',
             'tpsl_mode': r['mode'],
-            'strategy': 'ST_LONG_M_CONS_6NEWEST',
+            'strategy': 'ST_LONG_X_CONS_5NEWEST_MIN2',
             'model_version': mv,
         })
     bq_client = bigquery.Client()
@@ -1223,7 +1318,7 @@ def log_to_bigquery(results, run_ts):
         if errors:
             print(f"   BigQuery errors: {errors}")
         else:
-            print(f"   Logged {len(rows)} rows to {BQ_TABLE} (strategy=ST_LONG_M_CONS_6NEWEST)")
+            print(f"   Logged {len(rows)} rows to {BQ_TABLE} (strategy=ST_LONG_X_CONS_5NEWEST_MIN2)")
     except Exception as e:
         print(f"   BigQuery failed: {e}")
 
@@ -1256,7 +1351,7 @@ def _check_stitch_freshness():
 run_ts = datetime.now(pytz.utc)
 pst_str = run_ts.astimezone(PST).strftime('%Y-%m-%d %I:%M %p PST')
 print(f"\n{'='*80}")
-print(f"  DAILY SCORING — ST LONG M_CONS_6NEWEST — {pst_str}")
+print(f"  DAILY SCORING — ST LONG X_CONS_5NEWEST_MIN2 — {pst_str}")
 print(f"{'='*80}")
 
 _check_stitch_freshness()
@@ -1302,12 +1397,16 @@ else:
         print(f"\n  Scoring {family} F{fold_id} ({len(tickers)} tickers)...")
         for ticker in tickers:
             cfg = DEPLOY_CONFIGS[ticker]
-            df_feat = engineer_asset(ticker, market_df)
+            arch = FAMILIES[cfg['family']].get('arch', 'standard')
+            if arch == 'multires_adv':
+                df_feat = engineer_asset_adv(ticker, market_df)
+            else:
+                df_feat = engineer_asset(ticker, market_df)
             if df_feat is None:
                 print(f"      {ticker}: SKIP — load_master failed")
                 continue
             _feat_cache[ticker] = df_feat
-            is_mr = FAMILIES[cfg['family']].get('arch', 'standard') == 'multires'
+            is_mr = arch in ('multires', 'multires_adv')
             df_15m = build_15min_features(df_feat) if is_mr else None
             if df_15m is not None:
                 _15m_cache[ticker] = df_15m
@@ -1323,6 +1422,7 @@ else:
     print(f"\n  Phase 2: Multi-model consensus scoring ({len(results)} tickers × {len(CONSENSUS_MODELS)} consensus models)...")
     for r in results:
         r['n_fires'] = 0
+        r['n_folds_fired'] = 0
         r['n_available'] = 1
         r['consensus'] = None
         r['best_fire_prob'] = 0.0
@@ -1331,9 +1431,17 @@ else:
 
     for r in results:
         ticker = r['ticker']
+        needs_adv = any(
+            FAMILIES[cfgs[ticker]['family']].get('arch') == 'multires_adv'
+            for (fam, fold), cfgs in FAMILY_FOLD_CFGS.items()
+            if ticker in cfgs
+        )
         df_feat = _feat_cache.get(ticker)
+        if needs_adv and df_feat is not None and 'LR_OFI' not in df_feat.columns:
+            df_feat = engineer_asset_adv(ticker, market_df)
+            _feat_cache[ticker] = df_feat
         if df_feat is None:
-            df_feat = engineer_asset(ticker, market_df)
+            df_feat = engineer_asset_adv(ticker, market_df) if needs_adv else engineer_asset(ticker, market_df)
         if df_feat is None:
             continue
         df_15m = _15m_cache.get(ticker)
@@ -1344,6 +1452,7 @@ else:
         if consensus:
             r['consensus'] = consensus
             r['n_fires'] = consensus['n_fires']
+            r['n_folds_fired'] = len(set(s['fold'] for s in consensus['fires']))
             r['n_available'] = consensus['n_available']
             r['best_fire_prob'] = consensus['best_fire_prob']
             r['sum_conviction'] = sum(s['prob'] / max(s['thresh'], 1e-6) for s in consensus['fires'])
@@ -1353,18 +1462,25 @@ else:
                 skip_strs = [f"{s['family']}F{s['fold']}={s['prob']:.3f}"
                              for s in consensus['all_scores'] if not s['fired']]
                 print(f"    {ticker}: {consensus['n_fires']}/{consensus['n_available']} fired "
+                      f"({r['n_folds_fired']} folds) "
                       f"[{', '.join(fire_strs)}]"
                       + (f"  skip=[{', '.join(skip_strs)}]" if skip_strs else ""))
 
-    # --- Phase 3: M_CONS_6NEWEST selection — rank by (n_fires DESC, conviction DESC) ---
-    candidates = [r for r in results if r['n_fires'] > 0]
-    candidates.sort(key=lambda r: (-r['n_fires'], -r['sum_conviction']))
+    # --- Phase 3: X_CONS_5NEWEST_MIN2 — require ≥2 distinct folds, rank by (n_folds DESC, conviction DESC) ---
+    candidates = [r for r in results if r['n_folds_fired'] >= MIN_FOLDS_FIRED]
+    candidates.sort(key=lambda r: (-r['n_folds_fired'], -r['sum_conviction']))
 
-    print(f"\n  M_CONS_6NEWEST: {len(candidates)} tickers with ≥1 model firing")
+    all_with_fires = [r for r in results if r['n_fires'] > 0]
+    filtered_out = [r for r in all_with_fires if r['n_folds_fired'] < MIN_FOLDS_FIRED]
+    print(f"\n  X_CONS_5NEWEST_MIN2: {len(all_with_fires)} tickers with ≥1 fire, "
+          f"{len(candidates)} pass MIN2 (≥{MIN_FOLDS_FIRED} folds)")
+    if filtered_out:
+        filt_strs = [f"{r['ticker']}({r['n_fires']}M,{r['n_folds_fired']}F)" for r in filtered_out]
+        print(f"  Filtered by MIN2: {', '.join(filt_strs)}")
     if candidates:
         for i, r in enumerate(candidates):
             marker = " <- SELECTED" if i < MAX_TRADES else ""
-            print(f"    #{i+1} {r['ticker']:<6} fires={r['n_fires']}/{r['n_available']}  "
+            print(f"    #{i+1} {r['ticker']:<6} folds={r['n_folds_fired']} fires={r['n_fires']}/{r['n_available']}  "
                   f"conviction={r['sum_conviction']:.3f}  hyb_prob={r['prob']:.3f}{marker}")
 
     selected = candidates[:MAX_TRADES]
@@ -1374,7 +1490,7 @@ else:
 
     if len(candidates) > MAX_TRADES:
         dropped = candidates[MAX_TRADES:]
-        drop_strs = [f"{r['ticker']}({r['n_fires']}M,conv={r['sum_conviction']:.3f})" for r in dropped]
+        drop_strs = [f"{r['ticker']}({r['n_folds_fired']}F,conv={r['sum_conviction']:.3f})" for r in dropped]
         print(f"  Dropped ({len(dropped)}): {', '.join(drop_strs)}")
 
     print_dashboard(results, DEPLOY_CONFIGS, run_ts)
