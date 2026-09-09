@@ -307,6 +307,131 @@ The LLM even acknowledges these risks in its bear_case field — but still calls
 
 ---
 
+## V3.4 — SEC EDGAR Timestamps, Selected/Not-Selected Output, Catalyst Weights, Mismatch Index (2026-09-09)
+
+### Problem 1: LLM Hallucinated Timestamps → Wrong Freshness Scoring
+
+**Root cause:** The `news_time` field in Stage 1 relied on the LLM extracting the article's publish timestamp. For earnings catalysts, the LLM frequently hallucinated the timestamp — either echoing the current scan time or inventing a plausible-sounding time. This propagated into freshness multipliers (which control 0.02x–1.5x of composite score), causing stale events to score high or fresh events to score low.
+
+**Example:** COO earnings were released at 4:34 PM ET on Sep 9 (confirmed via SEC EDGAR). The LLM reported `news_time = 2026-09-09 05:45 PM ET` — the scan time itself, not the earnings release time. While the EARNINGS_GAP_DOWN gate correctly killed COO, wrong timestamps on other tickers distort scoring silently.
+
+**Prior attempt — Polygon spike time as proxy:** Replaced all LLM timestamps with the Polygon price spike time (when price first moved >3%). This was naive — any event (earthquake, sector rotation, macro) can cause a 3% move. Polygon spike ≠ earnings release.
+
+**Prior attempt — Gemini web search:** Used Gemini to search for "when did {ticker} release earnings." This has the same reliability problem — an LLM searching articles still returns article publication time, not the actual earnings release time.
+
+**Solution — SEC EDGAR Submissions API (structured data):**
+
+New function `fetch_sec_filing_time(ticker, filing_date)` in both scanners:
+1. **CIK lookup via Polygon**: `GET /v3/reference/tickers/{ticker}` → extracts `cik` field
+2. **SEC EDGAR query**: `GET data.sec.gov/submissions/CIK{cik_padded}.json` → returns all filings with exact `acceptanceDateTime`
+3. **8-K match**: Finds `form == '8-K'` filed on the target date. For earnings, the 8-K filing acceptance time IS the authoritative earnings release time.
+4. **UTC→ET conversion**: `acceptanceDateTime` is UTC ISO 8601 → converted to ET string
+
+**Verification:** COO on Sep 9 → `acceptanceDateTime: 2026-09-09T16:34:31.000Z` = 4:34 PM ET. Confirmed correct.
+
+**Timestamp hierarchy (3 tiers):**
+| Priority | Source | Applies to | Reliability |
+|----------|--------|-----------|-------------|
+| 1 | SEC EDGAR 8-K | earnings, deal, regulatory, offering | Authoritative (structured government data) |
+| 2 | Polygon spike time | All other catalyst types | Approximate (any event can cause >3% move) |
+| 3 | LLM timestamp | Fallback only | Unreliable (hallucinated publish times) |
+
+**Implementation details:**
+- `verify_and_correct_event_timing()` updated in both scanners
+- SEC lookup runs first for catalyst types in `{'earnings', 'deal', 'regulatory', 'offering'}`
+- Also checks `YESTERDAY_STR` for after-hours earnings from prior day
+- Source tracked via `entry['news_time_source']` = `'sec_edgar'`, `'polygon_spike'`, or `'llm'`
+- `YESTERDAY_STR` constant added to premarket scanner (discovery already had it)
+- SEC EDGAR requires `User-Agent` header (SEC policy); set to `'ScannerBot admin@example.com'`
+
+### Problem 2: Output Didn't Distinguish Selected vs Not-Selected
+
+**Root cause:** Both scanners printed all candidates in a flat ranked list. The user couldn't quickly tell which signals were actually selected (would be traded) vs which were analyzed but rejected by gates, low confidence, or rank cutoff.
+
+**Changes — Both scanners:**
+
+1. **`_is_selected()` function**: `rank <= top_n AND confidence >= MIN_CONFIDENCE_FOR_SELECTION AND NOT gate_reason`
+   - Premarket checks `_gate_reason` (underscore prefix); discovery checks `gate_reason`
+
+2. **Summary tables split into two sections:**
+   ```
+   ═══ SELECTED (N) ═══
+   <header row>
+   ──────────────────────
+   1. TICKER  ...
+   2. TICKER  ...
+
+   ─── NOT SELECTED (N) ───
+   <header row>
+   ──────────────────────
+   1. TICKER  ...
+   ```
+
+3. **Detail cards get selection tag:**
+   ```
+   ┌─ 1. TICKER ✅ SELECTED  ▲ LONG  conf=7/10 ...
+   ┌─ 2. TICKER ⛔ NOT SELECTED  ▲ LONG  conf=2/10 ...
+   ```
+
+4. **Detail cards show ALL entries** (not just top N) so rejected signals are visible for debugging
+
+5. **BQ `selected` flag fixed (premarket):** Was `rank <= N AND conf >= 4`. Now also checks `AND NOT _gate_reason` for consistency with discovery scanner.
+
+### Problem 3: Catalyst-Type Weights Not Applied
+
+**Root cause:** PnL analysis (Sep 3-9) showed massive variance by catalyst type. Regulatory had 0% win rate, deal had 20% WR, while macro/breaking had 67% WR. Without type-based weighting, the composite score treated all catalyst types equally.
+
+**Change — Both scanners:**
+
+`CATALYST_TYPE_WEIGHTS` dict applied after freshness multiplier:
+
+| Catalyst Type | Weight | Rationale (Sep 3-9 data) |
+|--------------|--------|--------------------------|
+| macro | 1.2 | n=3, +2.9% avg, 67% WR |
+| breaking | 1.2 | n=12, +2.7% avg, 67% WR |
+| insider | 1.2 | n=5, +1.6%, 100% WR (small sample) |
+| offering | 1.0 | n=8, 0.0% avg, 50% WR |
+| analyst | 1.0 | n=15, 0.0% avg, 47% WR |
+| premarket_move | 0.5 | n=9, -0.3% avg, 11% WR |
+| earnings | 0.7 | n=24, -0.5% avg, 38% WR |
+| deal | 0.6 | n=25, -0.8% avg, 20% WR |
+| regulatory | 0.4 | n=10, -1.5% avg, 0% WR |
+
+**Note:** These weights are interim. Tagged with "RE-EVALUATE as data accumulates."
+
+### Problem 4: Mismatch Index Not Applied
+
+**Root cause:** Selection inversion analysis showed that large premarket gaps on weak catalysts (low LLM confidence) were consistently FPs. The price move was retail FOMO, not fundamentals.
+
+**Change — Both scanners:**
+
+`mismatch_index = gap_pct / confidence` computed for each candidate:
+
+| Mismatch | Direction | Multiplier | Rationale |
+|----------|-----------|-----------|-----------|
+| > 2.0 | LONG | 0.5x | Big gap, weak catalyst → FOMO, likely fade |
+| > 2.0 | SHORT | 1.5x | Big gap, weak catalyst → fade is correct call |
+| < 0.5 | LONG | 1.3x | Small gap, strong catalyst → room to run |
+| else | any | 1.0x | Neutral |
+
+`mismatch_index` logged to BQ for backtesting.
+
+### Sep 9 Latest Run Results
+
+**Discovery (14:45):** 5 deep candidates, 0 selected. All correctly rejected:
+- DHR (conf=1): Self-contradiction + pre-earnings gate
+- WBD (conf=2): Low confidence
+- COO (conf=3): Earnings gap down -20.7%
+- CMCSA (conf=2): Low confidence
+- CSR (conf=2): Low confidence + stale
+
+**Premarket (15:14):** 1 deep candidate (NEE), 0 selected:
+- NEE (conf=3): Stale news (fresh=0.08, >12h old) + deal weight (0.6) → composite=0.3
+
+**Assessment:** Quiet day with no strong fresh catalysts. Zero selections is correct behavior — the system should not force trades when no edge exists.
+
+---
+
 ## Pending / Future Improvements
 
 ### Nightly Auto-Evaluation Job

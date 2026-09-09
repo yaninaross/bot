@@ -11,7 +11,7 @@ Two scanners run daily before market open:
 | **Premarket** | `premarket_scanner.py` (1603 lines) | Find catalysts for tracked stocks | Fixed 68-ticker deploy list | Known universe |
 | **Discovery** | `discovery_scanner.py` (1589 lines) | Discover movers outside deploy universe | 14 thematic search queries | Any US equity |
 
-**Version:** V2 (deployed 2026-09-07). V1 had critical false-positive issues from Gemini price hallucinations and stale timestamp misattribution.
+**Version:** V3.4 (deployed 2026-09-09). V1 had Gemini price hallucinations. V2 added Polygon verification. V3 added quality gates + pattern library. V3.4 added SEC EDGAR timestamps, catalyst-type weights, mismatch index, selected/not-selected output labeling.
 
 ---
 
@@ -88,13 +88,18 @@ Sequential Claude Sonnet 4.6 calls (via Vertex AI, Gemini fallback). Each candid
 
 The deep analysis prompt enforces the **remaining move** concept: separating total catalyst impact from what's already absorbed pre-market. Returns confidence (1-10), remaining_move_pct, move_is_exhausted flag, reasoning, bull/bear cases, M&A role (acquirer vs target), and news timeline.
 
-### Post-Processing: Polygon Verification (V2)
+### Post-Processing: Timestamp Verification + Quality Gates (V3.4)
 Runs `verify_and_correct_event_timing()` on all shortlisted candidates:
 
-1. **Event timing**: Scans Polygon 5-min bars to find when price first moved >3% from prior close. If this is >1 hour older than the article timestamp, overrides `news_time` with the actual event time.
-2. **Absorption**: Calculates `absorbed_frac = 1 - (remaining / total_move)`. Marks `move_is_exhausted` if >80% absorbed or price reversed past origin.
-3. **Stale filter**: Hard cutoff at `MAX_NEWS_AGE_HOURS = 16`. Any candidate whose corrected news_time is older gets dropped.
-4. **Freshness multiplier**: Time-decay applied to composite score:
+1. **SEC EDGAR timestamp** (V3.4): For earnings/deal/regulatory/offering catalysts, queries SEC EDGAR Submissions API for 8-K filing acceptance time. This is authoritative structured data — not an LLM interpretation. Checks today and yesterday (for after-hours earnings). Source tracked as `news_time_source = 'sec_edgar'`.
+2. **Polygon spike time**: For non-SEC catalyst types, scans Polygon 5-min bars to find when price first moved >3% from prior close. If >1 hour older than article timestamp, overrides `news_time`. Source: `'polygon_spike'`.
+3. **LLM timestamp fallback**: If neither SEC nor Polygon produces a timestamp, keeps the original LLM-extracted article publish time. Source: `'llm'`.
+4. **Absorption**: Calculates `absorbed_frac = 1 - (remaining / total_move)`. Marks `move_is_exhausted` if >80% absorbed AND <3% absolute remaining, or price reversed past origin.
+5. **Stale filter**: Hard cutoff at `MAX_NEWS_AGE_HOURS = 16`. Overnight AH events (hour >= 16, age <= 20h) are exempted.
+6. **Freshness multiplier**: Time-decay applied to composite score:
+7. **Catalyst-type weight**: Empirical multiplier by catalyst type (0.4x–1.2x).
+8. **Mismatch index**: `gap_pct / confidence` — penalizes LONG on high-gap/low-confidence (FOMO), boosts SHORT.
+9. **Quality gates**: Self-contradiction, low-conf, premarket mismatch, earnings gap-down, momentum flip, clinical data trap.
 
 | News Age | Multiplier |
 |----------|-----------|
@@ -130,14 +135,23 @@ Runs `verify_and_correct_event_timing()` on all shortlisted candidates:
 
 ## Scoring Formula
 
-**Composite score** = `confidence * abs(remaining_move_pct) * freshness_multiplier`
+**Composite score** = `confidence * abs(remaining_move_pct) * freshness_multiplier * catalyst_weight * mismatch_multiplier`
 
 Where:
 - `confidence` (1-10): Claude's assessment of trade conviction
 - `remaining_move_pct`: Expected % move after 6:25 AM PT entry
-- `freshness_multiplier`: Time-decay based on corrected news age
+- `freshness_multiplier`: Time-decay based on corrected news age (0.02x–1.5x)
+- `catalyst_weight`: Empirical weight by catalyst type (0.4x–1.2x, from Sep 3-9 backtest)
+- `mismatch_multiplier`: Gap/confidence ratio penalty (0.5x–1.5x; high gap + low confidence = FOMO)
 
-Final output: top 5 LONG + top 5 SHORT by composite score.
+**Selection criteria**: `rank <= 5 AND confidence >= 4 AND NOT gate_reason`
+
+**Timestamp hierarchy for `news_time`**:
+1. SEC EDGAR 8-K acceptance time (earnings/deal/regulatory/offering)
+2. Polygon spike time (all other catalyst types, >3% move)
+3. LLM article timestamp (fallback only)
+
+Final output: top 5 LONG + top 5 SHORT by composite score, split into SELECTED vs NOT SELECTED sections.
 
 ---
 
@@ -153,7 +167,7 @@ BUCKET_NAME      = "time-series-bucket-ys"
 OUTPUT_DIR       = "Data/Scanner"
 BQ_SCANNER_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
 POLYGON_API_KEY  = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-SCANNER_VERSION  = "V2"
+SCANNER_VERSION  = "V3"
 
 MAX_WORKERS_SCAN   = 5
 TOP_N_DEEP         = 15
@@ -201,7 +215,8 @@ Fallback price lookup (only used if Polygon fails) and earnings date verificatio
 | `get_prev_session_close(ticker)` | T-1 closing price | Ticker, ref_date | `{close, date}` |
 | `get_actual_event_time(ticker)` | When price first moved >3% | Ticker, ref_date, threshold | `{event_time_dt, prev_close, peak_price, current_price}` |
 | `calculate_absorption(prev, peak, current)` | How much of move is left | 3 prices | `{total_move_pct, remaining_pct, absorbed_pct, is_exhausted}` |
-| `verify_and_correct_event_timing(entry)` | Orchestrator: correct timestamps + absorption | Shortlist entry dict | Mutates entry in-place with `polygon_*` fields |
+| `verify_and_correct_event_timing(entry)` | Orchestrator: SEC EDGAR → Polygon → LLM timestamp hierarchy + absorption | Shortlist entry dict | Mutates entry in-place with `polygon_*` fields, `news_time_source` |
+| `fetch_sec_filing_time(ticker, date)` | SEC EDGAR 8-K acceptance time lookup | Ticker, filing date | ET datetime string or None |
 
 ---
 
@@ -294,3 +309,43 @@ Stage 1.5 now fetches `floatShares`, `shortPercentOfFloat`, and `marketCap` from
 
 ### 5. Discovery scanner deduplication
 When a ticker is found by multiple thematic queries, all contexts are now concatenated (`_all_themes`, `_all_catalysts`) and injected into Claude's prompt as "MULTIPLE DISCOVERY THEMES" instead of silently overwriting with the higher-move entry.
+
+---
+
+## V3 — Quality Gates + Pattern Library (2026-09-08)
+
+See [SCANNER_CHANGELOG.md](SCANNER_CHANGELOG.md) for full details. Summary of cumulative changes V3 → V3.4:
+
+### V3.0: Quality gates (self-contradiction, penny stock, pre-earnings, low-conf, premarket mismatch), BQ pattern library with few-shot retrieval, catalyst impact reference table in prompts, proven trade archetypes.
+
+### V3.1: Recovery bounce gap screener (`fetch_20d_high()`), zone classification (DEEP_RECOVERY / MODERATE_RECOVERY / MILD_DIP / NEAR_HIGHS), AEHR dual-signal fix (non-deep tickers log NEUTRAL).
+
+### V3.2: Exhausted SHORT gate, clinical trial data trap gate.
+
+### V3.3: 3-layer momentum flip (enriched context → prompt rules → regime-aware gate). Exhausted SHORTs flipped to LONG in risk-on regime instead of killed.
+
+### V3.4 (current): SEC EDGAR timestamps (authoritative 8-K filing times for earnings/deal/regulatory/offering), catalyst-type weights (empirical from Sep 3-9 backtest), mismatch index (gap/confidence ratio), selected/not-selected output labeling, BQ `selected` flag fix in premarket scanner.
+
+---
+
+## Known Challenges & Limitations
+
+### 1. Selection Inversion (Partially Addressed)
+Selected signals have historically underperformed rejected ones. Root cause: LLM confidence and remaining_move_pct are anti-predictive. V3.4 mitigates via catalyst weights and mismatch index, but the composite ranking may still be inversely correlated with actual PnL. The quality gates act as a floor (filter obvious FPs) but don't fix the ranking order.
+
+### 2. LLM Timestamp Unreliability (Addressed by SEC EDGAR)
+LLMs hallucinate article publish times, especially for earnings. Three failure modes observed:
+- Echo current scan time as news_time
+- Invent plausible time (e.g., "5:00 AM ET" for any premarket event)
+- Report article publication time instead of event time (article about yesterday's AH earnings published at 6 AM ≠ earnings at 4:30 PM)
+
+SEC EDGAR solves this for 8-K-reportable events. Non-SEC events (macro, breaking) still rely on Polygon spike → LLM fallback.
+
+### 3. Quiet Day Behavior
+When no strong catalysts exist, both scanners correctly return zero selections. This is by design — forcing trades when no edge exists is worse than sitting out. The system should NOT be evaluated on whether it always produces selections.
+
+### 4. Catalyst-Type Sample Sizes
+The `CATALYST_TYPE_WEIGHTS` are derived from only Sep 3-9 2026 data (7 trading days). Small samples per type (e.g., macro n=3, insider n=5) mean the weights may not generalize. Must be re-evaluated as data accumulates.
+
+### 5. Clinical Trial and FDA Procedural Confusion
+LLMs consistently confuse FDA procedural milestones (BLA acceptance, Priority Review, PDUFA date) with actual FDA approval. The clinical data trap gate caps confidence at 3 for these, but the prompt engineering battle continues.

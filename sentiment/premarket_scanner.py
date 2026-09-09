@@ -102,6 +102,7 @@ _ET = pytz.timezone('America/New_York')
 NOW_PT = datetime.now(PST)
 NOW_ET = NOW_PT.astimezone(_ET)
 TODAY_STR = NOW_PT.strftime('%Y-%m-%d')
+YESTERDAY_STR = (NOW_PT - timedelta(days=1)).strftime('%Y-%m-%d')
 TIME_STR = NOW_PT.strftime('%H:%M')
 TIME_ET_STR = NOW_ET.strftime('%I:%M %p ET')
 
@@ -257,16 +258,18 @@ DEEP_SYSTEM = """You are a senior pre-market trading analyst preparing the morni
 Your traders enter positions at 6:25 AM Pacific (market opens 6:30 AM PT) and hold for 30-60 minutes, targeting 2-4% intraday spikes.
 
 CRITICAL CONCEPT — REMAINING MOVE vs TOTAL IMPACT:
-Your job is NOT to assess whether news is bullish or bearish. Your job is to predict
-what happens AFTER the trader enters at 6:25 AM PT. If a stock already dropped 13%
-pre-market on bad earnings, the bearish move is OVER. The remaining move at open is
-likely a BOUNCE (LONG), not further selling. You must separate:
-  - total_catalyst_impact_pct: the full magnitude of the catalyst (e.g. -15% for terrible earnings)
+Your job is to predict what happens AFTER the trader enters at 6:25 AM PT. You must separate:
+  - total_catalyst_impact_pct: the full magnitude of the catalyst (SIGNED: positive for bullish, negative for bearish)
   - move_already_absorbed_pct: how much has already moved in pre-market/after-hours
   - remaining_move_pct: what's LEFT for the trader at entry (this is what matters)
 
-If |move_already_absorbed| >= |total_catalyst_impact|, the move is DONE. The direction
-field should reflect the REMAINING move (often a reversal/bounce), NOT the catalyst direction.
+IMPORTANT: total_catalyst_impact_pct must match the CATALYST direction, not your trade thesis.
+If earnings guidance was cut and the stock dropped, total_catalyst_impact_pct should be NEGATIVE
+(e.g., -25%), reflecting the bearish catalyst. Do NOT set it positive for a bounce prediction.
+
+For EARNINGS catalysts: the after-hours/pre-market drop is Wave 1. Wave 2 (continued selling at
+open) is the norm, not the exception — institutions and retail sell at open after reading the
+full report. Do NOT assume a bounce just because the stock already dropped a lot.
 
 NOISE FILTERS — discount these patterns:
 - Law firm "investigations" announced AFTER a stock drops are ambulance-chasing, not new catalysts
@@ -365,16 +368,31 @@ KEY RULES:
 - If the catalyst is "deal" and this ticker is the acquirer, and the deal was already
   announced, set confidence <= 3 and expected_move_pct <= 1%.
 
-EARNINGS MISS/BEAT — DIRECTION RULES:
-- An earnings MISS is a SHORT catalyst. The default direction is SHORT unless the stock has
-  ALREADY fallen so much that a technical bounce is imminent AND the miss was minor.
-- A massive earnings miss (revenue miss >10%, or guidance cut) that is STILL FRESH (<12h old)
-  should remain SHORT — the selloff often continues at market open even after a large AH drop.
-- Only flip to LONG (bounce) if: (a) the stock already dropped >15%, (b) the miss was minor
-  or guidance was reaffirmed, AND (c) pre-market shows stabilization with buying volume.
-- An earnings BEAT is a LONG catalyst. Only flip to SHORT (fade) if the stock already surged
-  >15% and the beat was modest relative to expectations.
-- When in doubt about direction after earnings: FOLLOW THE CATALYST DIRECTION, not the bounce thesis.
+EARNINGS — GUIDANCE IS EVERYTHING:
+The market is forward-looking. Historical results (Q2 beat) do NOT matter if forward guidance
+is cut. The stock is repriced to reflect FUTURE earning power, not past performance.
+
+EARNINGS + GUIDANCE CUT = TWO-WAVE SELLOFF (NEVER predict a bounce):
+  IF earnings beat or meet on historical numbers
+  BUT forward guidance is lowered (revenue, EPS, or margin outlook)
+  THEN the stock WILL continue dropping at open. This is NOT a bounce opportunity.
+  Wave 1: After-hours crash (algos + fast money react to headlines)
+  Wave 2: Pre-market/open continuation (institutions + retail read the full report and sell)
+  Direction: SHORT. Do NOT predict LONG bounce on guidance cuts regardless of AH drop size.
+  Real example: 2026-09-09 TTAN beat Q2 EPS ($0.40 vs $0.35) and revenue ($292.8M vs $285.9M),
+    but cut Q3 guidance by $1-3M citing agriculture slowdown. AH: -20.3%. Open: another -12.4%.
+    Scanner predicted LONG bounce → actual result: -17.2% from entry. MASSIVE FP.
+
+EARNINGS MISS — DIRECTION RULES:
+- An earnings MISS is a SHORT catalyst. Default SHORT unless miss was trivial (<2% EPS miss)
+  AND stock shows clear pre-market stabilization (flat for >2 hours).
+- A massive earnings miss (revenue miss >10%, guidance cut) ALWAYS remains SHORT at open.
+  After-hours liquidity is limited — institutional sellers dump at open. Never call a bounce.
+- An earnings BEAT with guidance RAISED is LONG. Only flip to SHORT if stock surged >20%
+  and the beat was modest.
+- An earnings BEAT with guidance UNCHANGED is cautious LONG (the beat is real, but limited upside).
+- An earnings BEAT with guidance CUT is SHORT — the guidance cut dominates the beat.
+- When in doubt: FOLLOW THE GUIDANCE DIRECTION, not the historical results.
 
 PROVEN TRADE OUTCOME PATTERNS — learn from actual past results:
 
@@ -551,12 +569,27 @@ def fetch_price_data(ticker):
                     ))
                     current_price = float(bars_5m[-1].close) if bars_5m else prev_close
                 change_pct = ((current_price - prev_close) / prev_close) * 100
+                avg_daily_volume = 0
+                try:
+                    _yesterday = (NOW_PT - timedelta(days=1)).strftime('%Y-%m-%d')
+                    _from_20d = (NOW_PT - timedelta(days=25)).strftime('%Y-%m-%d')
+                    daily_bars = list(_polygon_client.get_aggs(
+                        ticker=ticker, multiplier=1, timespan="day",
+                        from_=_from_20d, to=_yesterday, limit=10,
+                    ))
+                    if daily_bars:
+                        avg_daily_volume = int(sum(
+                            int(getattr(b, 'volume', 0) or 0) for b in daily_bars
+                        ) / len(daily_bars))
+                except Exception:
+                    pass
                 return {
                     'current_price': round(current_price, 2),
                     'prev_close': round(prev_close, 2),
                     'change_pct': round(change_pct, 2),
                     'premarket_price': round(current_price, 2),
                     'premarket_volume': premarket_volume,
+                    'avg_daily_volume': avg_daily_volume,
                     'source': 'polygon',
                 }
         except Exception as e:
@@ -584,6 +617,7 @@ def fetch_price_data(ticker):
                 'change_pct': change_pct,
                 'premarket_price': current_price,
                 'premarket_volume': premarket_volume,
+                'avg_daily_volume': 0,
                 'source': 'yfinance',
             }
         elif len(hist) == 1:
@@ -594,6 +628,7 @@ def fetch_price_data(ticker):
                 'change_pct': 0.0,
                 'premarket_price': current_price,
                 'premarket_volume': 0,
+                'avg_daily_volume': 0,
                 'source': 'yfinance (single day)',
             }
     except Exception as e:
@@ -643,9 +678,9 @@ def verify_earnings(ticker, today_str):
 _PATTERN_CACHE_DF = None
 
 CAT_MAP = {
-    'earnings': 'earnings', 'analyst': 'deal', 'regulatory': 'regulatory',
+    'earnings': 'earnings', 'analyst': 'analyst', 'regulatory': 'regulatory',
     'deal': 'deal', 'offering': 'offering', 'insider': 'deal',
-    'breaking': 'deal', 'premarket_move': 'deal',
+    'breaking': 'breaking', 'premarket_move': 'deal',
 }
 
 
@@ -874,7 +909,7 @@ def calculate_absorption(prev_close, peak_price, current_price):
         'total_move_pct': round(total_move * 100, 2),
         'remaining_pct': round(remaining * 100, 2),
         'absorbed_pct': round(absorbed_frac * 100, 1),
-        'is_exhausted': absorbed_frac > 0.80 or (total_move > 0 and remaining <= 0),
+        'is_exhausted': (absorbed_frac > 0.80 and abs(remaining) < 0.03) or (total_move > 0 and remaining <= 0),
     }
 
 
@@ -905,30 +940,108 @@ def validate_ticker_polygon(ticker):
         return (True, ticker)
 
 
+def fetch_sec_filing_time(ticker, filing_date=None):
+    """Look up the SEC 8-K filing acceptance time for a ticker on a given date.
+    Uses SEC EDGAR Submissions API — structured data, not LLM.
+    Returns ET datetime string (e.g. '2026-09-09 4:34 PM ET') or None."""
+    import requests as _req
+    ref_date = filing_date or TODAY_STR
+    _headers = {'User-Agent': 'ScannerBot admin@example.com'}
+
+    try:
+        pg_url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
+        pg_resp = _req.get(pg_url, params={'apiKey': POLYGON_API_KEY}, timeout=5)
+        if pg_resp.status_code != 200:
+            return None
+        cik = pg_resp.json().get('results', {}).get('cik', '')
+        if not cik:
+            return None
+        cik_padded = cik.zfill(10)
+    except Exception:
+        return None
+
+    try:
+        sec_url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+        sec_resp = _req.get(sec_url, headers=_headers, timeout=10)
+        if sec_resp.status_code != 200:
+            return None
+        data = sec_resp.json()
+        recent = data.get('filings', {}).get('recent', {})
+        forms = recent.get('form', [])
+        dates = recent.get('filingDate', [])
+        acceptance = recent.get('acceptanceDateTime', [])
+    except Exception:
+        return None
+
+    for form, fdate, acc_dt in zip(forms, dates, acceptance):
+        if form == '8-K' and fdate == ref_date and acc_dt:
+            try:
+                from datetime import datetime as _dt
+                utc_dt = _dt.strptime(acc_dt[:19], '%Y-%m-%dT%H:%M:%S')
+                utc_dt = pytz.utc.localize(utc_dt)
+                et_dt = utc_dt.astimezone(_ET)
+                return et_dt.strftime('%Y-%m-%d %I:%M %p ET')
+            except Exception:
+                return None
+
+    return None
+
+
 def verify_and_correct_event_timing(entry):
     ticker = entry.get('ticker', '')
     if not ticker or not _POLYGON_OK:
         return
 
-    print(f"    [{ticker}] Verifying event timing via Polygon...", end=' ')
+    cat_type = str(entry.get('catalyst_type', '')).lower()
+
+    sec_types = {'earnings', 'deal', 'regulatory', 'offering'}
+    if cat_type in sec_types:
+        print(f"    [{ticker}] SEC 8-K lookup for {cat_type}...", end=' ')
+        sec_time = fetch_sec_filing_time(ticker, TODAY_STR)
+        if sec_time:
+            entry['news_time_original'] = entry.get('news_time', '')
+            entry['news_time'] = sec_time
+            entry['news_time_source'] = 'sec_edgar'
+            print(f"found: {sec_time}")
+        else:
+            sec_time_prev = fetch_sec_filing_time(ticker, YESTERDAY_STR)
+            if sec_time_prev:
+                entry['news_time_original'] = entry.get('news_time', '')
+                entry['news_time'] = sec_time_prev
+                entry['news_time_source'] = 'sec_edgar'
+                print(f"found (yesterday): {sec_time_prev}")
+            else:
+                print("no 8-K found")
+    else:
+        print(f"    [{ticker}] Verifying event timing via Polygon...", end=' ')
+
     event_info = get_actual_event_time(ticker, TODAY_STR)
     if not event_info:
-        print("no spike found")
+        if cat_type not in sec_types:
+            print("no spike found")
         return
 
     event_dt = event_info['event_time_dt']
     event_age_hours = (NOW_ET - event_dt).total_seconds() / 3600
-    news_time_raw = str(entry.get('news_time', ''))
-    article_dt = _parse_news_time(news_time_raw)
-    article_age_hours = None
-    if article_dt:
-        article_age_hours = (NOW_ET - article_dt.astimezone(_ET)).total_seconds() / 3600
 
-    corrected = False
-    if article_age_hours is not None and event_age_hours > article_age_hours + 1.0:
-        entry['news_time_original'] = entry.get('news_time', '')
-        entry['news_time'] = event_info['event_time_et']
-        corrected = True
+    if entry.get('news_time_source') not in ('sec_edgar',):
+        news_time_raw = str(entry.get('news_time', ''))
+        article_dt = _parse_news_time(news_time_raw)
+        article_age_hours = None
+        if article_dt:
+            article_age_hours = (NOW_ET - article_dt.astimezone(_ET)).total_seconds() / 3600
+
+        if article_age_hours is not None and event_age_hours > article_age_hours + 1.0:
+            _today_et = NOW_ET.date()
+            _event_is_overnight_ah = (
+                event_dt.date() < _today_et
+                and event_dt.hour >= 16
+                and event_age_hours <= 20
+            )
+            if not _event_is_overnight_ah:
+                entry['news_time_original'] = entry.get('news_time', '')
+                entry['news_time'] = event_info['event_time_et']
+                entry['news_time_source'] = 'polygon_spike'
 
     prev_close = event_info['prev_close']
     absorption = calculate_absorption(prev_close, event_info['peak_price'],
@@ -944,15 +1057,10 @@ def verify_and_correct_event_timing(entry):
     if absorption['is_exhausted']:
         entry['move_is_exhausted'] = True
 
-    if corrected:
-        print(f"CORRECTED: event at {event_info['event_time_et']} "
-              f"({event_age_hours:.1f}h ago, was {article_age_hours:.1f}h), "
-              f"absorbed={absorption['absorbed_pct']:.0f}%"
-              f"{' EXHAUSTED' if absorption['is_exhausted'] else ''}")
-    else:
-        print(f"OK: event ~{event_age_hours:.1f}h ago, "
-              f"absorbed={absorption['absorbed_pct']:.0f}%"
-              f"{' EXHAUSTED' if absorption['is_exhausted'] else ''}")
+    src = entry.get('news_time_source', 'llm')
+    print(f"    [{ticker}] timing={entry.get('news_time','?')[:25]} (src={src}), "
+          f"absorbed={absorption['absorbed_pct']:.0f}%"
+          f"{' EXHAUSTED' if absorption['is_exhausted'] else ''}")
 
 
 def gemini_search(prompt, system_prompt, retries=MAX_RETRIES):
@@ -994,18 +1102,8 @@ DEEP_ANALYSIS_TOOL = {
         "type": "object",
         "properties": {
             "ticker": {"type": "string"},
-            "direction": {"type": "string", "enum": ["LONG", "SHORT"]},
-            "confidence": {"type": "integer", "description": "1-10 confidence in direction of remaining move"},
-            "total_catalyst_impact_pct": {"type": "number", "description": "Total expected % impact of the catalyst"},
-            "move_already_absorbed_pct": {"type": "number", "description": "How much % has already moved pre-market/AH"},
-            "remaining_move_pct": {"type": "number", "description": "Expected remaining % move after entry"},
-            "expected_move_pct": {"type": "number", "description": "Same as remaining_move_pct"},
-            "move_is_exhausted": {"type": "boolean", "description": "True if catalyst move is fully priced in"},
-            "reasoning": {"type": "string", "description": "3-5 sentences: catalyst, absorption, remaining edge, continuation vs reversal"},
             "catalyst": {"type": "string", "description": "Specific catalyst with numbers, targets, deal values"},
             "catalyst_type": {"type": "string", "enum": ["earnings", "analyst", "regulatory", "deal", "offering", "insider", "macro", "breaking", "premarket_move"]},
-            "acquirer_or_target": {"type": "string", "enum": ["acquirer", "target", "n/a"]},
-            "deal_materiality": {"type": "string", "enum": ["immaterial", "notable", "transformative", "n/a"]},
             "catalyst_is_new": {"type": "boolean"},
             "news_timeline": {
                 "type": "array",
@@ -1019,18 +1117,29 @@ DEEP_ANALYSIS_TOOL = {
                 },
             },
             "timing": {"type": "string", "enum": ["breaking", "overnight", "pre_earnings", "post_earnings", "developing", "scheduled"]},
+            "reasoning": {"type": "string", "description": "3-5 sentences: catalyst, absorption, remaining edge, continuation vs reversal"},
             "bull_case": {"type": "string"},
             "bear_case": {"type": "string"},
             "risks": {"type": "string"},
             "pre_market_action": {"type": "string"},
+            "acquirer_or_target": {"type": "string", "enum": ["acquirer", "target", "n/a"]},
+            "deal_materiality": {"type": "string", "enum": ["immaterial", "notable", "transformative", "n/a"]},
             "related_tickers": {"type": "array", "items": {"type": "string"}},
+            "total_catalyst_impact_pct": {"type": "number", "description": "Total expected % impact of the catalyst"},
+            "move_already_absorbed_pct": {"type": "number", "description": "How much % has already moved pre-market/AH"},
+            "remaining_move_pct": {"type": "number", "description": "Expected remaining % move after entry"},
+            "expected_move_pct": {"type": "number", "description": "Same as remaining_move_pct"},
+            "move_is_exhausted": {"type": "boolean", "description": "True if catalyst move is fully priced in"},
+            "direction": {"type": "string", "enum": ["LONG", "SHORT"]},
+            "confidence": {"type": "integer", "description": "1-10 confidence in direction of remaining move"},
         },
         "required": [
-            "ticker", "direction", "confidence", "total_catalyst_impact_pct",
-            "move_already_absorbed_pct", "remaining_move_pct", "expected_move_pct",
-            "move_is_exhausted", "reasoning", "catalyst", "catalyst_type",
-            "catalyst_is_new", "news_timeline", "timing",
+            "ticker", "catalyst", "catalyst_type", "catalyst_is_new",
+            "news_timeline", "timing", "reasoning",
             "bull_case", "bear_case", "risks",
+            "total_catalyst_impact_pct", "move_already_absorbed_pct",
+            "remaining_move_pct", "expected_move_pct", "move_is_exhausted",
+            "direction", "confidence",
         ],
     },
 }
@@ -1520,15 +1629,25 @@ if deep_candidates:
             claude_total = float(result.get('total_catalyst_impact_pct', 0))
             polygon_absorbed = float(pd_info.get('change_pct', 0)) if pd_info and 'change_pct' in pd_info else None
             if polygon_absorbed is not None and abs(claude_total) > 0.1:
-                computed_remaining = claude_total - polygon_absorbed
+                same_direction = (claude_total > 0 and polygon_absorbed > 0) or \
+                                 (claude_total < 0 and polygon_absorbed < 0)
+                if same_direction:
+                    computed_remaining = claude_total - polygon_absorbed
+                else:
+                    computed_remaining = claude_total
+                computed_remaining = max(min(computed_remaining, abs(claude_total)),
+                                         -abs(claude_total))
                 result['move_already_absorbed_pct'] = polygon_absorbed
                 result['remaining_move_pct'] = round(computed_remaining, 2)
                 result['expected_move_pct'] = round(computed_remaining, 2)
                 result['_remaining_source'] = 'python_math'
-                if abs(polygon_absorbed / claude_total) > 0.80 or (
+                if same_direction and abs(computed_remaining) < 3.0 and (
+                    abs(polygon_absorbed / claude_total) > 0.80 or
                     (claude_total > 0 and polygon_absorbed > claude_total) or
                     (claude_total < 0 and polygon_absorbed < claude_total)
                 ):
+                    result['move_is_exhausted'] = True
+                elif not same_direction:
                     result['move_is_exhausted'] = True
 
             direction = result.get('direction', '?')
@@ -1632,7 +1751,7 @@ for ticker, r in deep_results.items():
 # ==============================================================================
 SELF_CONTRADICTION_PHRASES = [
     'untradeable', 'un-tradeable', 'zero remaining edge', 'zero edge',
-    'no remaining edge', 'tier 4', 'tier 5', 'tier 4/5',
+    'no remaining edge',
     'not a new actionable catalyst', 'no new catalyst', 'no new information',
     'very low-conviction', 'very low conviction', 'essentially noise',
     'not yet occurred', 'not yet released', 'has not yet materialized',
@@ -1725,7 +1844,32 @@ for entry in all_candidates:
                 f"  GATE: {ticker} SHORT conf={_original_conf} "
                 f"→ KILLED (risk-off: SPY {_spy_pct:+.1f}%, VIX {_vix:.0f})")
 
-    # Gate 4: Clinical trial data trap — biotech "positive data" events get sold by institutions
+    # Gate 4: Earnings reaction — market already priced in the catalyst
+    # Kill earnings signals where the stock already moved >5% premarket.
+    # Exception: earnings beat + positive gap (LONG direction) may still have continuation.
+    _cat_type = str(entry.get('catalyst_type', '')).lower()
+    if _cat_type == 'earnings' and _pd and not entry.get('_gate_reason'):
+        _earn_change = float(_pd.get('change_pct', 0))
+        _earn_move = abs(_earn_change)
+        _earn_pm_vol = int(_pd.get('premarket_volume', 0))
+        _is_gap_down = _earn_change < -5.0
+        _is_gap_up_long = _earn_change > 5.0 and entry['direction'] == 'LONG'
+        if _is_gap_down:
+            entry['confidence'] = 0
+            entry['_gate_reason'] = (f"earnings_gap_down: moved {_earn_change:+.1f}% "
+                                     f"on earnings, PM vol: {_earn_pm_vol:,}")
+            _gate_log.append(
+                f"  GATE: {ticker} {entry['direction']} "
+                f"→ KILLED (earnings gap down {_earn_change:+.1f}%)")
+        elif _earn_move > 5.0 and not _is_gap_up_long:
+            entry['confidence'] = 0
+            entry['_gate_reason'] = (f"earnings_priced_in: moved {_earn_change:+.1f}% "
+                                     f"on earnings, PM vol: {_earn_pm_vol:,}")
+            _gate_log.append(
+                f"  GATE: {ticker} {entry['direction']} "
+                f"→ KILLED (earnings priced in {_earn_change:+.1f}%)")
+
+    # Gate 5: Clinical trial data trap — biotech "positive data" events get sold by institutions
     CLINICAL_KEYWORDS = [
         'phase 1', 'phase 2', 'phase 3', 'phase i', 'phase ii', 'phase iii',
         'clinical trial', 'clinical data', 'trial results', 'trial data',
@@ -1908,6 +2052,26 @@ def _freshness_multiplier(entry):
     return 0.02
 
 
+def _is_selected(entry, rank, direction_label):
+    top_n = FINAL_LONG if direction_label == 'LONG' else FINAL_SHORT
+    return (rank <= top_n
+            and entry['confidence'] >= MIN_CONFIDENCE_FOR_SELECTION
+            and not entry.get('_gate_reason'))
+
+
+def _print_summary_row(i, e):
+    cat = _CATEGORY_MAP.get(str(e.get('catalyst_type', 'none')).lower(), '?')
+    ts_str, age = _get_event_time_and_age(e)
+    absorbed = e.get('move_already_absorbed_pct', 0)
+    abs_str = f"{absorbed:+.1f}%" if absorbed else '—'
+    exh = ' EXH' if e.get('move_is_exhausted') else ''
+    gate = f"  [{e['_gate_reason'][:30]}]" if e.get('_gate_reason') else ''
+    catalyst_short = str(e.get('catalyst', '') or e.get('scan_summary', '') or e.get('scan_headline', '') or e.get('reasoning', ''))[:55]
+    print(f"    {i:>2} {e['ticker']:<6} {e['composite']:>5.0f} "
+          f"{e['confidence']:>3}/10 {e['expected_move_pct']:>+6.1f}% "
+          f"{abs_str:>7} {cat:<5} {ts_str:<18} {age:>8}{exh}  {catalyst_short}{gate}")
+
+
 def _print_summary_table(entries, direction_label):
     entries_sorted = sorted(entries, key=lambda x: x['composite'], reverse=True)
     n = len(entries_sorted)
@@ -1916,20 +2080,33 @@ def _print_summary_table(entries, direction_label):
     if not entries_sorted:
         print(f"    No {direction_label} candidates found.\n")
         return
-    print(f"    {'#':>2} {'Ticker':<6} {'Score':>5} {'Conf':>4} {'Remain':>7} "
-          f"{'Absorb':>7} {'Type':<5} {'Event Time':<18} {'Age':>8}  Catalyst Summary")
-    print(f"    {'─'*110}")
-    for i, e in enumerate(entries_sorted, 1):
-        cat = _CATEGORY_MAP.get(str(e.get('catalyst_type', 'none')).lower(), '?')
-        ts_str, age = _get_event_time_and_age(e)
-        absorbed = e.get('move_already_absorbed_pct', 0)
-        abs_str = f"{absorbed:+.1f}%" if absorbed else '—'
-        exh = ' EXH' if e.get('move_is_exhausted') else ''
-        gated = ' GATED' if e.get('_gate_reason') else ''
-        catalyst_short = str(e.get('catalyst', '') or e.get('scan_summary', '') or e.get('scan_headline', '') or e.get('reasoning', ''))[:80]
-        print(f"    {i:>2} {e['ticker']:<6} {e['composite']:>5.0f} "
-              f"{e['confidence']:>3}/10 {e['expected_move_pct']:>+6.1f}% "
-              f"{abs_str:>7} {cat:<5} {ts_str:<18} {age:>8}{exh}{gated}  {catalyst_short}")
+
+    for e_idx, e in enumerate(entries_sorted, 1):
+        e['_is_selected'] = _is_selected(e, e_idx, direction_label)
+
+    selected = [e for e in entries_sorted if e['_is_selected']]
+    not_selected = [e for e in entries_sorted if not e['_is_selected']]
+
+    header = (f"    {'#':>2} {'Ticker':<6} {'Score':>5} {'Conf':>4} {'Remain':>7} "
+              f"{'Absorb':>7} {'Type':<5} {'Event Time':<18} {'Age':>8}  Catalyst Summary")
+
+    if selected:
+        print(f"\n    ═══ SELECTED ({len(selected)}) ═══")
+        print(header)
+        print(f"    {'─'*110}")
+        for i, e in enumerate(selected, 1):
+            _print_summary_row(i, e)
+
+    if not_selected:
+        print(f"\n    ─── NOT SELECTED ({len(not_selected)}) ───")
+        print(header)
+        print(f"    {'─'*110}")
+        for i, e in enumerate(not_selected, 1):
+            _print_summary_row(i, e)
+
+    if not selected:
+        print(f"\n    ═══ NO SIGNALS SELECTED ═══")
+
     print()
 
 
@@ -1945,7 +2122,8 @@ def _print_detail_cards(entries, direction_label):
         ts_str, age = _get_event_time_and_age(e)
         cat = _CATEGORY_MAP.get(str(e.get('catalyst_type', 'none')).lower(), '?')
         absorbed = e.get('move_already_absorbed_pct', 0)
-        print(f"\n  ┌─ {i}. {e['ticker']}  {arrow} {direction_label}  "
+        sel_tag = ' ✅ SELECTED' if e.get('_is_selected') else ' ⛔ NOT SELECTED'
+        print(f"\n  ┌─ {i}. {e['ticker']}{sel_tag}  {arrow} {direction_label}  "
               f"conf={e['confidence']}/10  remain={e['expected_move_pct']:+.1f}%  "
               f"absorbed={absorbed:+.1f}%  [{cat}]  score={e['composite']:.0f}")
         print(f"  │  Event: {ts_str}  ({age})")
@@ -2028,6 +2206,53 @@ for e in longs + shorts:
     fm = _freshness_multiplier(e)
     e['composite'] = e['composite'] * fm
     e['freshness_mult'] = fm
+longs.sort(key=lambda x: x['composite'], reverse=True)
+shorts.sort(key=lambda x: x['composite'], reverse=True)
+
+# ── Apply catalyst-type weight to composite scores ──
+# RE-EVALUATE: weights derived from Sep 3-9 2026 backtest (n per type in comment).
+# Conservative: penalize proven losers, modest boost to winners.
+# Update weights as more data accumulates.
+CATALYST_TYPE_WEIGHTS = {
+    'macro':          1.2,   # n=3,  avg +2.9%, 67% WR — boost but tiny sample
+    'breaking':       1.2,   # n=12, avg +2.7%, 67% WR
+    'insider':        1.2,   # n=5,  avg +1.6%, 100% WR — tiny sample
+    'offering':       1.0,   # n=8,  avg +0.0%, 50% WR — neutral
+    'analyst':        1.0,   # n=15, avg +0.0%, 47% WR — neutral
+    'squeeze':        1.0,   # no data yet
+    'halt':           1.0,   # no data yet
+    'premarket_move': 0.5,   # n=9,  avg -0.3%, 11% WR — bad
+    'earnings':       0.7,   # n=24, avg -0.5%, 38% WR — negative
+    'deal':           0.6,   # n=25, avg -0.8%, 20% WR — bad
+    'regulatory':     0.4,   # n=10, avg -1.5%, 0% WR — worst
+    'bankruptcy':     0.5,   # no data yet, assume negative
+}
+for e in longs + shorts:
+    cat = str(e.get('catalyst_type', '')).lower()
+    cw = CATALYST_TYPE_WEIGHTS.get(cat, 1.0)
+    e['composite'] = e['composite'] * cw
+    e['catalyst_weight'] = cw
+longs.sort(key=lambda x: x['composite'], reverse=True)
+shorts.sort(key=lambda x: x['composite'], reverse=True)
+
+# ── Mismatch Index: price move vs LLM catalyst assessment ──
+# Ratio of actual gap to LLM confidence. High mismatch = retail FOMO
+# (big price move on weak catalyst). Boosts SHORT on high mismatch, LONG on low mismatch.
+for e in longs + shorts:
+    _pd = e.get('_price_data') or {}
+    gap_pct = abs(float(_pd.get('change_pct', 0)))
+    _conf = max(int(e.get('confidence', 5)), 1)
+    mismatch = gap_pct / _conf
+    if mismatch > 2.0 and e['direction'] == 'LONG':
+        e['mismatch_mult'] = 0.5
+    elif mismatch > 2.0 and e['direction'] == 'SHORT':
+        e['mismatch_mult'] = 1.5
+    elif mismatch < 0.5 and e['direction'] == 'LONG':
+        e['mismatch_mult'] = 1.3
+    else:
+        e['mismatch_mult'] = 1.0
+    e['composite'] = e['composite'] * e['mismatch_mult']
+    e['mismatch_index'] = round(mismatch, 2)
 longs.sort(key=lambda x: x['composite'], reverse=True)
 shorts.sort(key=lambda x: x['composite'], reverse=True)
 
@@ -2121,6 +2346,8 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
         ('freshness_multiplier', 'FLOAT64'),
         ('scanner_version', 'STRING'),
         ('gate_reason', 'STRING'),
+        ('catalyst_weight', 'FLOAT64'),
+        ('mismatch_index', 'FLOAT64'),
     ]:
         try:
             bq_client.query(f"ALTER TABLE `{BQ_SCANNER_TABLE}` ADD COLUMN {col_name} {col_type}").result()
@@ -2143,7 +2370,7 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
                 'ticker': e['ticker'],
                 'direction': direction_label,
                 'rank_in_direction': rank,
-                'selected': rank <= (FINAL_LONG if direction_label == 'LONG' else FINAL_SHORT) and e['confidence'] >= MIN_CONFIDENCE_FOR_SELECTION,
+                'selected': rank <= (FINAL_LONG if direction_label == 'LONG' else FINAL_SHORT) and e['confidence'] >= MIN_CONFIDENCE_FOR_SELECTION and not e.get('_gate_reason'),
                 'confidence': e['confidence'],
                 'expected_move_pct': e['expected_move_pct'],
                 'remaining_move_pct': e.get('remaining_move_pct', e['expected_move_pct']),
@@ -2171,6 +2398,8 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
                 'catalyst_is_new': e.get('catalyst_is_new', True),
                 'news_timeline_json': json.dumps(e.get('news_timeline', []), default=str)[:2000],
                 'freshness_multiplier': e.get('freshness_mult', 1.0),
+                'catalyst_weight': e.get('catalyst_weight', 1.0),
+                'mismatch_index': e.get('mismatch_index', 0.0),
                 'scanner_version': SCANNER_VERSION,
                 'gate_reason': str(e.get('_gate_reason', ''))[:200],
             })
