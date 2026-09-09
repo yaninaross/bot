@@ -893,6 +893,33 @@ def calculate_absorption(prev_close, peak_price, current_price):
     }
 
 
+def validate_ticker_polygon(ticker):
+    """Validate that a ticker is a real US-listed stock via Polygon reference API.
+    Returns (True, ticker) if valid US stock, (False, None) if not."""
+    import requests
+    try:
+        url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
+        resp = requests.get(url, params={'apiKey': POLYGON_API_KEY}, timeout=5)
+        if resp.status_code != 200:
+            return (False, None)
+        data = resp.json()
+        result = data.get('results', {})
+        if not result:
+            return (False, None)
+        primary_exchange = result.get('primary_exchange', '')
+        market = result.get('market', '')
+        locale = result.get('locale', '')
+        us_exchanges = {'XNYS', 'XNAS', 'XASE', 'BATS', 'ARCX'}
+        if primary_exchange in us_exchanges:
+            return (True, ticker)
+        if market == 'stocks' and locale == 'us':
+            return (True, ticker)
+        return (False, None)
+    except Exception:
+        # On network error, assume valid to avoid blocking real tickers
+        return (True, ticker)
+
+
 def verify_and_correct_event_timing(entry):
     ticker = entry.get('ticker', '')
     if not ticker or not _POLYGON_OK:
@@ -1195,6 +1222,29 @@ for ticker, d in all_discovered.items():
     candidates.append(d)
 
 candidates.sort(key=lambda x: x['move_score'], reverse=True)
+
+# --- Validate tickers via Polygon (reject non-US, invalid, company names) ---
+print(f"\n  Validating {len(candidates)} discovered tickers via Polygon...")
+_validated_candidates = []
+_filtered_tickers = []
+for _c in candidates:
+    _tk = _c.get('ticker', '')
+    # Instant reject: dots in ticker name (non-US exchange, e.g. FUM.HE)
+    if '.' in _tk:
+        _filtered_tickers.append((_tk, 'non-US exchange (dot in symbol)'))
+        continue
+    _ok, _ = validate_ticker_polygon(_tk)
+    if _ok:
+        _validated_candidates.append(_c)
+    else:
+        _filtered_tickers.append((_tk, 'not found on US exchange'))
+if _filtered_tickers:
+    print(f"  Filtered {len(_filtered_tickers)} invalid tickers:")
+    for _ft, _reason in _filtered_tickers:
+        print(f"    - {_ft}: {_reason}")
+else:
+    print(f"  All {len(candidates)} tickers validated OK")
+candidates = _validated_candidates
 
 # Separate by direction
 longs_raw = [c for c in candidates if c.get('direction') == 'LONG']

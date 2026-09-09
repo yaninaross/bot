@@ -878,6 +878,33 @@ def calculate_absorption(prev_close, peak_price, current_price):
     }
 
 
+def validate_ticker_polygon(ticker):
+    """Validate that a ticker is a real US-listed stock via Polygon reference API.
+    Returns (True, ticker) if valid US stock, (False, None) if not."""
+    import requests
+    try:
+        url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
+        resp = requests.get(url, params={'apiKey': POLYGON_API_KEY}, timeout=5)
+        if resp.status_code != 200:
+            return (False, None)
+        data = resp.json()
+        result = data.get('results', {})
+        if not result:
+            return (False, None)
+        primary_exchange = result.get('primary_exchange', '')
+        market = result.get('market', '')
+        locale = result.get('locale', '')
+        us_exchanges = {'XNYS', 'XNAS', 'XASE', 'BATS', 'ARCX'}
+        if primary_exchange in us_exchanges:
+            return (True, ticker)
+        if market == 'stocks' and locale == 'us':
+            return (True, ticker)
+        return (False, None)
+    except Exception:
+        # On network error, assume valid to avoid blocking real tickers
+        return (True, ticker)
+
+
 def verify_and_correct_event_timing(entry):
     ticker = entry.get('ticker', '')
     if not ticker or not _POLYGON_OK:
@@ -1150,12 +1177,37 @@ for i, (ticker, r) in enumerate(ranked[:10]):
     summary = str(r.get('summary', ''))[:80]
     print(f"    {i+1:>2}. {ticker:<6} {score}/10 {direction:<8} {summary}")
 
+# --- Validate tickers via Polygon (reject non-US, invalid, company names) ---
+_pre_deep = [(t, r) for t, r in ranked[:TOP_N_DEEP]
+             if r.get('catalyst_score', 0) >= 3]
+if _pre_deep:
+    print(f"\n  Validating {len(_pre_deep)} Stage 2 candidates via Polygon...")
+    _valid_tickers = set()
+    _filtered = []
+    for _t, _r in _pre_deep:
+        if '.' in _t:
+            _filtered.append((_t, 'non-US exchange (dot in symbol)'))
+            continue
+        _ok, _ = validate_ticker_polygon(_t)
+        if _ok:
+            _valid_tickers.add(_t)
+        else:
+            _filtered.append((_t, 'not found on US exchange'))
+    if _filtered:
+        print(f"  Filtered {len(_filtered)} invalid tickers:")
+        for _ft, _reason in _filtered:
+            print(f"    - {_ft}: {_reason}")
+    else:
+        print(f"  All {len(_pre_deep)} tickers validated OK")
+else:
+    _valid_tickers = set()
 
 # ==============================================================================
 # STAGE 2: DEEP ANALYSIS — Claude Sonnet via Vertex AI
 # ==============================================================================
 deep_candidates = [t for t, r in ranked[:TOP_N_DEEP]
-                   if r.get('catalyst_score', 0) >= 3]
+                   if r.get('catalyst_score', 0) >= 3
+                   and t in _valid_tickers]
 
 if deep_candidates:
     print(f"\n\n{'='*W}")
