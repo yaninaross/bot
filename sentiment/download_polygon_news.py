@@ -67,7 +67,7 @@ import matplotlib.pyplot as plt
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
 BUCKET_NAME     = "time-series-bucket-ys"
 GCS_OUT_DIR     = "Data/Sentiment"
 

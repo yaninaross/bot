@@ -68,7 +68,7 @@ import matplotlib.pyplot as plt
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-GCP_PROJECT     = "yanina-everything"
+GCP_PROJECT     = "YOUR_GCP_PROJECT"
 GCP_LOCATION    = "us-central1"
 GEMINI_MODEL    = "gemini-2.5-flash"
 

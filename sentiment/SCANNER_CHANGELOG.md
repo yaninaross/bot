@@ -14,7 +14,7 @@ Documents every improvement to `premarket_scanner.py` and `discovery_scanner.py`
 - LLM: Claude claude-opus-4-20250514 (later changed to 4-6 in V1.1)
 - News source: Polygon.io REST API
 - Price validation: yfinance for prev_close and current price
-- Output: BQ tables `ys-time-series.scoring_logs.premarket_scanner` and `discovery_scanner`
+- Output: BQ tables `YOUR_GCP_PROJECT.scoring_logs.premarket_scanner` and `discovery_scanner`
 
 ### Known Issues at Launch
 - Timestamp parsing fragile — articles with missing timestamps caused crashes
@@ -111,7 +111,7 @@ Four real-world examples hardcoded into DEEP_SYSTEM prompt:
 
 #### 5. BQ Pattern Library (Tier 2 — Dynamic Few-Shot Retrieval)
 
-**Table:** `ys-time-series.scoring_logs.scanner_patterns`
+**Table:** `YOUR_GCP_PROJECT.scoring_logs.scanner_patterns`
 
 **Schema:** pattern_id, created_at, event_date, pattern_type, catalyst_type, tickers, primary/secondary ticker with full price data (entry, gap%, 30m/60m/EOD returns, MFE/MAE), lesson, pattern_rule, sentiment_summary, market_context, scanner_prediction (JSON), tags.
 
