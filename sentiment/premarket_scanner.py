@@ -130,7 +130,7 @@ SCAN_TICKERS = TEST_TICKERS if TEST_MODE else DEPLOY_TICKERS
 MAX_WORKERS_SCAN   = 5
 TOP_N_DEEP         = 15
 MAX_NEWS_AGE_HOURS = 16
-SCANNER_VERSION    = 'V3'
+SCANNER_VERSION    = 'V3.5'
 FINAL_LONG         = 5
 FINAL_SHORT        = 5
 GEMINI_DELAY_S     = 0.3
@@ -859,6 +859,8 @@ def get_actual_event_time(ticker, ref_date_str=None, move_threshold_pct=3.0):
         event_price = None
         peak_price = prev_close
         peak_time = None
+        trough_price = prev_close
+        trough_time = None
         current_price = prev_close
         ref_close = prev_close_before
         for bar in minute_bars:
@@ -870,6 +872,7 @@ def get_actual_event_time(ticker, ref_date_str=None, move_threshold_pct=3.0):
                 ref_close = prev_close
             close_val = float(bar.close)
             high_val = float(bar.high)
+            low_val = float(bar.low)
             pct_change = abs(close_val - ref_close) / ref_close if ref_close > 0 else 0
             if pct_change >= threshold and event_time is None:
                 event_time = ts
@@ -880,6 +883,12 @@ def get_actual_event_time(ticker, ref_date_str=None, move_threshold_pct=3.0):
             if high_val > peak_price:
                 peak_price = high_val
                 peak_time = ts
+            if close_val < trough_price:
+                trough_price = close_val
+                trough_time = ts
+            if low_val < trough_price:
+                trough_price = low_val
+                trough_time = ts
             current_price = close_val
         if event_time is None:
             return None
@@ -891,6 +900,8 @@ def get_actual_event_time(ticker, ref_date_str=None, move_threshold_pct=3.0):
             'event_price': event_price,
             'peak_price': peak_price,
             'peak_time_et': peak_time.strftime('%Y-%m-%d %I:%M %p ET') if peak_time else None,
+            'trough_price': trough_price,
+            'trough_time_et': trough_time.strftime('%Y-%m-%d %I:%M %p ET') if trough_time else None,
             'current_price': current_price,
             'ref_close_for_day': ref_close,
         }
@@ -899,17 +910,29 @@ def get_actual_event_time(ticker, ref_date_str=None, move_threshold_pct=3.0):
         return None
 
 
-def calculate_absorption(prev_close, peak_price, current_price):
-    total_move = (peak_price - prev_close) / prev_close if prev_close > 0 else 0
-    remaining = (current_price - prev_close) / prev_close if prev_close > 0 else 0
+def calculate_absorption(prev_close, peak_price, current_price, trough_price=None):
+    if trough_price is None:
+        trough_price = prev_close
+    if prev_close <= 0:
+        return {'total_move_pct': 0, 'remaining_pct': 0, 'absorbed_pct': 0, 'is_exhausted': False}
+    up_move = (peak_price - prev_close) / prev_close
+    down_move = (trough_price - prev_close) / prev_close
+    total_move = up_move if abs(up_move) >= abs(down_move) else down_move
+    remaining = (current_price - prev_close) / prev_close
     if abs(total_move) < 0.001:
         return {'total_move_pct': 0, 'remaining_pct': 0, 'absorbed_pct': 0, 'is_exhausted': False}
-    absorbed_frac = 1.0 - (remaining / total_move) if total_move != 0 else 0
+    absorbed_frac = 1.0 - (remaining / total_move)
+    absorbed_frac = max(0.0, min(absorbed_frac, 2.0))
+    is_exhausted = (absorbed_frac > 0.80 and abs(remaining) < 0.03)
+    if total_move > 0 and remaining <= 0:
+        is_exhausted = True
+    if total_move < 0 and remaining >= 0:
+        is_exhausted = True
     return {
         'total_move_pct': round(total_move * 100, 2),
         'remaining_pct': round(remaining * 100, 2),
         'absorbed_pct': round(absorbed_frac * 100, 1),
-        'is_exhausted': (absorbed_frac > 0.80 and abs(remaining) < 0.03) or (total_move > 0 and remaining <= 0),
+        'is_exhausted': is_exhausted,
     }
 
 
@@ -1045,9 +1068,11 @@ def verify_and_correct_event_timing(entry):
 
     prev_close = event_info['prev_close']
     absorption = calculate_absorption(prev_close, event_info['peak_price'],
-                                       event_info['current_price'])
+                                       event_info['current_price'],
+                                       event_info.get('trough_price'))
     entry['polygon_prev_close'] = prev_close
     entry['polygon_peak_price'] = event_info['peak_price']
+    entry['polygon_trough_price'] = event_info.get('trough_price', prev_close)
     entry['polygon_current_price'] = event_info['current_price']
     entry['polygon_total_move_pct'] = absorption['total_move_pct']
     entry['polygon_remaining_pct'] = absorption['remaining_pct']
@@ -2209,23 +2234,27 @@ for e in longs + shorts:
 longs.sort(key=lambda x: x['composite'], reverse=True)
 shorts.sort(key=lambda x: x['composite'], reverse=True)
 
-# ── Apply catalyst-type weight to composite scores ──
-# RE-EVALUATE: weights derived from Sep 3-9 2026 backtest (n per type in comment).
-# Conservative: penalize proven losers, modest boost to winners.
-# Update weights as more data accumulates.
+# ── Apply catalyst-type weight to composite scores (Bayesian-shrunk) ──
+# Empirical weights from Sep 3-9 2026 backtest, shrunk toward 1.0 via
+# w = 1 + (w_emp - 1) * n / (n + k), k=30. Small samples pull toward neutral.
+BAYESIAN_K = 30
+_CATALYST_RAW = {
+    'macro':          (1.2, 3),
+    'breaking':       (1.2, 12),
+    'insider':        (1.2, 5),
+    'offering':       (1.0, 8),
+    'analyst':        (1.0, 15),
+    'squeeze':        (1.0, 0),
+    'halt':           (1.0, 0),
+    'premarket_move': (0.5, 9),
+    'earnings':       (0.7, 24),
+    'deal':           (0.6, 25),
+    'regulatory':     (0.4, 10),
+    'bankruptcy':     (0.5, 0),
+}
 CATALYST_TYPE_WEIGHTS = {
-    'macro':          1.2,   # n=3,  avg +2.9%, 67% WR — boost but tiny sample
-    'breaking':       1.2,   # n=12, avg +2.7%, 67% WR
-    'insider':        1.2,   # n=5,  avg +1.6%, 100% WR — tiny sample
-    'offering':       1.0,   # n=8,  avg +0.0%, 50% WR — neutral
-    'analyst':        1.0,   # n=15, avg +0.0%, 47% WR — neutral
-    'squeeze':        1.0,   # no data yet
-    'halt':           1.0,   # no data yet
-    'premarket_move': 0.5,   # n=9,  avg -0.3%, 11% WR — bad
-    'earnings':       0.7,   # n=24, avg -0.5%, 38% WR — negative
-    'deal':           0.6,   # n=25, avg -0.8%, 20% WR — bad
-    'regulatory':     0.4,   # n=10, avg -1.5%, 0% WR — worst
-    'bankruptcy':     0.5,   # no data yet, assume negative
+    k: round(1.0 + (w - 1.0) * n / (n + BAYESIAN_K), 3)
+    for k, (w, n) in _CATALYST_RAW.items()
 }
 for e in longs + shorts:
     cat = str(e.get('catalyst_type', '')).lower()
@@ -2253,6 +2282,30 @@ for e in longs + shorts:
         e['mismatch_mult'] = 1.0
     e['composite'] = e['composite'] * e['mismatch_mult']
     e['mismatch_index'] = round(mismatch, 2)
+longs.sort(key=lambda x: x['composite'], reverse=True)
+shorts.sort(key=lambda x: x['composite'], reverse=True)
+
+# ── Volume ratio multiplier ──
+for e in longs + shorts:
+    _pd = e.get('_price_data') or {}
+    pm_vol = float(_pd.get('premarket_volume', 0))
+    avg_vol = float(_pd.get('avg_daily_volume', 0))
+    if avg_vol > 0 and pm_vol > 0:
+        vol_ratio = pm_vol / avg_vol
+        if vol_ratio >= 3.0:
+            vol_mult = 1.3
+        elif vol_ratio >= 1.0:
+            vol_mult = 1.1
+        elif vol_ratio < 0.3:
+            vol_mult = 0.7
+        else:
+            vol_mult = 1.0
+    else:
+        vol_ratio = 0.0
+        vol_mult = 1.0
+    e['composite'] = e['composite'] * vol_mult
+    e['volume_ratio'] = round(vol_ratio, 2)
+    e['volume_mult'] = vol_mult
 longs.sort(key=lambda x: x['composite'], reverse=True)
 shorts.sort(key=lambda x: x['composite'], reverse=True)
 
@@ -2348,6 +2401,8 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
         ('gate_reason', 'STRING'),
         ('catalyst_weight', 'FLOAT64'),
         ('mismatch_index', 'FLOAT64'),
+        ('volume_ratio', 'FLOAT64'),
+        ('volume_mult', 'FLOAT64'),
     ]:
         try:
             bq_client.query(f"ALTER TABLE `{BQ_SCANNER_TABLE}` ADD COLUMN {col_name} {col_type}").result()
@@ -2400,6 +2455,8 @@ def log_scanner_to_bq(longs, shorts, scan_results, market_ctx, run_ts_str, time_
                 'freshness_multiplier': e.get('freshness_mult', 1.0),
                 'catalyst_weight': e.get('catalyst_weight', 1.0),
                 'mismatch_index': e.get('mismatch_index', 0.0),
+                'volume_ratio': e.get('volume_ratio', 0.0),
+                'volume_mult': e.get('volume_mult', 1.0),
                 'scanner_version': SCANNER_VERSION,
                 'gate_reason': str(e.get('_gate_reason', ''))[:200],
             })

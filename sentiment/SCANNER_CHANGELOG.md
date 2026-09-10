@@ -432,10 +432,85 @@ New function `fetch_sec_filing_time(ticker, filing_date)` in both scanners:
 
 ---
 
+## V3.5 — Absorption fix, volume ratio, Bayesian weights, pattern library (2026-09-10)
+
+### Fix 13: calculate_absorption for down-moves
+**Files:** Both scanners — `get_actual_event_time()`, `calculate_absorption()`
+
+**Bug:** `peak_price` only tracked upward moves. For SHORT candidates (gap-downs),
+`total_move ≈ 0` and exhaustion math was skipped entirely.
+
+**Fix:**
+- Added `trough_price` / `trough_time` tracking in `get_actual_event_time()` (uses `bar.low` and `bar.close`)
+- `calculate_absorption()` now takes optional `trough_price`, picks larger-magnitude direction
+- `is_exhausted` handles both directions: price crossing back past `prev_close` = exhausted
+- Logged as `polygon_trough_price` in BQ
+
+### Fix 14: Volume ratio in composite score
+**Files:** Both scanners — after mismatch index section
+
+`volume_ratio = premarket_volume / avg_daily_volume` (data was already fetched but unused).
+
+| Volume ratio | Multiplier | Rationale |
+|-------------|-----------|-----------|
+| >= 3.0x | 1.3x | Heavy institutional volume, strong signal |
+| >= 1.0x | 1.1x | Above-average, modest boost |
+| 0.3–1.0x | 1.0x | Neutral |
+| < 0.3x | 0.7x | Thin volume, unreliable gap |
+
+Logged to BQ as `volume_ratio` + `volume_mult`.
+
+### Fix 15: Bayesian shrinkage for catalyst weights
+**Files:** Both scanners — `CATALYST_TYPE_WEIGHTS`
+
+Replaced hardcoded weights with Bayesian-shrunk versions:
+`w = 1 + (w_empirical − 1) × n / (n + k)`, k=30.
+
+Small samples shrink toward 1.0 (neutral). Key changes:
+- `macro` (n=3): 1.2 → 1.018 (almost neutral)
+- `breaking` (n=12): 1.2 → 1.057
+- `earnings` (n=24): 0.7 → 0.867
+- `deal` (n=25): 0.6 → 0.818
+- `bankruptcy` (n=0): 0.5 → 1.000 (no data, fully neutral)
+
+Weights auto-update as sample counts grow.
+
+### Pattern Library Population Script
+**File:** `sentiment/populate_pattern_library.py`
+
+New reusable script for daily pattern library maintenance:
+- Pulls scanner signals from BQ (both premarket + discovery)
+- Entry time = `scan_time_pt + 30 min` (per-signal, not fixed)
+- Fetches actual 1-min bars from Polygon, computes 60m return, MFE, MAE, EOD
+- Summary table + charts (PnL bar, MFE vs realized scatter)
+- User selects patterns and provides lesson/rule, script pushes to `scanner_patterns` BQ table
+
+Populated 4 patterns from Sep 9 analysis:
+- `false_kill_analyst_megacap` (MU +3.43% — killed by tier-4 gate)
+- `earnings_beat_high_si_continuation` (ASO +7.14% MFE — 60m exit suboptimal)
+- `post_offering_overhang_bounce` (BBIO — EOD only, 60m unreliable)
+- `exhausted_earnings_gap_late_scan` (SUNB -1.80% — 3h late, move exhausted)
+
+Pattern library total: 13 patterns (Sep 3-9).
+
+---
+
 ## Pending / Future Improvements
 
+### Off-Schedule Run Filtering (#5)
+Discovery scanner picks up signals from its own prior runs if BQ isn't filtered by scan time. Add dedup check.
+
+### Polygon Snapshot for Discovery (#6)
+Use Polygon `/v2/snapshot/.../gainers` + `losers` to catch pure-price movers the LLM misses.
+
+### Decouple LLM Extraction from Trading Logic (#7)
+Move scoring math (absorption, composite, gates) out of the LLM prompt into pure Python.
+
+### Adversarial Second Pass (#8)
+Second LLM call to challenge the first call's thesis — "why would this trade fail?"
+
 ### Nightly Auto-Evaluation Job
-Missing automation: a nightly script that (1) fetches actual prices for all scanner signals, (2) computes PnL, (3) labels TP/FP, (4) auto-populates the pattern library with new examples. Currently done manually.
+Script exists (`populate_pattern_library.py`) for manual daily use. Full automation (auto-run after close, auto-grade, auto-update weights) deferred until more data accumulated.
 
 ### AEHR Dual-Signal Bug — RESOLVED
 Root cause: not a same-run bug. V2 logged Stage 1 direction (LONG conf=0) for non-analyzed tickers. V3 deep-analyzed and called SHORT. Fix: non-analyzed tickers now log `direction: NEUTRAL`.
