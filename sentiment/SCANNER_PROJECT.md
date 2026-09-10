@@ -11,7 +11,7 @@ Two scanners run daily before market open:
 | **Premarket** | `premarket_scanner.py` (1603 lines) | Find catalysts for tracked stocks | Fixed 68-ticker deploy list | Known universe |
 | **Discovery** | `discovery_scanner.py` (1589 lines) | Discover movers outside deploy universe | 14 thematic search queries | Any US equity |
 
-**Version:** V3.4 (deployed 2026-09-09). V1 had Gemini price hallucinations. V2 added Polygon verification. V3 added quality gates + pattern library. V3.4 added SEC EDGAR timestamps, catalyst-type weights, mismatch index, selected/not-selected output labeling.
+**Version:** V3.5 (deployed 2026-09-10). V1 had Gemini price hallucinations. V2 added Polygon verification. V3 added quality gates + pattern library. V3.4 added SEC EDGAR timestamps, catalyst-type weights, mismatch index, selected/not-selected output labeling. V3.5 fixed absorption for down-moves, added volume ratio multiplier, Bayesian-shrunk catalyst weights, and pattern library population script.
 
 ---
 
@@ -94,7 +94,7 @@ Runs `verify_and_correct_event_timing()` on all shortlisted candidates:
 1. **SEC EDGAR timestamp** (V3.4): For earnings/deal/regulatory/offering catalysts, queries SEC EDGAR Submissions API for 8-K filing acceptance time. This is authoritative structured data — not an LLM interpretation. Checks today and yesterday (for after-hours earnings). Source tracked as `news_time_source = 'sec_edgar'`.
 2. **Polygon spike time**: For non-SEC catalyst types, scans Polygon 5-min bars to find when price first moved >3% from prior close. If >1 hour older than article timestamp, overrides `news_time`. Source: `'polygon_spike'`.
 3. **LLM timestamp fallback**: If neither SEC nor Polygon produces a timestamp, keeps the original LLM-extracted article publish time. Source: `'llm'`.
-4. **Absorption**: Calculates `absorbed_frac = 1 - (remaining / total_move)`. Marks `move_is_exhausted` if >80% absorbed AND <3% absolute remaining, or price reversed past origin.
+4. **Absorption** (V3.5): Tracks both `peak_price` and `trough_price`. Uses larger-magnitude direction for `total_move`. SHORT candidates now get correct exhaustion math. `is_exhausted` if >80% absorbed AND <3% remaining, or price reversed past origin in either direction.
 5. **Stale filter**: Hard cutoff at `MAX_NEWS_AGE_HOURS = 16`. Overnight AH events (hour >= 16, age <= 20h) are exempted.
 6. **Freshness multiplier**: Time-decay applied to composite score:
 7. **Catalyst-type weight**: Empirical multiplier by catalyst type (0.4x–1.2x).
@@ -135,14 +135,15 @@ Runs `verify_and_correct_event_timing()` on all shortlisted candidates:
 
 ## Scoring Formula
 
-**Composite score** = `confidence * abs(remaining_move_pct) * freshness_multiplier * catalyst_weight * mismatch_multiplier`
+**Composite score** = `confidence * abs(remaining_move_pct) * freshness_multiplier * catalyst_weight * mismatch_multiplier * volume_mult`
 
 Where:
 - `confidence` (1-10): Claude's assessment of trade conviction
 - `remaining_move_pct`: Expected % move after 6:25 AM PT entry
 - `freshness_multiplier`: Time-decay based on corrected news age (0.02x–1.5x)
-- `catalyst_weight`: Empirical weight by catalyst type (0.4x–1.2x, from Sep 3-9 backtest)
+- `catalyst_weight`: Bayesian-shrunk empirical weight by catalyst type. Formula: `w = 1 + (w_emp - 1) * n / (n + 30)`. Small samples shrink toward 1.0.
 - `mismatch_multiplier`: Gap/confidence ratio penalty (0.5x–1.5x; high gap + low confidence = FOMO)
+- `volume_mult`: Premarket volume / avg daily volume ratio (0.7x–1.3x; thin volume = unreliable gap)
 
 **Selection criteria**: `rank <= 5 AND confidence >= 4 AND NOT gate_reason`
 
@@ -167,7 +168,7 @@ BUCKET_NAME      = "time-series-bucket-ys"
 OUTPUT_DIR       = "Data/Scanner"
 BQ_SCANNER_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
 POLYGON_API_KEY  = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-SCANNER_VERSION  = "V3"
+SCANNER_VERSION  = "V3.5"
 
 MAX_WORKERS_SCAN   = 5
 TOP_N_DEEP         = 15
@@ -213,8 +214,8 @@ Fallback price lookup (only used if Polygon fails) and earnings date verificatio
 |----------|---------|-------|--------|
 | `fetch_price_data(ticker)` | Current price + prev close | Ticker | `{current_price, prev_close, change_pct, source}` |
 | `get_prev_session_close(ticker)` | T-1 closing price | Ticker, ref_date | `{close, date}` |
-| `get_actual_event_time(ticker)` | When price first moved >3% | Ticker, ref_date, threshold | `{event_time_dt, prev_close, peak_price, current_price}` |
-| `calculate_absorption(prev, peak, current)` | How much of move is left | 3 prices | `{total_move_pct, remaining_pct, absorbed_pct, is_exhausted}` |
+| `get_actual_event_time(ticker)` | When price first moved >3% | Ticker, ref_date, threshold | `{event_time_dt, prev_close, peak_price, trough_price, current_price}` |
+| `calculate_absorption(prev, peak, current, trough)` | How much of move is left | 4 prices | `{total_move_pct, remaining_pct, absorbed_pct, is_exhausted}` |
 | `verify_and_correct_event_timing(entry)` | Orchestrator: SEC EDGAR → Polygon → LLM timestamp hierarchy + absorption | Shortlist entry dict | Mutates entry in-place with `polygon_*` fields, `news_time_source` |
 | `fetch_sec_filing_time(ticker, date)` | SEC EDGAR 8-K acceptance time lookup | Ticker, filing date | ET datetime string or None |
 
@@ -324,7 +325,14 @@ See [SCANNER_CHANGELOG.md](SCANNER_CHANGELOG.md) for full details. Summary of cu
 
 ### V3.3: 3-layer momentum flip (enriched context → prompt rules → regime-aware gate). Exhausted SHORTs flipped to LONG in risk-on regime instead of killed.
 
-### V3.4 (current): SEC EDGAR timestamps (authoritative 8-K filing times for earnings/deal/regulatory/offering), catalyst-type weights (empirical from Sep 3-9 backtest), mismatch index (gap/confidence ratio), selected/not-selected output labeling, BQ `selected` flag fix in premarket scanner.
+### V3.4: SEC EDGAR timestamps (authoritative 8-K filing times for earnings/deal/regulatory/offering), catalyst-type weights (empirical from Sep 3-9 backtest), mismatch index (gap/confidence ratio), selected/not-selected output labeling, BQ `selected` flag fix in premarket scanner.
+
+### V3.5 (current): Three Fable-review fixes + pattern library tooling:
+- **Absorption fix**: `calculate_absorption` now tracks `trough_price` for down-moves. SHORT candidates previously got `total_move ≈ 0` and skipped exhaustion math.
+- **Volume ratio**: `premarket_volume / avg_daily_volume` as composite multiplier (0.7x–1.3x). Data was already fetched but unused.
+- **Bayesian catalyst weights**: `w = 1 + (w_emp - 1) * n / (n + 30)`. Small-sample types shrink toward neutral. Weights auto-improve as data grows.
+- **Pattern library script**: `populate_pattern_library.py` — daily evaluation tool. Per-signal entry time (scan_time + 30m), Polygon actual PnL, user-curated lessons pushed to BQ `scanner_patterns`.
+- **13 patterns in BQ**: Graded examples from Sep 3-9 for Stage 2 few-shot retrieval.
 
 ---
 
@@ -344,8 +352,8 @@ SEC EDGAR solves this for 8-K-reportable events. Non-SEC events (macro, breaking
 ### 3. Quiet Day Behavior
 When no strong catalysts exist, both scanners correctly return zero selections. This is by design — forcing trades when no edge exists is worse than sitting out. The system should NOT be evaluated on whether it always produces selections.
 
-### 4. Catalyst-Type Sample Sizes
-The `CATALYST_TYPE_WEIGHTS` are derived from only Sep 3-9 2026 data (7 trading days). Small samples per type (e.g., macro n=3, insider n=5) mean the weights may not generalize. Must be re-evaluated as data accumulates.
+### 4. Catalyst-Type Sample Sizes (Mitigated by Bayesian Shrinkage)
+The `CATALYST_TYPE_WEIGHTS` are derived from Sep 3-9 2026 data (7 trading days). V3.5 applies Bayesian shrinkage (`k=30`) so small-sample types (macro n=3, insider n=5) are pulled toward neutral (1.0). Weights converge to empirical values as data accumulates. Re-evaluate periodically via `populate_pattern_library.py` output.
 
 ### 5. Clinical Trial and FDA Procedural Confusion
 LLMs consistently confuse FDA procedural milestones (BLA acceptance, Priority Review, PDUFA date) with actual FDA approval. The clinical data trap gate caps confidence at 3 for these, but the prompt engineering battle continues.
