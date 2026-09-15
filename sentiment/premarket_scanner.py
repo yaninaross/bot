@@ -85,17 +85,17 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-GCP_PROJECT  = "yanina-everything"
+GCP_PROJECT  = "YOUR_GCP_PROJECT"
 GCP_LOCATION = "us-central1"
 GEMINI_MODEL = "gemini-2.5-flash"
 
-CLAUDE_REGION  = "us-east5"
+CLAUDE_REGION  = "YOUR_REGION"
 CLAUDE_MODEL   = "claude-sonnet-4-6"
 
 BUCKET_NAME = "time-series-bucket-ys"
 OUTPUT_DIR  = "Data/Scanner"
-BQ_SCANNER_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
-BQ_PATTERNS_TABLE = "ys-time-series.scoring_logs.scanner_patterns"
+BQ_SCANNER_TABLE = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
+BQ_PATTERNS_TABLE = "YOUR_GCP_PROJECT.scoring_logs.scanner_patterns"
 
 PST = pytz.timezone('America/Los_Angeles')
 _ET = pytz.timezone('America/New_York')
@@ -749,7 +749,7 @@ def fetch_similar_patterns(catalyst_type, ticker=None, max_results=3):
 # ==============================================================================
 # POLYGON-BASED EVENT TIMING & ABSORPTION TOOLS
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
 
 try:
     from polygon import RESTClient as _PolygonClient

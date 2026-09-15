@@ -18,7 +18,7 @@ from google.cloud import bigquery
 import json
 from datetime import datetime
 
-BQ_STATE_TABLE = "ys-time-series.scoring_logs.scanner_ticker_state"
+BQ_STATE_TABLE = "YOUR_GCP_PROJECT.scoring_logs.scanner_ticker_state"
 
 _CREATE_TABLE_DDL = f"""
 CREATE TABLE IF NOT EXISTS `{BQ_STATE_TABLE}` (

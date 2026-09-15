@@ -61,10 +61,9 @@ except (ImportError, Exception):
 # CONFIG
 # ==============================================================================
 EVAL_DATE = '2026-09-10'
-EVAL_DATES = [EVAL_DATE]  # add more dates for multi-day analysis
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BQ_PREMARKET_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
-BQ_DISCOVERY_TABLE = "ys-time-series.scoring_logs.discovery_scanner"
+POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
+BQ_PREMARKET_TABLE = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
+BQ_DISCOVERY_TABLE = "YOUR_GCP_PROJECT.scoring_logs.discovery_scanner"
 
 HORIZONS_MIN = [30, 60]
 INTRADAY_MINUTES = 60
@@ -82,18 +81,16 @@ OUTPUT_DIR = "/tmp"
 # FETCH PREDICTIONS FROM BQ
 # ==============================================================================
 print(f"\n{'='*100}")
-print(f"  SCANNER PnL EVALUATION — {', '.join(EVAL_DATES)}")
+print(f"  SCANNER PnL EVALUATION — {EVAL_DATE}")
 print(f"  Horizons: {HORIZONS_MIN} min | Stop loss: {STOP_LOSS_PCT}% | Entry: at signal time or {MARKET_OPEN_ET} ET")
 print(f"{'='*100}")
 
 bq_client = bigquery.Client()
 
 def fetch_predictions(table, scanner_name):
-    _dates_sql = ", ".join(f"'{d}'" for d in EVAL_DATES)
     if scanner_name == 'premarket':
         q = f"""
         SELECT
-            CAST(scan_date AS STRING) AS eval_date,
             ticker, direction, confidence, remaining_move_pct,
             move_already_absorbed_pct AS move_already_priced_pct,
             expected_move_pct, composite_score AS tradability_score,
@@ -103,14 +100,13 @@ def fetch_predictions(table, scanner_name):
             rank_in_direction,
             COALESCE(stage2_model, '') AS stage2_model
         FROM `{table}`
-        WHERE scan_date IN ({_dates_sql})
+        WHERE scan_date = '{EVAL_DATE}'
           AND direction IN ('LONG', 'SHORT')
-        ORDER BY scan_date, direction, rank_in_direction
+        ORDER BY direction, rank_in_direction
         """
     else:
         q = f"""
         SELECT
-            CAST(scan_date AS STRING) AS eval_date,
             ticker, direction, confidence, remaining_move_pct,
             move_already_priced_pct,
             expected_move_pct, tradability_score,
@@ -120,9 +116,9 @@ def fetch_predictions(table, scanner_name):
             rank_in_direction,
             COALESCE(stage2_model, '') AS stage2_model
         FROM `{table}`
-        WHERE scan_date IN ({_dates_sql})
+        WHERE scan_date = '{EVAL_DATE}'
           AND direction IN ('LONG', 'SHORT')
-        ORDER BY scan_date, direction, rank_in_direction
+        ORDER BY direction, rank_in_direction
         """
     df = bq_client.query(q).to_dataframe()
     df['scanner'] = scanner_name
@@ -159,10 +155,9 @@ def _parse_scan_time(val):
 df_all['scan_time_hhmm'] = df_all['scan_time_pt'].apply(_parse_scan_time)
 df_all = df_all[df_all['scan_time_hhmm'].notna()].copy()
 
-def _scan_pt_to_entry_et(scan_pt_hhmm, eval_date=None):
+def _scan_pt_to_entry_et(scan_pt_hhmm):
     """Convert PT scan time to ET entry time, floored at market open."""
-    _date = eval_date or EVAL_DATES[0]
-    pt_dt = PT.localize(datetime.strptime(f"{_date} {scan_pt_hhmm}", '%Y-%m-%d %H:%M'))
+    pt_dt = PT.localize(datetime.strptime(f"{EVAL_DATE} {scan_pt_hhmm}", '%Y-%m-%d %H:%M'))
     et_dt = pt_dt.astimezone(ET)
     et_hhmm = et_dt.strftime('%H:%M')
     if et_hhmm < MARKET_OPEN_ET:
@@ -171,52 +166,30 @@ def _scan_pt_to_entry_et(scan_pt_hhmm, eval_date=None):
         return None
     return et_hhmm
 
-df_all['eval_date'] = df_all['eval_date'].astype(str)
-df_all['entry_time_et'] = df_all.apply(
-    lambda r: _scan_pt_to_entry_et(r['scan_time_hhmm'], r['eval_date']), axis=1)
+df_all['entry_time_et'] = df_all['scan_time_hhmm'].apply(_scan_pt_to_entry_et)
 n_past_close = df_all['entry_time_et'].isna().sum()
 if n_past_close > 0:
     print(f"    Dropped {n_past_close} signals after market close")
 df_all = df_all[df_all['entry_time_et'].notna()].copy()
 
-# ── Fix C: Cross-scanner dedup + direction conflict detection ────────────────
-# 1. Flag tickers that appear as LONG in one scanner and SHORT in another
-# 2. For same-direction duplicates across scanners, keep higher tradability_score
-# 3. Within each scanner, latest run supersedes earlier runs for same ticker
-_cross_conflict_tickers = set()
-_ticker_directions = defaultdict(set)
-for _, r in df_all.iterrows():
-    if bool(r['selected']) if pd.notna(r.get('selected')) else False:
-        _ticker_directions[r['ticker']].add(r['direction'])
-for tk, dirs in _ticker_directions.items():
-    if 'LONG' in dirs and 'SHORT' in dirs:
-        _cross_conflict_tickers.add(tk)
-        print(f"    ⚠ CROSS-SCANNER CONFLICT: {tk} selected as both LONG and SHORT — gating both")
-
-if _cross_conflict_tickers:
-    df_all.loc[df_all['ticker'].isin(_cross_conflict_tickers), 'selected'] = False
-    df_all.loc[df_all['ticker'].isin(_cross_conflict_tickers), 'gate_reason'] = 'CROSS_SCANNER_DIRECTION_CONFLICT'
-
-# Per-ticker dedup: earliest selected signal wins.
+# ── Per-ticker dedup: earliest selected signal wins ──────────────────────────
 # For each ticker, find the first run where it was selected.
 # If never selected, keep the first appearance (for comparison).
 df_first_sel = (df_all[df_all['selected'] == True]
                 .sort_values('scan_time_hhmm')
-                .drop_duplicates(['ticker', 'eval_date'], keep='first'))
-_sel_keys = set(zip(df_first_sel['ticker'], df_first_sel['eval_date']))
+                .drop_duplicates('ticker', keep='first'))
+tickers_with_sel = set(df_first_sel['ticker'])
 
-df_first_unseen = (df_all[~df_all.apply(lambda r: (r['ticker'], r['eval_date']) in _sel_keys, axis=1)]
+df_first_unseen = (df_all[~df_all['ticker'].isin(tickers_with_sel)]
                    .sort_values('scan_time_hhmm')
-                   .drop_duplicates(['ticker', 'eval_date'], keep='first'))
+                   .drop_duplicates('ticker', keep='first'))
 
 df_all = pd.concat([df_first_sel, df_first_unseen]).reset_index(drop=True)
 
 n_pre_open = (df_all['entry_time_et'] == MARKET_OPEN_ET).sum()
 n_post_open = (df_all['entry_time_et'] != MARKET_OPEN_ET).sum()
-n_conflicts = len(_cross_conflict_tickers)
 print(f"    After dedup: {len(df_all)} unique tickers "
-      f"({n_pre_open} pre-open → {MARKET_OPEN_ET}, {n_post_open} intraday entry)"
-      f"{f', {n_conflicts} direction conflicts gated' if n_conflicts else ''}")
+      f"({n_pre_open} pre-open → {MARKET_OPEN_ET}, {n_post_open} intraday entry)")
 
 for _, r in df_all.sort_values('entry_time_et').iterrows():
     sel_mark = '✓' if r['selected'] else '·'
@@ -278,59 +251,22 @@ def fetch_minute_bars(ticker, eval_date):
         return None, None
 
 
-ticker_date_pairs = df_all[['ticker', 'eval_date']].drop_duplicates().values.tolist()
-print(f"\n  Fetching Polygon 1-min bars for {len(ticker_date_pairs)} (ticker, date) pairs...")
+tickers = df_all['ticker'].unique().tolist()
+print(f"\n  Fetching Polygon 1-min bars for {len(tickers)} tickers...")
 
 bar_data = {}
-for i, (ticker, eval_date) in enumerate(ticker_date_pairs):
-    bar_map, prev_close = fetch_minute_bars(ticker, eval_date)
+for i, ticker in enumerate(tickers):
+    bar_map, prev_close = fetch_minute_bars(ticker, EVAL_DATE)
     if bar_map:
-        bar_data[(ticker, eval_date)] = {'bars': bar_map, 'prev_close': prev_close}
+        bar_data[ticker] = {'bars': bar_map, 'prev_close': prev_close}
         n_bars = len(bar_map)
         first_bar = min(bar_map.keys())
         last_bar = max(bar_map.keys())
-        print(f"    {i+1:>3}/{len(ticker_date_pairs)} {ticker:<6} {eval_date} {n_bars} bars ({first_bar}–{last_bar})")
+        print(f"    {i+1:>3}/{len(tickers)} {ticker:<6} {n_bars} bars ({first_bar}–{last_bar})")
     else:
-        print(f"    {i+1:>3}/{len(ticker_date_pairs)} {ticker:<6} {eval_date} NO DATA")
+        print(f"    {i+1:>3}/{len(tickers)} {ticker:<6} NO DATA")
 
-print(f"\n  Got price data for {len(bar_data)}/{len(ticker_date_pairs)} pairs")
-
-# ── SPY/QQQ market control — same-window returns for beta adjustment ─────────
-print(f"\n  Fetching SPY/QQQ 1-min bars for market beta control...")
-_market_bars = {}
-for _eval_d in EVAL_DATES:
-    for _mkt_tk in ['SPY', 'QQQ']:
-        _mkt_bm, _ = fetch_minute_bars(_mkt_tk, _eval_d)
-        if _mkt_bm:
-            _market_bars[(_mkt_tk, _eval_d)] = _mkt_bm
-            print(f"    {_mkt_tk} {_eval_d}: {len(_mkt_bm)} bars")
-        else:
-            print(f"    {_mkt_tk} {_eval_d}: NO DATA")
-
-def _market_return(entry_hhmm, horizon_min, mkt_ticker='SPY', eval_date=None):
-    """Return pct change of mkt_ticker from entry_hhmm over horizon_min minutes."""
-    bm = _market_bars.get((mkt_ticker, eval_date))
-    if not bm:
-        return np.nan
-    entry_bar = bm.get(entry_hhmm)
-    if not entry_bar:
-        _cands = sorted(k for k in bm if k >= entry_hhmm)
-        if not _cands:
-            return np.nan
-        entry_bar = bm[_cands[0]]
-        entry_hhmm = _cands[0]
-    entry_p = entry_bar['open']
-    eh, em = map(int, entry_hhmm.split(':'))
-    total_m = eh * 60 + em + horizon_min
-    th, tm = total_m // 60, total_m % 60
-    target = f"{th:02d}:{tm:02d}"
-    if target >= MARKET_CLOSE_ET:
-        _last = sorted(bm.keys())[-1]
-        target = _last
-    t_bar = bm.get(target)
-    if not t_bar:
-        return np.nan
-    return round(((t_bar['close'] - entry_p) / entry_p) * 100, 4)
+print(f"\n  Got price data for {len(bar_data)}/{len(tickers)} tickers")
 
 
 # ==============================================================================
@@ -342,9 +278,8 @@ for _, row in df_all.iterrows():
     ticker = row['ticker']
     direction = row['direction']
     entry_hhmm = row['entry_time_et']
-    eval_date = row['eval_date']
 
-    td = bar_data.get((ticker, eval_date))
+    td = bar_data.get(ticker)
     if td is None:
         continue
 
@@ -427,7 +362,6 @@ for _, row in df_all.iterrows():
 
     rec = {
         'ticker': ticker,
-        'eval_date': eval_date,
         'scanner': row['scanner'],
         'direction': direction,
         'confidence': int(row['confidence']),
@@ -465,32 +399,12 @@ for _, row in df_all.iterrows():
         rec[f'win_{h}m'] = rec[f'pnl_{h}m'] > 0 if pd.notna(rec[f'pnl_{h}m']) else np.nan
         rec[f'sl_win_{h}m'] = rec[f'sl_pnl_{h}m'] > 0 if pd.notna(rec[f'sl_pnl_{h}m']) else np.nan
 
-    # Market beta control — SPY/QQQ same-window returns from this signal's entry
-    for _mkt in ['SPY', 'QQQ']:
-        for h in HORIZONS_MIN:
-            rec[f'{_mkt}_{h}m'] = _market_return(actual_entry_hhmm, h, _mkt, eval_date)
-        rec[f'{_mkt}_eod'] = _market_return(actual_entry_hhmm,
-            max(raw_curve.keys()) if raw_curve else 60, _mkt, eval_date)
-
-    # Alpha = signal PnL minus directional market exposure
-    for h in HORIZONS_MIN:
-        spy_h = rec.get(f'SPY_{h}m', np.nan)
-        if pd.notna(rec[f'pnl_{h}m']) and pd.notna(spy_h):
-            mkt_contrib = spy_h * sign
-            rec[f'alpha_{h}m'] = round(rec[f'pnl_{h}m'] - mkt_contrib, 4)
-        else:
-            rec[f'alpha_{h}m'] = np.nan
-
     records.append(rec)
 
 df_pnl = pd.DataFrame(records)
 
-n_before_filter = len(df_pnl)
-df_pnl = df_pnl[df_pnl['max_minutes'] >= 30].copy()
-print(f"  Filtered for 30m+ data: {len(df_pnl)}/{n_before_filter} trades kept")
-
 if df_pnl.empty:
-    print(f"\n  No PnL records with 30m+ data. Exiting.")
+    print(f"\n  No PnL records computed. Exiting.")
     sys.exit(0)
 
 
@@ -523,8 +437,7 @@ df_ungated = df_pnl[
 # ==============================================================================
 print(f"\n\n{'='*100}")
 print(f"  ╔══════════════════════════════════════════════════════════════════╗")
-_date_label = ', '.join(EVAL_DATES)
-print(f"  ║  SCANNER PnL RESULTS — {_date_label} (SL={STOP_LOSS_PCT}%){'':>10}║")
+print(f"  ║  SCANNER PnL RESULTS — {EVAL_DATE} (SL={STOP_LOSS_PCT}%){'':>23}║")
 print(f"  ╚══════════════════════════════════════════════════════════════════╝")
 print(f"{'='*100}")
 
@@ -547,18 +460,10 @@ def print_stats(df, label, indent="  "):
         raw_avg = raw_valid.mean() if len(raw_valid) > 0 else 0
         sl_avg = valid.mean()
         sl_wr = (valid > 0).sum() / n_valid * 100
-        se = valid.std() / np.sqrt(n_valid) if n_valid > 1 else 0
         n_trunc = n - n_valid
         trunc_note = f"  ({n_trunc} truncated)" if n_trunc > 0 else ""
-        alpha_str = ""
-        alpha_col = f'alpha_{h}m'
-        if alpha_col in df.columns:
-            alpha_valid = df[alpha_col].dropna()
-            if len(alpha_valid) > 0:
-                alpha_str = f"  α={alpha_valid.mean():+.2f}%"
         print(f"{indent}{label} @ {h:>2}m: n={n_valid:>3}  "
               f"raw={raw_avg:+.2f}%  SL={sl_avg:+.2f}%  WR={sl_wr:.0f}%  "
-              f"SE={se:.2f}%{alpha_str}  "
               f"stopped={n_stopped}/{n}{trunc_note}")
     if 'sl_pnl_eod' in df.columns:
         eod = df['sl_pnl_eod'].dropna()
@@ -583,11 +488,6 @@ print(f"  ── BY SCANNER ──")
 for scanner in df_pnl['scanner'].unique():
     df_s = df_pnl[df_pnl['scanner'] == scanner]
     print_stats(df_s, scanner.upper())
-
-print(f"  ── BY DATE ──")
-for dt in sorted(df_pnl['eval_date'].unique()):
-    df_dt = df_pnl[df_pnl['eval_date'] == dt]
-    print_stats(df_dt, dt)
 
 print(f"  ── BY CATALYST TYPE ──")
 for cat in sorted(df_pnl['catalyst_type'].unique()):
@@ -623,33 +523,13 @@ for h in HORIZONS_MIN:
     print(f"    ALL portfolio @ {h}m: {p:+.3f}%  (n={n_all})")
 
 
-# ── Market beta control summary ──
-if 'alpha_60m' in df_pnl.columns:
-    print(f"\n  ── MARKET BETA CONTROL ──")
-    for _grp_label, _grp_df in [('ALL', df_pnl), ('SELECTED', df_sel),
-                                 ('LONG', df_long), ('SHORT', df_short)]:
-        if len(_grp_df) == 0:
-            continue
-        for h in HORIZONS_MIN:
-            _pnl_v = _grp_df[f'sl_pnl_{h}m'].dropna()
-            _alpha_v = _grp_df[f'alpha_{h}m'].dropna()
-            _spy_v = _grp_df[f'SPY_{h}m'].dropna()
-            if len(_pnl_v) == 0:
-                continue
-            _se = _alpha_v.std() / np.sqrt(len(_alpha_v)) if len(_alpha_v) > 1 else 0
-            print(f"    {_grp_label:>10} @ {h}m: PnL={_pnl_v.mean():+.2f}%  "
-                  f"SPY={_spy_v.mean():+.2f}%  alpha={_alpha_v.mean():+.2f}%  "
-                  f"SE={_se:.2f}%  n={len(_alpha_v)}")
-    print()
-
 # ── Per-ticker detail table ──
 print(f"\n  ── PER-TICKER RESULTS (SL={STOP_LOSS_PCT}%) ──")
-header = (f"  {'Ticker':<7} {'Date':<11} {'Dir':<6} {'Scan':<10} {'Run':>5} {'Entry':>5} {'Conf':>4} {'Sel':>4} "
+header = (f"  {'Ticker':<7} {'Dir':<6} {'Scan':<10} {'Run':>5} {'Entry':>5} {'Conf':>4} {'Sel':>4} "
           f"{'Gap':>6} {'30m':>7} {'SL30':>7} {'60m':>7} {'SL60':>7} "
-          f"{'SPY60':>7} {'α60':>7} "
           f"{'EOD':>7} {'Stop':>5} {'Catalyst':<20}")
 print(header)
-print(f"  {'─'*165}")
+print(f"  {'─'*145}")
 
 df_sorted = df_pnl.sort_values('sl_pnl_60m', ascending=False, na_position='last')
 for _, r in df_sorted.iterrows():
@@ -665,18 +545,14 @@ for _, r in df_sorted.iterrows():
     sl_30 = f"{r['sl_pnl_30m']:+6.1f}%" if pd.notna(r.get('sl_pnl_30m')) else '   n/a'
     pnl_60 = f"{r['pnl_60m']:+6.1f}%" if pd.notna(r.get('pnl_60m')) else '   n/a'
     sl_60 = f"{r['sl_pnl_60m']:+6.1f}%" if pd.notna(r.get('sl_pnl_60m')) else '   n/a'
-    spy_60 = f"{r['SPY_60m']:+6.1f}%" if pd.notna(r.get('SPY_60m')) else '   n/a'
-    alpha_60 = f"{r['alpha_60m']:+6.1f}%" if pd.notna(r.get('alpha_60m')) else '   n/a'
 
-    print(f"  {r['ticker']:<7} {r.get('eval_date',''):<11} {r['direction']:<6} {r['scanner']:<10} "
+    print(f"  {r['ticker']:<7} {r['direction']:<6} {r['scanner']:<10} "
           f"{run_time:>5} {entry_time:>5} {r['confidence']:>4} {sel_str:>4} "
           f"{r['gap_pct']:>+5.1f}% "
           f"{pnl_30:>7} "
           f"{sl_30:>7} "
           f"{pnl_60:>7} "
           f"{sl_60:>7} "
-          f"{spy_60:>7} "
-          f"{alpha_60:>7} "
           f"{eod_str:>7} "
           f"{stop_str:>5} "
           f"{cat}{gate_tag}")
@@ -692,10 +568,10 @@ for h in HORIZONS_MIN:
 # ==============================================================================
 # CHARTS — Page 1: Time-series return curves
 # ==============================================================================
-fig_path_ts = f"{OUTPUT_DIR}/scanner_pnl_timeseries_combined.png"
+fig_path_ts = f"{OUTPUT_DIR}/scanner_pnl_timeseries_{EVAL_DATE}.png"
 
 fig, axes = plt.subplots(3, 2, figsize=(20, 18))
-fig.suptitle(f'Scanner PnL — Intraday Return Curves — {", ".join(EVAL_DATES)}\n'
+fig.suptitle(f'Scanner PnL — Intraday Return Curves — {EVAL_DATE}\n'
              f'Entry at signal time (pre-open → {MARKET_OPEN_ET} ET) | '
              f'SL={STOP_LOSS_PCT}% | Equal-weight',
              fontsize=13, fontweight='bold')
@@ -797,10 +673,10 @@ plt.close()
 # ==============================================================================
 # CHARTS — Page 2: Bar charts & scatter
 # ==============================================================================
-fig_path_bars = f"{OUTPUT_DIR}/scanner_pnl_bars_combined.png"
+fig_path_bars = f"{OUTPUT_DIR}/scanner_pnl_bars_{EVAL_DATE}.png"
 
 fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-fig.suptitle(f'Scanner PnL — Summary Charts — {", ".join(EVAL_DATES)}\n'
+fig.suptitle(f'Scanner PnL — Summary Charts — {EVAL_DATE}\n'
              f'Entry at signal time | SL={STOP_LOSS_PCT}%',
              fontsize=13, fontweight='bold')
 

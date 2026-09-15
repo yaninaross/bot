@@ -80,7 +80,7 @@ VOLUME_SPIKE_MULT = 3.0   # C2: volume > 3x 20-day avg
 
 INITIAL_CAPITAL = 100_000
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
 _BASE = "https://api.polygon.io"
 _TK_RE = re.compile(r'^[A-Z]{1,5}$')
 ET = pytz.timezone('America/New_York')

@@ -113,11 +113,11 @@ CLAUDE_MODEL   = "claude-sonnet-4-6"
 
 BUCKET_NAME = "time-series-bucket-ys"
 OUTPUT_DIR  = "Data/Scanner"
-BQ_TABLE    = "ys-time-series.scoring_logs.agent2_signal_log"
-BQ_RUNS_TABLE = "ys-time-series.scoring_logs.agent2_daily_runs"
-BQ_PATTERNS_TABLE = "ys-time-series.scoring_logs.scanner_patterns"
+BQ_TABLE    = "YOUR_GCP_PROJECT.scoring_logs.agent2_signal_log"
+BQ_RUNS_TABLE = "YOUR_GCP_PROJECT.scoring_logs.agent2_daily_runs"
+BQ_PATTERNS_TABLE = "YOUR_GCP_PROJECT.scoring_logs.scanner_patterns"
 
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
 
 PST = pytz.timezone('America/Los_Angeles')
 ET = pytz.timezone('America/New_York')

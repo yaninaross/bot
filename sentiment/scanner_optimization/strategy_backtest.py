@@ -51,9 +51,9 @@ except: pass
 TRADING_DATES = ['2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11']
 N_DATES = len(TRADING_DATES)
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
-BQ_PREMARKET_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
-BQ_DISCOVERY_TABLE = "ys-time-series.scoring_logs.discovery_scanner"
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+BQ_PREMARKET_TABLE = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
+BQ_DISCOVERY_TABLE = "YOUR_GCP_PROJECT.scoring_logs.discovery_scanner"
 
 FORCE_REFETCH = False
 API_DELAY = 0.02

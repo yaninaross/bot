@@ -40,7 +40,7 @@ PREV_DATES = {
     "2026-09-10": "2026-09-09",
     "2026-09-11": "2026-09-10",
 }
-POLYGON_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_KEY = "YOUR_POLYGON_API_KEY"
 MIN_GAP_PCT = 3.0
 
 # ── Helper functions ───────────────────────────────────────────────────────────

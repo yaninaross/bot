@@ -99,8 +99,8 @@ CLAUDE_MODEL   = "claude-sonnet-4-6"
 
 BUCKET_NAME = "time-series-bucket-ys"
 OUTPUT_DIR  = "Data/Scanner"
-BQ_TABLE    = "ys-time-series.scoring_logs.discovery_scanner"
-BQ_PATTERNS_TABLE = "ys-time-series.scoring_logs.scanner_patterns"
+BQ_TABLE    = "YOUR_GCP_PROJECT.scoring_logs.discovery_scanner"
+BQ_PATTERNS_TABLE = "YOUR_GCP_PROJECT.scoring_logs.scanner_patterns"
 
 PST = pytz.timezone('America/Los_Angeles')
 NOW_PT = datetime.now(PST)
@@ -818,7 +818,7 @@ def fetch_comparable_patterns(catalyst_type, n=5):
         SELECT primary_ticker, catalyst_type, primary_direction, primary_gap_pct,
                primary_ret_60m, primary_mfe_pct, primary_eod_pct, primary_outcome,
                lesson, pattern_rule
-        FROM `ys-time-series.scoring_logs.scanner_patterns`
+        FROM `YOUR_GCP_PROJECT.scoring_logs.scanner_patterns`
         WHERE catalyst_type = '{catalyst_type}'
         ORDER BY event_date DESC
         LIMIT {n}
@@ -841,7 +841,7 @@ def fetch_comparable_patterns(catalyst_type, n=5):
 
 # POLYGON-BASED EVENT TIMING & ABSORPTION TOOLS
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
 
 try:
     from polygon import RESTClient as _PolygonClient

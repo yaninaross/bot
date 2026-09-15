@@ -159,15 +159,15 @@ Final output: top 5 LONG + top 5 SHORT by composite score, split into SELECTED v
 ## Configuration
 
 ```python
-GCP_PROJECT      = "yanina-everything"
+GCP_PROJECT      = "YOUR_GCP_PROJECT"
 GCP_LOCATION     = "us-central1"
 GEMINI_MODEL     = "gemini-2.5-flash"
 CLAUDE_MODEL     = "claude-sonnet-4-6"
-CLAUDE_REGION    = "us-east5"
+CLAUDE_REGION    = "YOUR_REGION"
 BUCKET_NAME      = "time-series-bucket-ys"
 OUTPUT_DIR       = "Data/Scanner"
-BQ_SCANNER_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
-POLYGON_API_KEY  = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+BQ_SCANNER_TABLE = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
+POLYGON_API_KEY  = "YOUR_POLYGON_API_KEY"
 SCANNER_VERSION  = "V3.5"
 
 MAX_WORKERS_SCAN   = 5
@@ -232,7 +232,7 @@ Summary tables (one-line per candidate) + detailed cards with catalyst, reasonin
 Contains: `scan_date`, `scan_time_pt`, `market_context`, `scan_results` (all 68 tickers), `deep_results` (top 15), `shortlist_long` (top 5), `shortlist_short` (top 5).
 
 ### BigQuery
-`ys-time-series.scoring_logs.premarket_scanner` — one row per scored candidate.
+`YOUR_GCP_PROJECT.scoring_logs.premarket_scanner` — one row per scored candidate.
 
 Key columns: `scan_timestamp`, `ticker`, `direction`, `rank_in_direction`, `selected`, `confidence`, `expected_move_pct`, `remaining_move_pct`, `move_already_absorbed_pct`, `total_catalyst_impact_pct`, `move_is_exhausted`, `composite_score`, `catalyst_type`, `reasoning`, `freshness_multiplier`, `scanner_version`, `acquirer_or_target`, `deal_materiality`, `catalyst_is_new`, `news_timeline_json`.
 

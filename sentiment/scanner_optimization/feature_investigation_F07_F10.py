@@ -25,7 +25,7 @@ FEATURES_DIR = os.path.join(RESULTS_DIR, 'features')
 CSV_PATH = os.path.join(RESULTS_DIR, 'v2_features_full.csv')
 DAILY_DATA_PATH = os.path.join(RESULTS_DIR, 'v2_daily_data.json')
 MINUTE_BARS_PATH = os.path.join(RESULTS_DIR, 'v3_minute_bars.json')
-POLYGON_API_KEY = '2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs'
+POLYGON_API_KEY = 'YOUR_POLYGON_API_KEY'
 POLYGON_SLEEP = 0.05  # seconds between API calls
 TICKER_CACHE_PATH = os.path.join(FEATURES_DIR, 'ticker_reference_cache.json')
 

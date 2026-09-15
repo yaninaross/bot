@@ -64,7 +64,7 @@ SCAN_DATE = None             # None = today, 'YYYY-MM-DD' = historical
 DRY_RUN = False
 REPORT_WEEKS = 4
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
 _BASE = "https://api.polygon.io"
 
 try:

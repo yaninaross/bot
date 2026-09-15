@@ -22,7 +22,7 @@ OUT_DIR    = os.path.join(BASE_DIR, 'features')
 CSV_PATH   = os.path.join(BASE_DIR, 'v2_features_full.csv')
 BARS_PATH  = os.path.join(BASE_DIR, 'v3_minute_bars.json')
 DAILY_PATH = os.path.join(BASE_DIR, 'v2_daily_data.json')
-POLYGON_KEY = '2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs'
+POLYGON_KEY = 'YOUR_POLYGON_API_KEY'
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ── Load data ───────────────────────────────────────────────────────────────

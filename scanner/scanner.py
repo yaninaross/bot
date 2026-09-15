@@ -70,14 +70,14 @@ SCAN_DATE = None
 DRY_RUN = False
 REPORT_WEEKS = 4
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
 POLYGON_BASE = "https://api.polygon.io"
 
 BQ_PROJECT = os.environ.get("BIGQUERY_PROJECT_ID", "yanina-everything")
 BQ_PREMARKET_TABLE = os.environ.get("BIGQUERY_PREMARKET_TABLE",
-                                     "ys-time-series.scoring_logs.premarket_scanner")
+                                     "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner")
 BQ_DISCOVERY_TABLE = os.environ.get("BIGQUERY_DISCOVERY_TABLE",
-                                     "ys-time-series.scoring_logs.discovery_scanner")
+                                     "YOUR_GCP_PROJECT.scoring_logs.discovery_scanner")
 
 try:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
