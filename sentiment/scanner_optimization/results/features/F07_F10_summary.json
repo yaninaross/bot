@@ -1,0 +1,86 @@
+{
+  "generated": "2026-09-13",
+  "dataset": {
+    "total_rows": 316,
+    "pnl_t2_close_available": 117,
+    "pnl_60m_nosl_available": 272
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4,
+  "features": {
+    "F07_pm_vol_ratio": {
+      "pearson_r_t2": 0.2875,
+      "pearson_p_t2": 0.0017,
+      "spearman_r_t2": 0.073,
+      "pearson_r_60m": 0.1057,
+      "Q1_avg_pnl": -2.2651,
+      "Q4_avg_pnl": 1.3692,
+      "cross_strategy_consistent": 1,
+      "cross_strategy_total": 1,
+      "direction": "lower_better"
+    },
+    "F08_orb_width_score": {
+      "pearson_r_t2": 0.2426,
+      "pearson_p_t2": 0.0087,
+      "spearman_r_t2": -0.0527,
+      "pearson_r_60m": 0.3228,
+      "Q1_avg_pnl": 0.5396,
+      "Q4_avg_pnl": 1.6478,
+      "cross_strategy_consistent": 6,
+      "cross_strategy_total": 6,
+      "direction": "higher_better"
+    },
+    "F09_market_cap": {
+      "pearson_r_t2": -0.0765,
+      "pearson_p_t2": 0.4295,
+      "spearman_r_t2": -0.1363,
+      "pearson_r_60m": 0.005,
+      "Q1_avg_pnl": 2.0833,
+      "Q4_avg_pnl": -0.7781,
+      "cross_strategy_consistent": 1,
+      "cross_strategy_total": 2,
+      "direction": "higher_better"
+    },
+    "F10_float_size": {
+      "pearson_r_t2": -0.0878,
+      "pearson_p_t2": 0.3804,
+      "spearman_r_t2": -0.1173,
+      "pearson_r_60m": 0.1026,
+      "Q1_avg_pnl": 1.5981,
+      "Q4_avg_pnl": -0.535,
+      "cross_strategy_consistent": 2,
+      "cross_strategy_total": 3,
+      "direction": "higher_better"
+    }
+  },
+  "ranking": [
+    {
+      "feature": "F07_pm_vol_ratio",
+      "abs_pearson_r": 0.2875,
+      "pearson_p": 0.0017,
+      "cross_strategy_pct": 1.0,
+      "direction": "lower_better"
+    },
+    {
+      "feature": "F08_orb_width_score",
+      "abs_pearson_r": 0.2426,
+      "pearson_p": 0.0087,
+      "cross_strategy_pct": 1.0,
+      "direction": "higher_better"
+    },
+    {
+      "feature": "F10_float_size",
+      "abs_pearson_r": 0.0878,
+      "pearson_p": 0.3804,
+      "cross_strategy_pct": 0.6667,
+      "direction": "higher_better"
+    },
+    {
+      "feature": "F09_market_cap",
+      "abs_pearson_r": 0.0765,
+      "pearson_p": 0.4295,
+      "cross_strategy_pct": 0.5,
+      "direction": "higher_better"
+    }
+  ]
+}

@@ -1,0 +1,364 @@
+{
+  "feature": "F06_Day_of_Week",
+  "description": "Day of week effect on gap-trade PnL (Mon-Thu in sample)",
+  "hypothesis": "Certain days may systematically produce better/worse gap-trade outcomes",
+  "correlation": {
+    "vs_pnl_t2_close": {
+      "pearson_r": 0.0439,
+      "pearson_p": 0.638,
+      "spearman_r": 0.0454,
+      "spearman_p": 0.6268,
+      "n": 117
+    },
+    "vs_pnl_60m_nosl": {
+      "pearson_r": -0.0389,
+      "pearson_p": 0.5227,
+      "spearman_r": -0.0304,
+      "spearman_p": 0.6182,
+      "n": 272
+    }
+  },
+  "anova_test": {
+    "pnl_t2_close": {
+      "f_stat": 0.2225,
+      "p_value": 0.638
+    },
+    "pnl_60m_nosl": {
+      "f_stat": 0.1489,
+      "p_value": 0.9304
+    }
+  },
+  "day_analysis": {
+    "Tuesday": {
+      "pnl_t2_close": {
+        "n": 102,
+        "avg_pnl": -0.4926,
+        "median_pnl": -0.5776,
+        "std": 10.8895,
+        "sharpe": -0.0452,
+        "win_rate": 0.4706,
+        "ci_95_low": -2.6059,
+        "ci_95_high": 1.6207,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      },
+      "pnl_60m_nosl": {
+        "n": 94,
+        "avg_pnl": 0.2597,
+        "median_pnl": 0.1143,
+        "std": 5.4637,
+        "sharpe": 0.0475,
+        "win_rate": 0.5319,
+        "ci_95_low": -0.8448,
+        "ci_95_high": 1.3642,
+        "max_loss": -24.5588,
+        "max_gain": 35.4098
+      },
+      "trade_count": 102
+    },
+    "Wednesday": {
+      "pnl_t2_close": {
+        "n": 15,
+        "avg_pnl": 0.8638,
+        "median_pnl": 0.44,
+        "std": 5.7231,
+        "sharpe": 0.1509,
+        "win_rate": 0.6,
+        "ci_95_low": -2.0324,
+        "ci_95_high": 3.7601,
+        "max_loss": -10.1449,
+        "max_gain": 15.9615
+      },
+      "pnl_60m_nosl": {
+        "n": 14,
+        "avg_pnl": 0.2746,
+        "median_pnl": 0.2578,
+        "std": 1.2292,
+        "sharpe": 0.2234,
+        "win_rate": 0.6429,
+        "ci_95_low": -0.3693,
+        "ci_95_high": 0.9184,
+        "max_loss": -2.2164,
+        "max_gain": 3.4326
+      },
+      "trade_count": 15
+    },
+    "Thursday": {
+      "pnl_t2_close": {
+        "n": 0,
+        "note": "insufficient"
+      },
+      "pnl_60m_nosl": {
+        "n": 54,
+        "avg_pnl": -0.1347,
+        "median_pnl": -0.1353,
+        "std": 2.1035,
+        "sharpe": -0.064,
+        "win_rate": 0.4444,
+        "ci_95_low": -0.6958,
+        "ci_95_high": 0.4263,
+        "max_loss": -9.375,
+        "max_gain": 6.358
+      },
+      "trade_count": 58
+    },
+    "Friday": {
+      "pnl_t2_close": {
+        "n": 0,
+        "note": "insufficient"
+      },
+      "pnl_60m_nosl": {
+        "n": 110,
+        "avg_pnl": -0.1558,
+        "median_pnl": 0.032,
+        "std": 5.7187,
+        "sharpe": -0.0272,
+        "win_rate": 0.5091,
+        "ci_95_low": -1.2245,
+        "ci_95_high": 0.9129,
+        "max_loss": -16.7442,
+        "max_gain": 24.4921
+      },
+      "trade_count": 141
+    }
+  },
+  "cross_strategy_consistency": {
+    "consistent_pct": 0.3125,
+    "details": {
+      "Tuesday": {
+        "B4_T1_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D2_SHORT_MOM": {
+          "n": 20,
+          "spearman_r": 0.0959,
+          "spearman_p": 0.6877,
+          "consistent": true
+        },
+        "BASELINE_V1": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C2_LONG_ORB": {
+          "n": 2,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C1_LONG_FADE": {
+          "n": 4,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D1_LONG_MOM": {
+          "n": 30,
+          "spearman_r": 0.0505,
+          "spearman_p": 0.7909,
+          "consistent": true
+        },
+        "B1_WIDE_SHORT": {
+          "n": 17,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "B3_EOD_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C3_EARNINGS": {
+          "n": 10,
+          "spearman_r": -0.3482,
+          "spearman_p": 0.3242,
+          "consistent": false
+        },
+        "B2_NO_ORB": {
+          "n": 6,
+          "note": "insufficient",
+          "consistent": null
+        }
+      },
+      "Wednesday": {
+        "B4_T1_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D2_SHORT_MOM": {
+          "n": 20,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "BASELINE_V1": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C2_LONG_ORB": {
+          "n": 2,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C1_LONG_FADE": {
+          "n": 4,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D1_LONG_MOM": {
+          "n": 30,
+          "spearman_r": 0.0193,
+          "spearman_p": 0.9196,
+          "consistent": true
+        },
+        "B1_WIDE_SHORT": {
+          "n": 17,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "B3_EOD_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C3_EARNINGS": {
+          "n": 10,
+          "spearman_r": 0.3482,
+          "spearman_p": 0.3242,
+          "consistent": true
+        },
+        "B2_NO_ORB": {
+          "n": 6,
+          "note": "insufficient",
+          "consistent": null
+        }
+      },
+      "Thursday": {
+        "B4_T1_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D2_SHORT_MOM": {
+          "n": 20,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "BASELINE_V1": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C2_LONG_ORB": {
+          "n": 2,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C1_LONG_FADE": {
+          "n": 4,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D1_LONG_MOM": {
+          "n": 30,
+          "spearman_r": -0.2316,
+          "spearman_p": 0.2182,
+          "consistent": false
+        },
+        "B1_WIDE_SHORT": {
+          "n": 17,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "B3_EOD_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C3_EARNINGS": {
+          "n": 10,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "B2_NO_ORB": {
+          "n": 6,
+          "note": "insufficient",
+          "consistent": null
+        }
+      },
+      "Friday": {
+        "B4_T1_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D2_SHORT_MOM": {
+          "n": 20,
+          "spearman_r": -0.0959,
+          "spearman_p": 0.6877,
+          "consistent": false
+        },
+        "BASELINE_V1": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C2_LONG_ORB": {
+          "n": 2,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C1_LONG_FADE": {
+          "n": 4,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "D1_LONG_MOM": {
+          "n": 30,
+          "spearman_r": 0.055,
+          "spearman_p": 0.7727,
+          "consistent": true
+        },
+        "B1_WIDE_SHORT": {
+          "n": 17,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "B3_EOD_ENTRY": {
+          "n": 3,
+          "note": "insufficient",
+          "consistent": null
+        },
+        "C3_EARNINGS": {
+          "n": 10,
+          "spearman_r": NaN,
+          "spearman_p": NaN,
+          "consistent": false
+        },
+        "B2_NO_ORB": {
+          "n": 6,
+          "note": "insufficient",
+          "consistent": null
+        }
+      }
+    }
+  },
+  "conclusion": {
+    "passes": false,
+    "max_abs_corr": 0.0439,
+    "min_p_value": 0.5227,
+    "consistency_ratio": 0.3125,
+    "summary": "Day of week FAILS feature gate. Only 4 days in sample -- very limited statistical power.",
+    "caveat": "Only 4 trading days in sample; any finding is unreliable."
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4
+}

@@ -6,3 +6,7 @@ __pycache__/
 .env.*
 *.egg-info/
 *.log
+*.db
+*.db-wal
+*.db-shm
+float_cache.json

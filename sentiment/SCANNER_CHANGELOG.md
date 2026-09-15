@@ -495,7 +495,532 @@ Pattern library total: 13 patterns (Sep 3-9).
 
 ---
 
+## V3.6 — Deploy Ticker Deep Analysis Fix + Strong Catalyst Override (2026-09-10)
+
+### Problem: Deploy Tickers Systematically Excluded from Stage 2
+
+**Root cause — AVAV false negative:** On Sep 10, AVAV reported blowout FQ1 earnings (revenue $480.5M vs $456.2M consensus, +5.3% beat; EPS $0.59, more than doubled). Stock gapped +4.9% premarket, then ran +7.3% more at RTH open to +13.1% at day high. Both scanners discovered the catalyst across 8 separate scan runs with correct details — but every entry was logged as `direction=NEUTRAL, confidence=0, selected=False`. AVAV never reached Stage 2 deep analysis.
+
+**Two architectural bottlenecks were responsible:**
+
+1. **Premarket scanner — top-N cutoff** (`premarket_scanner.py:1342-1344`):
+   ```python
+   deep_candidates = [t for t, r in ranked[:TOP_N_DEEP]  # TOP_N_DEEP = 15
+                      if r.get('catalyst_score', 0) >= 3
+                      and t in _valid_tickers]
+   ```
+   With 68 deploy tickers competing for 15 Stage 2 slots, any ticker ranked 16th or below was dropped — even with a strong catalyst. All excluded tickers were hardcoded to `NEUTRAL/conf=0` in BQ logging.
+
+2. **Discovery scanner — deploy de-prioritization** (`discovery_scanner.py:1421-1424`):
+   ```python
+   deep_pool = sorted(candidates, key=lambda x: (-int(not x.get('in_deploy', False)),
+                                                   -x['move_score']))
+   deep_candidates = deep_pool[:20]
+   ```
+   Sort key pushed ALL deploy tickers behind every non-deploy ticker. With 30-50+ non-deploy discoveries and only 20 Stage 2 slots, deploy tickers were virtually guaranteed to be excluded.
+
+**Impact on Sep 10:** AVAV was a +7.3% LONG from open (MFE +13.1%), representing the single best trade of the day — and neither scanner signaled it. The 8 NEUTRAL/conf=0 BQ entries confirm both scanners saw it but couldn't act.
+
+### Changes — Both Scanners
+
+#### Fix 16: Remove deploy ticker de-prioritization (discovery scanner)
+
+**File:** `discovery_scanner.py`
+
+**Before:**
+```python
+deep_pool = sorted(candidates, key=lambda x: (-int(not x.get('in_deploy', False)),
+                                                -x['move_score']))
+```
+
+**After:**
+```python
+deep_pool = sorted(candidates, key=lambda x: -x['move_score'])
+```
+
+Deploy tickers now compete purely on `move_score` alongside non-deploy tickers. A deploy ticker with a strong catalyst (like AVAV earnings beat) enters Stage 2 if its move_score is in the top 20. This does NOT flood Stage 2 with deploy tickers — it only lets them compete fairly.
+
+#### Fix 17: Strong catalyst override (both scanners)
+
+**Files:** `premarket_scanner.py`, `discovery_scanner.py`
+
+**New config constants:**
+```python
+STRONG_CATALYST_SCORE = 7   # catalyst_score/strength threshold
+STRONG_CATALYST_MOVE  = 8.0 # expected_move_pct threshold
+```
+
+**Logic:** After selecting the top-N candidates for Stage 2, scan ALL remaining ranked tickers. If any ticker has `catalyst_score >= 7` OR `expected_move_pct >= 8.0`, force-include it in Stage 2 regardless of rank position.
+
+**Premarket scanner implementation:**
+```python
+_deep_set = set(deep_candidates)
+for t, r in ranked[TOP_N_DEEP:]:
+    if t in _deep_set or t not in _valid_tickers:
+        continue
+    _cs = r.get('catalyst_score', 0)
+    _em = abs(float(r.get('expected_move_pct', 0)))
+    if _cs >= STRONG_CATALYST_SCORE or _em >= STRONG_CATALYST_MOVE:
+        deep_candidates.append(t)
+        _deep_set.add(t)
+```
+
+Also expanded Polygon validation to cover override candidates (previously only validated `ranked[:TOP_N_DEEP]`).
+
+**Discovery scanner implementation:** Same logic using `catalyst_strength` (discovery's equivalent of `catalyst_score`).
+
+**Override tickers are logged with their override reason** for tracking:
+```
+Strong catalyst override: +2 tickers forced into Stage 2:
+    AVAV: catalyst_score=8/10, expected_move=12.0%
+    XYZ:  catalyst_score=7/10, expected_move=6.5%
+```
+
+### Why Two Fixes, Not One
+
+The de-prioritization fix (Fix 16) ensures deploy tickers compete fairly in the normal flow. But even with fair ranking, a top-N cutoff can still exclude strong signals on crowded days (many tickers with similar scores). The strong catalyst override (Fix 17) is a safety net — tickers with very strong catalysts can never be silently dropped, regardless of how many other candidates exist.
+
+### Retroactive Analysis — Sep 10
+
+AVAV had `catalyst_score=8` in discovery (revenue beat + EPS doubled). Under V3.6:
+- **Fix 16** alone: AVAV's `move_score = 12.0 × 8/10 = 9.6` would rank in the top 10 of today's discovery candidates → enters Stage 2.
+- **Fix 17** alone: `catalyst_score=8 >= 7` triggers override → forced into Stage 2 regardless of rank.
+- Either fix independently would have surfaced AVAV for deep analysis.
+
+### Version bump
+Both scanners: `SCANNER_VERSION = 'V3.6'`
+
+---
+
+## V3.7 — Stage 2 Resilience: Per-Ticker Fallback, Error Visibility (2026-09-10)
+
+### Problem: 73% of Stage 2 API Calls Fail Silently
+
+**Root cause — time machine simulation on AVAV:** After V3.6 ensured AVAV would enter Stage 2, investigation revealed that Stage 2 itself silently drops most tickers. Of 15 Stage 2 calls on Sep 10, only 4 completed — 11 failed with Claude API errors (rate limits, overloaded). These failures were:
+
+1. **All-or-nothing model selection**: `_deep_analyze_one` chose Claude OR Gemini for all tickers at startup. If Claude hit rate limits mid-batch, remaining tickers got `{'error': ...}` with no retry.
+2. **Silently dropped**: Tickers with `'error'` in results were filtered out at line 1758 (`if 'error' in result: continue`) — never logged to BQ, never surfaced.
+3. **Indistinguishable from scan-only**: Failed Stage 2 tickers were logged with `direction='NEUTRAL', stage2_model='', confidence=0` — identical to tickers that never attempted Stage 2.
+
+**Impact:** Stage 2 has a 100% signal rate when it completes (zero NEUTRAL results ever — Claude's `tool_choice` forces LONG/SHORT). The bottleneck was never LLM conservatism — it was silent infrastructure failures dropping 73% of calls.
+
+### Changes — Both Scanners
+
+#### Fix 18: Per-ticker Claude → Gemini fallback
+
+**Files:** `premarket_scanner.py`, `discovery_scanner.py`
+
+**Before:** All-or-nothing model selection:
+```python
+def _deep_analyze_one(ticker_prompt_pair):
+    _ticker, _prompt = ticker_prompt_pair
+    if claude_ok:
+        return _ticker, claude_analyze(_prompt, DEEP_SYSTEM, claude_client)
+    else:
+        return _ticker, gemini_search(_prompt, DEEP_SYSTEM)
+```
+
+**After:** Per-ticker retry — if Claude fails for one ticker, retry that ticker with Gemini:
+```python
+def _deep_analyze_one(ticker_prompt_pair):
+    _ticker, _prompt = ticker_prompt_pair
+    if claude_ok:
+        _result = claude_analyze(_prompt, DEEP_SYSTEM, claude_client)
+        if 'error' in _result:
+            print(f"    ⟳ {_ticker} Claude failed, retrying with Gemini...")
+            _result = gemini_search(_prompt, DEEP_SYSTEM)
+        return _ticker, _result
+    else:
+        return _ticker, gemini_search(_prompt, DEEP_SYSTEM)
+```
+
+Claude rate limits typically affect individual requests, not the entire API key. This change means a single 429 doesn't cascade to all remaining tickers.
+
+#### Fix 19: Stage 2 completion summary
+
+**Files:** `premarket_scanner.py`, `discovery_scanner.py`
+
+After Phase B completes, print a summary showing how many Stage 2 calls succeeded vs failed:
+```
+Stage 2 complete: 45s
+    12/15 succeeded, 3 errors, 0 missing
+    Error details:
+      COIN: 429 rate limit exceeded
+      MSTR: overloaded_error
+      RIOT: 429 rate limit exceeded
+```
+
+Previously, individual `✓`/`✗` lines scrolled past during parallel execution with no aggregate count. Error root causes were truncated or lost.
+
+#### Fix 20: BQ error visibility — `stage2_attempted` and `stage2_error` columns
+
+**Files:** `premarket_scanner.py`, `discovery_scanner.py`
+
+Two new BQ columns added via ALTER TABLE:
+- `stage2_attempted` (BOOL): `True` if ticker was sent to Stage 2, even if it failed
+- `stage2_error` (STRING): Error message if Stage 2 failed, empty string if succeeded
+
+**Deep analysis rows** (longs/shorts): `stage2_attempted=True, stage2_error=''`
+
+**Scan-only rows**: Checks whether ticker was in `deep_candidates` set:
+- If never attempted: `stage2_attempted=False, stage2_error=''`
+- If attempted and failed: `stage2_attempted=True, stage2_error='429 rate limit...'`
+- If attempted and succeeded but wasn't LONG/SHORT (impossible with current tool_choice, but defensive): `stage2_attempted=True, stage2_error=''`
+
+This makes failed Stage 2 calls queryable:
+```sql
+SELECT ticker, stage2_error, scan_score
+FROM `ys-time-series.scoring_logs.premarket_scanner`
+WHERE stage2_attempted = TRUE AND stage2_error != ''
+ORDER BY scan_date DESC
+```
+
+#### Fix 21: Per-ticker model tracking + Claude error capture (V3.7 update)
+
+**Problem found in V3.7 first run:** `stage2_model` was hardcoded to `'gemini-2.5-flash'` in both scanners regardless of which model actually ran. When Claude failed and Gemini fallback succeeded, the Claude error was lost — no visibility into Claude's reliability.
+
+**Changes — both scanners:**
+
+1. **`_deep_analyze_one` now returns `_s2_meta` dict** per-ticker:
+   - `claude_attempted` (bool): whether Claude was tried
+   - `claude_error` (string): Claude error message if it failed (even when Gemini fallback succeeded)
+   - `model_used` (string): which model produced the final result (`claude-sonnet-4-6` or `gemini-2.5-flash`)
+
+2. **`stage2_model` BQ field now tracks actual model** used per-ticker via `_s2_meta['model_used']`. Removed hardcoded `stage2_model = 'gemini-2.5-flash'`.
+
+3. **New `claude_error` BQ column** captures Claude errors even when Gemini fallback succeeded. Query:
+   ```sql
+   SELECT ticker, stage2_model, claude_error
+   FROM `ys-time-series.scoring_logs.premarket_scanner`
+   WHERE stage2_attempted = TRUE AND claude_error != ''
+   ORDER BY scan_date DESC
+   ```
+
+4. **Stage 2 summary now shows model breakdown:**
+   ```
+   Stage 2 complete: 45s
+       12/15 succeeded, 3 errors, 0 missing
+       Models: 8 Claude, 4 Gemini-fallback, 0 Gemini-direct, 3 failed-both
+       Claude errors (recovered via Gemini):
+         COIN: 429 rate limit exceeded
+         MSTR: overloaded_error
+   ```
+
+5. **`claude_ok` status logged** after connectivity test for run-level visibility.
+
+### Version bump
+Both scanners: `SCANNER_VERSION = 'V3.7'` (unchanged — same version, bug fix within)
+
+---
+
+## V3.8 — Investigation Fixes: 7 Mechanical Changes (2026-09-10)
+
+### Context
+
+Full investigation of Sep 10 performance (`investigation_2026-09-10.md`) identified 12 fix proposals (A–M). After review, 7 mechanical zero-judgment fixes were shipped immediately. Policy-dependent fixes (E vs V3.3, A, B, D) were deferred.
+
+**Investigation headline numbers (decontaminated):**
+- Selected signals (n=19): -0.06% avg PnL @60m — indistinguishable from zero
+- 12/19 selected signals were FPs (-1.08% avg loss)
+- 4 categories: WRONG_DIRECTION (4, -1.58%), BAD_CATALYST (4, -1.10%), EXHAUSTED_MOVE (3, -0.23%), STALE_SIGNAL (1, -1.60%)
+- Confidence is NOT predictive (r ≈ 0 vs PnL)
+- Gates add nothing (catch signals that fail conf>=4 threshold anyway)
+
+### Changes — premarket_scanner.py (V3.7 files, inline edits)
+
+#### Fix M — Discovery BQ direction logging
+**File:** `discovery_scanner.py` line 2637
+
+**Bug:** Non-deep-analyzed tickers logged `direction: 'NEUTRAL'` hardcoded. This masked Stage 1's actual direction call, making NEUTRAL_BLOCKED analysis impossible.
+
+**Fix:** Changed to `'direction': str(d.get('direction', 'NEUTRAL')).upper() or 'NEUTRAL'` — logs actual Stage 1 direction (LONG/SHORT/NEUTRAL) instead of force-setting NEUTRAL.
+
+#### Fix C — Cross-scanner dedup
+**Files:** `discovery_scanner.py` (~line 2263), `scanner_pnl_eval.py`
+
+**Bug:** Same ticker could appear as LONG in premarket and SHORT in discovery (or vice versa) with no conflict detection. Both would be selected.
+
+**Fix (discovery_scanner.py):** Before quality gates, query `BQ_PREMARKET_TABLE` for today's selections. If same ticker appears in opposing direction, gate it:
+```python
+_xdedup_q = f"""SELECT ticker, direction FROM `{BQ_PREMARKET_TABLE}`
+WHERE scan_date = '{TODAY_STR}' AND selected = TRUE"""
+```
+Gate reason: `cross_scanner_conflict (premarket=LONG)`.
+
+**Fix (scanner_pnl_eval.py):** Added cross-scanner conflict detection before per-ticker dedup. Checks if same ticker appears as both LONG and SHORT across selected signals, gates both.
+
+#### Conf carve-out removal
+**File:** `premarket_scanner.py`
+
+**Bug:** Gate 1 (self-contradiction) had `if contradictions and entry['confidence'] <= 4` — confidence 5+ signals with self-contradictory reasoning bypassed the gate entirely. Gate 2 (direction mismatch) had `if entry['confidence'] <= 5`.
+
+**Fix:** Gate 1 changed to `if contradictions` (no confidence exception). Gate 2 changed to `if not entry.get('_gate_reason')` (only skip if already gated, not based on confidence).
+
+**Rationale:** Confidence is non-predictive. A conf=7 signal saying "untradeable" in its reasoning is still self-contradictory.
+
+#### Fix H — Stale event gate (>36h from news_timeline)
+**Files:** `premarket_scanner.py`, `discovery_scanner.py`
+
+**Problem:** CVX selected LONG on 2-day-old Venezuela news recycled by aggregator site. Freshness multiplier only applied to scoring weight, not as a hard gate.
+
+**Fix:** New gate checks earliest event in `news_timeline`. If origin is >36 hours old, hard-kill. Uses inline datetime parser in premarket scanner (needed because `_parse_news_time` is defined later in the file).
+
+Gate reason: `stale_event (>36h)`.
+
+#### Fix I — Immaterial deal gate
+**Files:** `premarket_scanner.py`, `discovery_scanner.py`
+
+**Problem:** OPTX selected LONG on $5M contract for a $300M company (1.6% of revenue). LLM assigned conf=5 because the catalyst was real — but deal too small to move the stock.
+
+**Fix:** New gate checks `deal_materiality` field from Stage 2. If `deal_materiality in ('immaterial', 'low', 'minimal')`, hard-kill.
+
+Gate reason: `immaterial_deal`.
+
+#### Fix K — Vague analyst gate
+**Files:** `premarket_scanner.py`, `discovery_scanner.py`
+
+**Problem:** TSLA selected LONG on "multiple analyst upgrades" with no named firms. For a $1.45T mega-cap, anonymous analyst notes are noise.
+
+**Fix:** New gate for `catalyst_type == 'analyst'`. Regex checks for named firms (Morgan Stanley, Goldman, JPMorgan, Citi, etc. — 35 firms). If no named firm found AND catalyst text contains vague phrases ("multiple analysts", "several analysts", "analyst consensus", "wall street"), gate it.
+
+Gate reason: `vague_analyst`.
+
+#### SPY/QQQ market beta control (eval script)
+**File:** `scanner_pnl_eval.py`
+
+**Problem:** Scanner PnL eval didn't account for market beta. A LONG signal on a +1% SPY day needed alpha attribution.
+
+**Fix:**
+- Added `_market_bars` dict fetching SPY and QQQ 1-min bars at script start
+- Added `_market_return(ticker, entry_time, window)` function computing same-window SPY return
+- Per-ticker table now includes `SPY60` (SPY return over same 60m window) and `α60` (signal PnL minus SPY exposure)
+- `print_stats()` now shows SE and alpha
+- Added "MARKET BETA CONTROL" summary section
+
+### Impact Estimate (retroactive on Sep 10 data)
+
+| Fix | Would Have Prevented | Net Impact |
+|-----|---------------------|------------|
+| H (stale) | CVX LONG -2.50% | +2.50% saved |
+| I (immaterial) | OPTX LONG -0.70% | +0.70% saved |
+| K (vague analyst) | TSLA LONG -0.10% | +0.10% saved |
+| C (cross-scanner) | No conflict on Sep 10 | 0 (preventive) |
+| Conf carve-out | Blocks future high-conf self-contradictions | 0 (preventive) |
+| **Total** | | **+3.30% saved** |
+
+No winners would have been gated by these fixes.
+
+---
+
+## V4.0 — Residual-Based Architecture Rewrite (2026-09-10)
+
+### New files
+- `premarket_scanner_v4.py` (2791 lines)
+- `discovery_scanner_v4.py` (2859 lines)
+
+Original V3.7 files (`premarket_scanner.py`, `discovery_scanner.py`) preserved unchanged for side-by-side comparison.
+
+### Architecture Change: From Confidence+Gates to Residual+EV
+
+V3.x selection: `composite = confidence × |remaining_move|`, filtered by binary gates.
+
+**Problems with V3.x:**
+1. **Confidence is non-predictive** (r ≈ 0 vs PnL across Sep 3-10 data)
+2. **Gate compounding** — 10 binary gates each killing 10% of winners = ~35% false-positive rate on good trades
+3. **E vs V3.3 dilemma** — contradictory rules about whether to follow catalyst direction or tape direction
+
+**V4.0 resolves all three** by replacing the entire selection mechanism with a single variable: the **residual**.
+
+### Core Concept: Residual
+
+```
+residual = catalyst_justified_move_interval − realized_gap_at_entry
+```
+
+- **Direction** comes from `sign(residual_midpoint)`, not from the LLM's `direction` field
+- **Magnitude** is `|residual_mid|` — how much move remains after what's already priced in
+- **Clarity** depends on whether the interval crosses zero:
+  - `clear` — entire interval on one side (e.g., [+2%, +6%]) → clarity_mult = 1.0
+  - `lean` — mostly one side (e.g., [-0.3%, +4%]) → clarity_mult = 0.6
+  - `ambiguous` — straddles zero widely (e.g., [-3%, +2%]) → clarity_mult = 0.2
+
+### New LLM Output Fields (Stage 2 prompt + tool schema)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `expected_move_low_pct` | float | Conservative end of catalyst impact range |
+| `expected_move_high_pct` | float | Aggressive end of catalyst impact range |
+| `catalyst_direction` | LONG/SHORT | Direction the catalyst itself implies, independent of price action |
+
+The interval width encodes LLM uncertainty. A Goldman Buy initiation on $50B company = [+1%, +4%] (narrow, one-sided). Mixed earnings EPS beat / revenue miss = [-3%, +2%] (wide, crosses zero).
+
+### Residual Computation (Python, post-LLM)
+
+```python
+gap_at_entry = polygon_change_pct  # actual premarket gap from Polygon
+
+residual_low  = expected_move_low_pct  - gap_at_entry
+residual_high = expected_move_high_pct - gap_at_entry
+residual_mid  = (residual_low + residual_high) / 2
+
+# Direction from residual sign
+if residual_low > 0.5:   → LONG, clear
+if residual_high < -0.5: → SHORT, clear
+if one side >0.5, other side near zero: → lean
+else: → NEUTRAL, ambiguous
+```
+
+### Informed Score (Second Axis)
+
+Measures whether premarket tape is informed (heavy, idiosyncratic) or noise (thin, correlated with market):
+
+```python
+vol_signal  = min(1.0, premarket_volume / avg_daily_volume / 3.0)
+idio_signal = min(1.0, |gap_at_entry - spy_futures_pct| / 5.0)
+informed_score = vol_signal * 0.6 + idio_signal * 0.4
+```
+
+### Tape Discount
+
+When informed tape opposes catalyst direction (e.g., bullish catalyst but stock gapping down on heavy idiosyncratic volume), reduce expected magnitude:
+
+```python
+if tape_opposes_catalyst and informed_score > 0.5:
+    tape_discount = 1.0 - (informed_score - 0.5) * 0.6  # max 30% discount
+else:
+    tape_discount = 1.0
+```
+
+### EV-Based Selection (replaces composite score)
+
+```python
+EV = |residual_mid| × tape_discount × clarity_mult
+```
+
+Selection: top N by EV, minimum `EV >= 0.5`, no hard block.
+
+### Hard Blockers (only 4 — data validity, not signal quality)
+
+| Blocker | Threshold | Rationale |
+|---------|-----------|-----------|
+| PRICE_FLOOR | < $3.00 | Penny stock gap-and-crap dominates |
+| STALE_ORIGIN | > 36h | Recycled news |
+| LOW_LIQUIDITY | < 20k premarket vol | Untradeable |
+| CROSS_SCANNER_CONFLICT | Same ticker opposing direction | Conflicting signals |
+
+### Soft EV Penalties (replaces binary gates)
+
+Instead of killing trades, multiply EV by a penalty factor. No winner is lost; weak signals are ranked lower.
+
+| Penalty | Multiplier | Detection |
+|---------|-----------|-----------|
+| Self-contradiction | 0.3x | 25+ kill phrases in reasoning ("untradeable", "zero edge", etc.) |
+| Direction-residual conflict | 0.5x | LLM says LONG but residual_mid < -1.0, or vice versa |
+| Immaterial deal | 0.2x | `deal_materiality` in (immaterial, low, minimal) |
+| Vague analyst | 0.3x | `catalyst_type=analyst`, no named firm, vague phrases |
+| Pre-earnings | 0.1x | "expected to report", "not yet reported", etc. — no catalyst yet |
+
+### How V4 Resolves the E vs V3.3 Dilemma
+
+The contradiction: V3.3 said "follow the tape" (SHORT a stock that's down premarket). Fix E said "don't short bullish catalysts" (don't SHORT a stock with a Buy initiation).
+
+**V4 resolution:** Direction comes from `sign(residual)`, not from either rule. Both are special cases:
+
+- **HOOD** (StoneX Buy initiation $170 PT, stock -2.3% premarket):
+  - Catalyst-justified interval: [+5%, +15%]. Gap: -2.3%.
+  - Residual: [+7.3%, +17.3%]. Clearly LONG. V3 shorted it (FP -2.50%).
+
+- **RXT** (micro-cap gapped +8.6% on vague "AI infrastructure" news):
+  - Catalyst-justified interval: [+2%, +5%]. Gap: +8.6%.
+  - Residual: [-6.6%, -3.6%]. Clearly SHORT (gap exceeded catalyst). V3 went LONG (FP -2.50%).
+
+- **INTC** (offering -5% gap, offering justified [-5%, -8%]):
+  - Residual: [0%, -3%]. Lean SHORT, but residual_mid ≈ -1.5% — low EV. Likely not selected. Correct — move was exhausted by entry time.
+
+### Pattern Library as Magnitude Calibration
+
+`fetch_comparable_patterns(catalyst_type, n=5)` queries BQ `scanner_patterns` table by catalyst_type, retrieves k-nearest comparable outcomes with actual returns. Fed to Stage 2 prompt as context to ground the expected move interval in observed data rather than LLM priors.
+
+### New BQ Columns (13)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `residual_low` | FLOAT64 | Lower bound of residual interval |
+| `residual_high` | FLOAT64 | Upper bound of residual interval |
+| `residual_mid` | FLOAT64 | Midpoint of residual |
+| `ev` | FLOAT64 | Expected value score |
+| `residual_direction` | STRING | Direction from residual sign |
+| `residual_clarity` | STRING | clear / lean / ambiguous |
+| `informed_score` | FLOAT64 | Tape informativeness (0-1) |
+| `gap_at_entry` | FLOAT64 | Actual gap from Polygon |
+| `expected_move_low_pct` | FLOAT64 | LLM conservative estimate |
+| `expected_move_high_pct` | FLOAT64 | LLM aggressive estimate |
+| `catalyst_direction` | STRING | Catalyst-implied direction |
+| `tape_discount` | FLOAT64 | Discount from opposing informed tape |
+| `ev_penalty` | STRING | Which soft penalties applied |
+
+### Output Format Changes
+
+Summary tables now show EV, gap, interval, residual direction, and clarity instead of composite/confidence:
+
+```
+  ▲ LONG DISCOVERIES (5)
+    === SELECTED (3) ===
+     # Ticker    EV   Dir   Clarity   Gap    Interval        Type  Event Time         Age
+    ─────────────────────────────────────────────────────────────────────────────────────
+     1 AVAV    4.2ev LONG  clear     +4.9%  [+5.0%, +15.0%] EARN  09/10 4:34PM PT    3h
+```
+
+### Version
+Both V4 scanners: `SCANNER_VERSION = 'V4.0'`
+
+LLM fields `direction` and `confidence` are still collected and logged for comparison but NOT used in selection.
+
+---
+
+## V4.0 Investigation + Eval Script Updates (2026-09-10)
+
+### Investigation report
+**File:** `investigation_2026-09-10.md`
+
+Full 343-line investigation of Sep 10 scanner performance using decontaminated entry times. Three parallel agents analyzed false positives, false negatives, and selection/gate quality.
+
+Key findings:
+- Selection is random (selected avg -0.06% within SE of not-selected -0.03%)
+- Gates have negligible value (-0.02%/trade, within noise)
+- 71% of big movers were NEUTRAL_BLOCKED (never reached Stage 2)
+- Confidence non-predictive (doc's own data: r ≈ 0)
+- 12 fix proposals classified P0/P1/P2; 7 shipped as V3.8, rest deferred
+
+### Eval script enhancements
+**File:** `scanner_pnl_eval.py`
+
+- Cross-scanner conflict detection before per-ticker dedup
+- SPY/QQQ market bars fetching and alpha computation per signal
+- Per-ticker table includes SPY60 and α60 columns
+- "MARKET BETA CONTROL" summary section
+- `print_stats()` shows SE and alpha
+
+### Investigation script
+**File:** `scanner_investigation.py`
+
+Automated investigation orchestrator — pulls BQ data, computes decontaminated PnL, categorizes FPs, identifies gate audit metrics. Used to generate `investigation_2026-09-10.md`.
+
+---
+
 ## Pending / Future Improvements
+
+### Fix D — NEUTRAL Promotion (needs clean post-Fix-M data)
+Promote NEUTRAL-classified tickers to Stage 2 based on exchange data criteria (`|premarket_change| × premarket_volume / ADV`), not LLM catalyst_score. Needs one day of post-Fix-M clean data to measure true NEUTRAL rate.
+
+### Fix B — Exhaustion Gate (held until math rewrite)
+14/19 selected signals had exhausted=True — flag is miscalibrated (peak-based total_move, 0.8 threshold, gap-down computation incomplete). Fix exhaustion math first (direction-aware, retrace-from-high as separate feature), then re-derive predictive power.
+
+### Fix G — Deterministic Earnings Direction
+Replace "do not return NEUTRAL for post-earnings" prompt with deterministic lookup: sign of EPS/revenue surprise from Polygon financials or 8-K, plus premarket change sign. No LLM guessing.
+
+### Fix A — Direction-Remaining Contradiction Gate
+Subsumed by V4 residual architecture. Direction now comes from residual sign, eliminating the LLM-says-LONG-but-remaining-is-negative bug class entirely.
 
 ### Off-Schedule Run Filtering (#5)
 Discovery scanner picks up signals from its own prior runs if BQ isn't filtered by scan time. Add dedup check.
@@ -503,17 +1028,11 @@ Discovery scanner picks up signals from its own prior runs if BQ isn't filtered 
 ### Polygon Snapshot for Discovery (#6)
 Use Polygon `/v2/snapshot/.../gainers` + `losers` to catch pure-price movers the LLM misses.
 
-### Decouple LLM Extraction from Trading Logic (#7)
-Move scoring math (absorption, composite, gates) out of the LLM prompt into pure Python.
-
 ### Adversarial Second Pass (#8)
 Second LLM call to challenge the first call's thesis — "why would this trade fail?"
 
 ### Nightly Auto-Evaluation Job
-Script exists (`populate_pattern_library.py`) for manual daily use. Full automation (auto-run after close, auto-grade, auto-update weights) deferred until more data accumulated.
+Script exists (`populate_pattern_library.py`) for manual daily use. Full automation deferred until more data accumulated.
 
-### AEHR Dual-Signal Bug — RESOLVED
-Root cause: not a same-run bug. V2 logged Stage 1 direction (LONG conf=0) for non-analyzed tickers. V3 deep-analyzed and called SHORT. Fix: non-analyzed tickers now log `direction: NEUTRAL`.
-
-### Selection Inversion
-The fundamental problem — selected trades perform worse than non-selected — is not fully solved by V3 gates. Gates filter obvious bad signals, but the composite ranking that determines selection order may still be inversely predictive. Future work: investigate replacing composite score with a simpler signal (e.g., just confidence × catalyst_magnitude).
+### Selection Inversion — RESOLVED in V4
+V4 replaces composite (confidence × remaining_move) with EV (|residual_mid| × tape_discount × clarity_mult). Confidence removed from selection entirely. Direction comes from residual sign, not LLM. This eliminates the systematic inversion where selected trades performed worse than non-selected.

@@ -1,0 +1,52 @@
+{
+  "validation_required": true,
+  "live_trading_weeks_needed": 4,
+  "dataset": {
+    "rows": 316,
+    "dates": [
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11"
+    ],
+    "tickers": 253
+  },
+  "features": {
+    "F16_pm_retrace": {
+      "signal_strength": "NO_SIGNAL",
+      "pearson_r": -0.0864,
+      "pearson_p": 0.3117,
+      "status": "computed"
+    },
+    "F17_pm_volume_profile": {
+      "signal_strength": "NO_SIGNAL",
+      "pearson_r": 0.0583,
+      "pearson_p": 0.4986,
+      "status": "computed"
+    },
+    "F18_pm_path_slope": {
+      "signal_strength": "UNKNOWN",
+      "pearson_r": "N/A",
+      "pearson_p": "N/A",
+      "status": "computed"
+    },
+    "F19_put_call_ratio": {
+      "signal_strength": "UNKNOWN",
+      "pearson_r": "N/A",
+      "pearson_p": "N/A",
+      "status": "computed"
+    },
+    "F20_hv_rank": {
+      "signal_strength": "NO_SIGNAL",
+      "pearson_r": 0.0136,
+      "pearson_p": 0.8693,
+      "status": "computed"
+    },
+    "F21_edgar_offering": {
+      "signal_strength": "UNKNOWN",
+      "pearson_r": "N/A",
+      "pearson_p": "N/A",
+      "status": "computed"
+    }
+  }
+}

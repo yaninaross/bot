@@ -1,0 +1,314 @@
+{
+  "feature": "F04_Entry_Delay_Minutes",
+  "description": "Minutes from 09:30 to actual entry time, plus peak-detection variant",
+  "hypothesis": "Later entries (more delay) may reduce edge as gap-fill window shrinks",
+  "correlation": {
+    "entry_delay_vs_pnl_t2_close": {
+      "pearson_r": -0.0164,
+      "pearson_p": 0.8605,
+      "spearman_r": -0.0421,
+      "spearman_p": 0.6523,
+      "n": 117
+    },
+    "entry_delay_vs_pnl_60m_nosl": {
+      "pearson_r": -0.0364,
+      "pearson_p": 0.5497,
+      "spearman_r": -0.0867,
+      "spearman_p": 0.1541,
+      "n": 272
+    },
+    "peak_delay_vs_pnl_t2_close": {
+      "pearson_r": 0.0028,
+      "pearson_p": 0.9789,
+      "spearman_r": 0.0604,
+      "spearman_p": 0.5649,
+      "n": 93
+    },
+    "peak_delay_vs_pnl_60m_nosl": {
+      "pearson_r": -0.0054,
+      "pearson_p": 0.9364,
+      "spearman_r": 0.0451,
+      "spearman_p": 0.5082,
+      "n": 217
+    }
+  },
+  "quartile_analysis": {
+    "note": "could not create quartiles",
+    "n": 117
+  },
+  "threshold_sweep": {
+    "0": {
+      "pass": {
+        "n": 117,
+        "avg_pnl": -0.3187,
+        "median_pnl": -0.3252,
+        "std": 10.3637,
+        "sharpe": -0.0307,
+        "win_rate": 0.4872,
+        "ci_95_low": -2.1966,
+        "ci_95_high": 1.5593,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 0,
+        "note": "insufficient"
+      }
+    },
+    "2": {
+      "pass": {
+        "n": 44,
+        "avg_pnl": -1.1263,
+        "median_pnl": -0.739,
+        "std": 6.9224,
+        "sharpe": -0.1627,
+        "win_rate": 0.4318,
+        "ci_95_low": -3.1717,
+        "ci_95_high": 0.9192,
+        "max_loss": -18.6765,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 73,
+        "avg_pnl": 0.1681,
+        "median_pnl": 1.08,
+        "std": 11.9911,
+        "sharpe": 0.014,
+        "win_rate": 0.5205,
+        "ci_95_low": -2.5827,
+        "ci_95_high": 2.9189,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "5": {
+      "pass": {
+        "n": 44,
+        "avg_pnl": -1.1263,
+        "median_pnl": -0.739,
+        "std": 6.9224,
+        "sharpe": -0.1627,
+        "win_rate": 0.4318,
+        "ci_95_low": -3.1717,
+        "ci_95_high": 0.9192,
+        "max_loss": -18.6765,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 73,
+        "avg_pnl": 0.1681,
+        "median_pnl": 1.08,
+        "std": 11.9911,
+        "sharpe": 0.014,
+        "win_rate": 0.5205,
+        "ci_95_low": -2.5827,
+        "ci_95_high": 2.9189,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "10": {
+      "pass": {
+        "n": 44,
+        "avg_pnl": -1.1263,
+        "median_pnl": -0.739,
+        "std": 6.9224,
+        "sharpe": -0.1627,
+        "win_rate": 0.4318,
+        "ci_95_low": -3.1717,
+        "ci_95_high": 0.9192,
+        "max_loss": -18.6765,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 73,
+        "avg_pnl": 0.1681,
+        "median_pnl": 1.08,
+        "std": 11.9911,
+        "sharpe": 0.014,
+        "win_rate": 0.5205,
+        "ci_95_low": -2.5827,
+        "ci_95_high": 2.9189,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "15": {
+      "pass": {
+        "n": 44,
+        "avg_pnl": -1.1263,
+        "median_pnl": -0.739,
+        "std": 6.9224,
+        "sharpe": -0.1627,
+        "win_rate": 0.4318,
+        "ci_95_low": -3.1717,
+        "ci_95_high": 0.9192,
+        "max_loss": -18.6765,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 73,
+        "avg_pnl": 0.1681,
+        "median_pnl": 1.08,
+        "std": 11.9911,
+        "sharpe": 0.014,
+        "win_rate": 0.5205,
+        "ci_95_low": -2.5827,
+        "ci_95_high": 2.9189,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "30": {
+      "pass": {
+        "n": 43,
+        "avg_pnl": -0.7181,
+        "median_pnl": -0.6791,
+        "std": 6.4464,
+        "sharpe": -0.1114,
+        "win_rate": 0.4419,
+        "ci_95_low": -2.6449,
+        "ci_95_high": 1.2087,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 74,
+        "avg_pnl": -0.0865,
+        "median_pnl": 0.929,
+        "std": 12.1085,
+        "sharpe": -0.0071,
+        "win_rate": 0.5135,
+        "ci_95_low": -2.8454,
+        "ci_95_high": 2.6723,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "60": {
+      "pass": {
+        "n": 43,
+        "avg_pnl": -0.7181,
+        "median_pnl": -0.6791,
+        "std": 6.4464,
+        "sharpe": -0.1114,
+        "win_rate": 0.4419,
+        "ci_95_low": -2.6449,
+        "ci_95_high": 1.2087,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 74,
+        "avg_pnl": -0.0865,
+        "median_pnl": 0.929,
+        "std": 12.1085,
+        "sharpe": -0.0071,
+        "win_rate": 0.5135,
+        "ci_95_low": -2.8454,
+        "ci_95_high": 2.6723,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "120": {
+      "pass": {
+        "n": 30,
+        "avg_pnl": 0.2092,
+        "median_pnl": -0.1406,
+        "std": 6.9761,
+        "sharpe": 0.03,
+        "win_rate": 0.5,
+        "ci_95_low": -2.2872,
+        "ci_95_high": 2.7056,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 87,
+        "avg_pnl": -0.5007,
+        "median_pnl": -0.3412,
+        "std": 11.3284,
+        "sharpe": -0.0442,
+        "win_rate": 0.4828,
+        "ci_95_low": -2.8812,
+        "ci_95_high": 1.8798,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    }
+  },
+  "peak_detection_stats": {
+    "n_detected": 241,
+    "mean_delay": 4.9
+  },
+  "cross_strategy_consistency": {
+    "score": 2,
+    "total_tested": 4,
+    "details": {
+      "B4_T1_ENTRY": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D2_SHORT_MOM": {
+        "n": 20,
+        "spearman_r": -0.3982,
+        "spearman_p": 0.0821,
+        "consistent": true
+      },
+      "BASELINE_V1": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C2_LONG_ORB": {
+        "n": 2,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C1_LONG_FADE": {
+        "n": 4,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D1_LONG_MOM": {
+        "n": 30,
+        "spearman_r": 0.1091,
+        "spearman_p": 0.5662,
+        "consistent": false
+      },
+      "B1_WIDE_SHORT": {
+        "n": 17,
+        "spearman_r": 0.0672,
+        "spearman_p": 0.7979,
+        "consistent": false
+      },
+      "B3_EOD_ENTRY": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C3_EARNINGS": {
+        "n": 10,
+        "spearman_r": -0.3868,
+        "spearman_p": 0.2695,
+        "consistent": true
+      },
+      "B2_NO_ORB": {
+        "n": 6,
+        "note": "insufficient",
+        "consistent": null
+      }
+    }
+  },
+  "conclusion": {
+    "passes": false,
+    "max_abs_corr": 0.0364,
+    "min_p_value": 0.5497,
+    "consistency_score": "2/4",
+    "summary": "Entry delay FAILS feature gate."
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4
+}

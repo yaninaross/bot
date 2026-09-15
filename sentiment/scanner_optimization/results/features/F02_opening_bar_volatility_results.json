@@ -1,0 +1,383 @@
+{
+  "feature": "F02_Opening_Bar_Volatility",
+  "description": "First regular-session bar (09:30) range: (high - low) / open",
+  "hypothesis": "High opening bar volatility indicates chaotic price action, hurting fade PnL",
+  "correlation": {
+    "vs_pnl_t2_close": {
+      "pearson_r": 0.275,
+      "pearson_p": 0.0028,
+      "spearman_r": -0.0497,
+      "spearman_p": 0.5965,
+      "n": 116
+    },
+    "vs_pnl_60m_nosl": {
+      "pearson_r": 0.3135,
+      "pearson_p": 0.0,
+      "spearman_r": 0.017,
+      "spearman_p": 0.7804,
+      "n": 270
+    }
+  },
+  "quartile_analysis": {
+    "note": "could not create quartiles",
+    "n": 116
+  },
+  "threshold_sweep": {
+    "0.005": {
+      "pass": {
+        "n": 14,
+        "avg_pnl": 2.6557,
+        "median_pnl": 1.8977,
+        "std": 3.9949,
+        "sharpe": 0.6648,
+        "win_rate": 0.7857,
+        "ci_95_low": 0.563,
+        "ci_95_high": 4.7483,
+        "max_loss": -2.4331,
+        "max_gain": 12.5201
+      },
+      "fail": {
+        "n": 102,
+        "avg_pnl": -0.5469,
+        "median_pnl": -0.8095,
+        "std": 10.8023,
+        "sharpe": -0.0506,
+        "win_rate": 0.451,
+        "ci_95_low": -2.6433,
+        "ci_95_high": 1.5495,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.0073": {
+      "pass": {
+        "n": 21,
+        "avg_pnl": 2.5061,
+        "median_pnl": 2.2275,
+        "std": 4.0593,
+        "sharpe": 0.6174,
+        "win_rate": 0.7619,
+        "ci_95_low": 0.7699,
+        "ci_95_high": 4.2423,
+        "max_loss": -4.4585,
+        "max_gain": 12.5201
+      },
+      "fail": {
+        "n": 95,
+        "avg_pnl": -0.7498,
+        "median_pnl": -0.8269,
+        "std": 11.1123,
+        "sharpe": -0.0675,
+        "win_rate": 0.4316,
+        "ci_95_low": -2.9844,
+        "ci_95_high": 1.4847,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.01": {
+      "pass": {
+        "n": 41,
+        "avg_pnl": 0.5146,
+        "median_pnl": 1.5723,
+        "std": 7.407,
+        "sharpe": 0.0695,
+        "win_rate": 0.5854,
+        "ci_95_low": -1.7527,
+        "ci_95_high": 2.7819,
+        "max_loss": -35.3233,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 75,
+        "avg_pnl": -0.5294,
+        "median_pnl": -0.8269,
+        "std": 11.5641,
+        "sharpe": -0.0458,
+        "win_rate": 0.44,
+        "ci_95_low": -3.1466,
+        "ci_95_high": 2.0878,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.0126": {
+      "pass": {
+        "n": 58,
+        "avg_pnl": -0.1297,
+        "median_pnl": 1.3262,
+        "std": 7.1151,
+        "sharpe": -0.0182,
+        "win_rate": 0.5517,
+        "ci_95_low": -1.9608,
+        "ci_95_high": 1.7015,
+        "max_loss": -35.3233,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 58,
+        "avg_pnl": -0.1912,
+        "median_pnl": -0.8235,
+        "std": 12.7276,
+        "sharpe": -0.015,
+        "win_rate": 0.431,
+        "ci_95_low": -3.4667,
+        "ci_95_high": 3.0844,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.015": {
+      "pass": {
+        "n": 67,
+        "avg_pnl": -0.2344,
+        "median_pnl": 0.4722,
+        "std": 6.9245,
+        "sharpe": -0.0338,
+        "win_rate": 0.5373,
+        "ci_95_low": -1.8925,
+        "ci_95_high": 1.4237,
+        "max_loss": -35.3233,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 49,
+        "avg_pnl": -0.0592,
+        "median_pnl": -0.8269,
+        "std": 13.6579,
+        "sharpe": -0.0043,
+        "win_rate": 0.4286,
+        "ci_95_low": -3.8835,
+        "ci_95_high": 3.765,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.02": {
+      "pass": {
+        "n": 77,
+        "avg_pnl": -0.3355,
+        "median_pnl": 0.1544,
+        "std": 6.895,
+        "sharpe": -0.0487,
+        "win_rate": 0.5195,
+        "ci_95_low": -1.8756,
+        "ci_95_high": 1.2046,
+        "max_loss": -35.3233,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 39,
+        "avg_pnl": 0.1853,
+        "median_pnl": -0.82,
+        "std": 14.9554,
+        "sharpe": 0.0124,
+        "win_rate": 0.4359,
+        "ci_95_low": -4.5085,
+        "ci_95_high": 4.879,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.0233": {
+      "pass": {
+        "n": 88,
+        "avg_pnl": -0.9018,
+        "median_pnl": -0.3211,
+        "std": 7.3569,
+        "sharpe": -0.1226,
+        "win_rate": 0.4886,
+        "ci_95_low": -2.4389,
+        "ci_95_high": 0.6354,
+        "max_loss": -35.3233,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 28,
+        "avg_pnl": 2.1696,
+        "median_pnl": 0.1509,
+        "std": 16.3414,
+        "sharpe": 0.1328,
+        "win_rate": 0.5,
+        "ci_95_low": -3.8834,
+        "ci_95_high": 8.2225,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.03": {
+      "pass": {
+        "n": 101,
+        "avg_pnl": -0.7917,
+        "median_pnl": -0.3412,
+        "std": 7.2229,
+        "sharpe": -0.1096,
+        "win_rate": 0.4752,
+        "ci_95_low": -2.2003,
+        "ci_95_high": 0.617,
+        "max_loss": -35.3233,
+        "max_gain": 15.9615
+      },
+      "fail": {
+        "n": 15,
+        "avg_pnl": 4.0902,
+        "median_pnl": 3.7836,
+        "std": 21.6976,
+        "sharpe": 0.1885,
+        "win_rate": 0.6,
+        "ci_95_low": -6.8903,
+        "ci_95_high": 15.0707,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.04": {
+      "pass": {
+        "n": 108,
+        "avg_pnl": -0.5044,
+        "median_pnl": -0.4087,
+        "std": 7.9754,
+        "sharpe": -0.0632,
+        "win_rate": 0.4722,
+        "ci_95_low": -2.0085,
+        "ci_95_high": 0.9998,
+        "max_loss": -35.3233,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 8,
+        "avg_pnl": 4.4833,
+        "median_pnl": 8.0038,
+        "std": 27.0663,
+        "sharpe": 0.1656,
+        "win_rate": 0.75,
+        "ci_95_low": -14.2727,
+        "ci_95_high": 23.2393,
+        "max_loss": -55.8442,
+        "max_gain": 35.3893
+      }
+    },
+    "0.05": {
+      "pass": {
+        "n": 110,
+        "avg_pnl": -0.2801,
+        "median_pnl": -0.3332,
+        "std": 8.1739,
+        "sharpe": -0.0343,
+        "win_rate": 0.4818,
+        "ci_95_low": -1.8076,
+        "ci_95_high": 1.2474,
+        "max_loss": -35.3233,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 6,
+        "avg_pnl": 2.0342,
+        "median_pnl": 8.0038,
+        "std": 31.0043,
+        "sharpe": 0.0656,
+        "win_rate": 0.6667,
+        "ci_95_low": -22.7743,
+        "ci_95_high": 26.8428,
+        "max_loss": -55.8442,
+        "max_gain": 35.3893
+      }
+    }
+  },
+  "exclude_top_quartile": {
+    "included_bottom_75pct": {
+      "n": 87,
+      "avg_pnl": -0.9658,
+      "median_pnl": -0.3252,
+      "std": 7.3748,
+      "sharpe": -0.131,
+      "win_rate": 0.4828,
+      "ci_95_low": -2.5155,
+      "ci_95_high": 0.5839,
+      "max_loss": -35.3233,
+      "max_gain": 12.9771
+    },
+    "excluded_top_25pct": {
+      "n": 29,
+      "avg_pnl": 2.2559,
+      "median_pnl": 0.778,
+      "std": 16.0537,
+      "sharpe": 0.1405,
+      "win_rate": 0.5172,
+      "ci_95_low": -3.587,
+      "ci_95_high": 8.0989,
+      "max_loss": -55.8442,
+      "max_gain": 36.2023
+    },
+    "q75_threshold": 0.0233
+  },
+  "cross_strategy_consistency": {
+    "score": 1,
+    "total_tested": 4,
+    "details": {
+      "B4_T1_ENTRY": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D2_SHORT_MOM": {
+        "n": 20,
+        "spearman_r": 0.6421,
+        "spearman_p": 0.0023,
+        "consistent": false
+      },
+      "BASELINE_V1": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C2_LONG_ORB": {
+        "n": 2,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C1_LONG_FADE": {
+        "n": 4,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D1_LONG_MOM": {
+        "n": 30,
+        "spearman_r": -0.3148,
+        "spearman_p": 0.0902,
+        "consistent": true
+      },
+      "B1_WIDE_SHORT": {
+        "n": 17,
+        "spearman_r": 0.5319,
+        "spearman_p": 0.028,
+        "consistent": false
+      },
+      "B3_EOD_ENTRY": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C3_EARNINGS": {
+        "n": 10,
+        "spearman_r": 0.0061,
+        "spearman_p": 0.9867,
+        "consistent": false
+      },
+      "B2_NO_ORB": {
+        "n": 6,
+        "note": "insufficient",
+        "consistent": null
+      }
+    }
+  },
+  "conclusion": {
+    "passes": false,
+    "max_abs_corr": 0.3135,
+    "min_p_value": 0.0028,
+    "consistency_score": "1/4",
+    "summary": "Opening bar volatility FAILS feature gate."
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4
+}

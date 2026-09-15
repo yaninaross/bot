@@ -1,0 +1,282 @@
+{
+  "feature": "F03_Gap_Retrace_at_Entry",
+  "description": "How much of the gap retraced by entry time: (open - entry) / (open - prev_close)",
+  "hypothesis": "More retrace before entry gives better entry price for fade trades",
+  "correlation": {
+    "vs_pnl_t2_close": {
+      "pearson_r": 0.0081,
+      "pearson_p": 0.9332,
+      "spearman_r": 0.0718,
+      "spearman_p": 0.4558,
+      "n": 110
+    },
+    "vs_pnl_60m_nosl": {
+      "pearson_r": 0.0216,
+      "pearson_p": 0.7304,
+      "spearman_r": 0.0483,
+      "spearman_p": 0.4414,
+      "n": 256
+    }
+  },
+  "quartile_analysis": {
+    "note": "could not create quartiles",
+    "n": 110
+  },
+  "threshold_sweep": {
+    "-0.5": {
+      "pass": {
+        "n": 80,
+        "avg_pnl": -0.2354,
+        "median_pnl": -0.3211,
+        "std": 11.609,
+        "sharpe": -0.0203,
+        "win_rate": 0.4875,
+        "ci_95_low": -2.7794,
+        "ci_95_high": 2.3085,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 30,
+        "avg_pnl": -0.5492,
+        "median_pnl": -0.8129,
+        "std": 6.4119,
+        "sharpe": -0.0857,
+        "win_rate": 0.4667,
+        "ci_95_low": -2.8437,
+        "ci_95_high": 1.7453,
+        "max_loss": -11.8826,
+        "max_gain": 12.9771
+      }
+    },
+    "-0.2": {
+      "pass": {
+        "n": 74,
+        "avg_pnl": 0.0403,
+        "median_pnl": 0.0735,
+        "std": 11.8696,
+        "sharpe": 0.0034,
+        "win_rate": 0.5,
+        "ci_95_low": -2.6641,
+        "ci_95_high": 2.7448,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 36,
+        "avg_pnl": -1.0637,
+        "median_pnl": -0.8129,
+        "std": 6.6051,
+        "sharpe": -0.161,
+        "win_rate": 0.4444,
+        "ci_95_low": -3.2214,
+        "ci_95_high": 1.0939,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      }
+    },
+    "0": {
+      "pass": {
+        "n": 71,
+        "avg_pnl": 0.13,
+        "median_pnl": 0.778,
+        "std": 12.0987,
+        "sharpe": 0.0107,
+        "win_rate": 0.507,
+        "ci_95_low": -2.6843,
+        "ci_95_high": 2.9442,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 39,
+        "avg_pnl": -1.142,
+        "median_pnl": -0.7989,
+        "std": 6.3948,
+        "sharpe": -0.1786,
+        "win_rate": 0.4359,
+        "ci_95_low": -3.149,
+        "ci_95_high": 0.865,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      }
+    },
+    "0.1": {
+      "pass": {
+        "n": 3,
+        "note": "insufficient"
+      },
+      "fail": {
+        "n": 107,
+        "avg_pnl": -0.3406,
+        "median_pnl": -0.3412,
+        "std": 10.5661,
+        "sharpe": -0.0322,
+        "win_rate": 0.486,
+        "ci_95_low": -2.3427,
+        "ci_95_high": 1.6614,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.2": {
+      "pass": {
+        "n": 3,
+        "note": "insufficient"
+      },
+      "fail": {
+        "n": 107,
+        "avg_pnl": -0.3406,
+        "median_pnl": -0.3412,
+        "std": 10.5661,
+        "sharpe": -0.0322,
+        "win_rate": 0.486,
+        "ci_95_low": -2.3427,
+        "ci_95_high": 1.6614,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.3": {
+      "pass": {
+        "n": 2,
+        "note": "insufficient"
+      },
+      "fail": {
+        "n": 108,
+        "avg_pnl": -0.3451,
+        "median_pnl": -0.4087,
+        "std": 10.5167,
+        "sharpe": -0.0328,
+        "win_rate": 0.4815,
+        "ci_95_low": -2.3285,
+        "ci_95_high": 1.6384,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.5": {
+      "pass": {
+        "n": 2,
+        "note": "insufficient"
+      },
+      "fail": {
+        "n": 108,
+        "avg_pnl": -0.3451,
+        "median_pnl": -0.4087,
+        "std": 10.5167,
+        "sharpe": -0.0328,
+        "win_rate": 0.4815,
+        "ci_95_low": -2.3285,
+        "ci_95_high": 1.6384,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.7": {
+      "pass": {
+        "n": 0,
+        "note": "insufficient"
+      },
+      "fail": {
+        "n": 110,
+        "avg_pnl": -0.321,
+        "median_pnl": -0.3332,
+        "std": 10.4228,
+        "sharpe": -0.0308,
+        "win_rate": 0.4818,
+        "ci_95_low": -2.2688,
+        "ci_95_high": 1.6268,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "1.0": {
+      "pass": {
+        "n": 0,
+        "note": "insufficient"
+      },
+      "fail": {
+        "n": 110,
+        "avg_pnl": -0.321,
+        "median_pnl": -0.3332,
+        "std": 10.4228,
+        "sharpe": -0.0308,
+        "win_rate": 0.4818,
+        "ci_95_low": -2.2688,
+        "ci_95_high": 1.6268,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    }
+  },
+  "cross_strategy_consistency": {
+    "score": 2,
+    "total_tested": 4,
+    "details": {
+      "B4_T1_ENTRY": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D2_SHORT_MOM": {
+        "n": 20,
+        "spearman_r": 0.2611,
+        "spearman_p": 0.2662,
+        "consistent": true
+      },
+      "BASELINE_V1": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C2_LONG_ORB": {
+        "n": 2,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C1_LONG_FADE": {
+        "n": 4,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D1_LONG_MOM": {
+        "n": 30,
+        "spearman_r": -0.1077,
+        "spearman_p": 0.571,
+        "consistent": false
+      },
+      "B1_WIDE_SHORT": {
+        "n": 17,
+        "spearman_r": -0.0152,
+        "spearman_p": 0.9538,
+        "consistent": false
+      },
+      "B3_EOD_ENTRY": {
+        "n": 3,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C3_EARNINGS": {
+        "n": 10,
+        "spearman_r": 0.4202,
+        "spearman_p": 0.2266,
+        "consistent": true
+      },
+      "B2_NO_ORB": {
+        "n": 6,
+        "note": "insufficient",
+        "consistent": null
+      }
+    }
+  },
+  "conclusion": {
+    "passes": false,
+    "max_abs_corr": 0.0216,
+    "min_p_value": 0.7304,
+    "consistency_score": "2/4",
+    "summary": "Gap retrace FAILS feature gate."
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4
+}

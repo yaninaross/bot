@@ -1,0 +1,143 @@
+{
+  "experiment": "V3 E4 + E7",
+  "eval_dates": [
+    "2026-09-08",
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11"
+  ],
+  "e4_price_screen": {
+    "full_universe": {
+      "n_gappers": 1810,
+      "gap_fade_mean_pnl": 0.3258383574241943,
+      "gap_fade_median_pnl": 0.1117908377612277,
+      "gap_fade_trimmed_mean": 0.35567908992691893,
+      "win_rate": 50.88397790055249
+    },
+    "gap_up_subset": {
+      "n": 864,
+      "fade_mean_pnl": 0.8071184471520825,
+      "fade_median_pnl": 0.9099304122668581
+    },
+    "gap_down_subset": {
+      "n": 946,
+      "fade_mean_pnl": -0.11372400782410977,
+      "fade_median_pnl": -0.3896172873228413
+    },
+    "llm_flagged": {
+      "n": 272,
+      "mean_pnl_60m": 0.01412418784441188,
+      "median_pnl_60m": 0.06499266359728136,
+      "trimmed_mean_60m": -0.02391412043889075,
+      "win_rate": 51.10294117647059
+    },
+    "llm_non_earnings": {
+      "n": 195,
+      "mean_pnl_60m": 0.2618935263824303
+    },
+    "per_date": {
+      "2026-09-08": {
+        "universe_n": 482,
+        "universe_pnl": -1.0888553801666496,
+        "llm_n": 102,
+        "llm_pnl": 0.25969857266332763
+      },
+      "2026-09-09": {
+        "universe_n": 287,
+        "universe_pnl": 1.9045194696216565,
+        "llm_n": 15,
+        "llm_pnl": 0.27455788019910327
+      },
+      "2026-09-10": {
+        "universe_n": 674,
+        "universe_pnl": -0.09666685710473137,
+        "llm_n": 58,
+        "llm_pnl": -0.13471791601966382
+      },
+      "2026-09-11": {
+        "universe_n": 367,
+        "universe_pnl": 1.7252100656274936,
+        "llm_n": 141,
+        "llm_pnl": -0.15580845085816705
+      }
+    },
+    "orb_enhanced": {
+      "all_llm": {
+        "n": 272,
+        "mean": 0.01412418784441188
+      },
+      "llm_orb_confirms_dir": {
+        "n": 148,
+        "mean": 1.2955589199448188
+      },
+      "llm_orb_fade": {
+        "n": 117,
+        "mean": -0.30223454445544673
+      },
+      "non_earn_orb_dir": {
+        "n": 111,
+        "mean": 1.5480648621968303
+      },
+      "pricescreen_ne_orb_fade": {
+        "n": 28,
+        "mean": 0.11693870145153946
+      }
+    },
+    "limitations": [
+      "No market cap filter (data unavailable) \u2014 universe includes micro/small caps",
+      "Universe gap-fade uses EOD close, LLM-flagged uses 60m PnL \u2014 different horizons",
+      "Only 4 eval dates"
+    ]
+  },
+  "e7_regime": {
+    "warning": "VERY low-n: only 4 eval dates",
+    "regime_classification": {
+      "2026-09-08": {
+        "regime": "trending_up",
+        "spy_sma5": 767.47,
+        "spy_prev_close": 770.19,
+        "distance_pct": 0.35441124734517665,
+        "spy_intra_ret": -0.40438451636392186,
+        "spy_morning_ret": -0.20934375284434623
+      },
+      "2026-09-09": {
+        "regime": "trending_down",
+        "spy_sma5": 767.2520000000001,
+        "spy_prev_close": 765.96,
+        "distance_pct": -0.16839317460235098,
+        "spy_intra_ret": -0.21987226468433455,
+        "spy_morning_ret": 0.0026175269605253127
+      },
+      "2026-09-10": {
+        "regime": "trending_down",
+        "spy_sma5": 767.376,
+        "spy_prev_close": 762.4,
+        "distance_pct": -0.6484435270323804,
+        "spy_intra_ret": -0.02638418004563563,
+        "spy_morning_ret": -0.16490112528527895
+      },
+      "2026-09-11": {
+        "regime": "trending_down",
+        "spy_sma5": 765.9100000000001,
+        "spy_prev_close": 757.83,
+        "distance_pct": -1.0549542374430467,
+        "spy_intra_ret": -0.05622973114343336,
+        "spy_morning_ret": 0.20791923841404933
+      }
+    },
+    "alpha": {
+      "alpha_60m_mean": 0.03926635267288335,
+      "alpha_60m_median": 0.08793488370609356,
+      "alpha_60m_positive_pct": 52.94117647058824,
+      "alpha_t1_close_mean": -0.019039916922787614,
+      "alpha_t1_close_median": 0.0007159706097784,
+      "alpha_t2_close_mean": -0.3140624790185838,
+      "alpha_t2_close_median": -0.3675752470431525
+    },
+    "spy_correlation": {
+      "spy_intra_vs_avg_pnl_r": -0.8842647806167424,
+      "spy_intra_vs_avg_pnl_p": 0.1157352193832577,
+      "spy_morning_vs_avg_pnl_r": -0.3977965021567681
+    }
+  }
+}

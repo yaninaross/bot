@@ -1,0 +1,1956 @@
+{
+  "AAPL": {
+    "market_cap": 4849208188600.0,
+    "shares_outstanding": 14594180000,
+    "weighted_shares": 14594180000,
+    "name": "Apple Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AARD": {
+    "market_cap": 112269259.98,
+    "shares_outstanding": 21884158,
+    "weighted_shares": 21884846,
+    "name": "Aardvark Therapeutics, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ABM": {
+    "market_cap": 2897319282.56,
+    "shares_outstanding": 58580923,
+    "weighted_shares": 58614592,
+    "name": "ABM Industries, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "ACHR": {
+    "market_cap": 4296749544.0,
+    "shares_outstanding": 770023800,
+    "weighted_shares": 770026800,
+    "name": "Archer Aviation Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "ACMR": {
+    "market_cap": 5014742112.0,
+    "shares_outstanding": 64657388,
+    "weighted_shares": 69649196,
+    "name": "ACM Research, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ACV": {
+    "market_cap": 271648211.64,
+    "shares_outstanding": 10396028,
+    "weighted_shares": 10396028,
+    "name": "Virtus Diversified Income & Convertible Fund",
+    "type": "FUND",
+    "primary_exchange": "XNYS"
+  },
+  "ACVA": {
+    "market_cap": 1767701071.8,
+    "shares_outstanding": 169807980,
+    "weighted_shares": 169807980,
+    "name": "ACV Auctions Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "ADBE": {
+    "market_cap": 100261425000.0,
+    "shares_outstanding": 397500000,
+    "weighted_shares": 397500000,
+    "name": "Adobe Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AEHR": {
+    "market_cap": 3092532410.74,
+    "shares_outstanding": 32620450,
+    "weighted_shares": 32659546,
+    "name": "Aehr Test Systems",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AENT": {
+    "market_cap": 327289224.6,
+    "shares_outstanding": 50979630,
+    "weighted_shares": 50979630,
+    "name": "Alliance Entertainment Holding Corporation Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AEON": {
+    "market_cap": 16306684.051,
+    "shares_outstanding": 49882790,
+    "weighted_shares": 49882790,
+    "name": "AEON Biopharma, Inc.",
+    "type": "CS",
+    "primary_exchange": "XASE"
+  },
+  "AGCO": {
+    "market_cap": 8480842381.9,
+    "shares_outstanding": 70031729,
+    "weighted_shares": 70031729,
+    "name": "AGCO Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "AGRZ": {
+    "market_cap": 5203803.7485,
+    "shares_outstanding": 22573405,
+    "weighted_shares": 21673485,
+    "name": "Agroz Inc. Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AHMA": {
+    "market_cap": 44290250.0,
+    "shares_outstanding": 10965000,
+    "weighted_shares": 29725000,
+    "name": "Ambitions Enterprise Management Co. L.L.C Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AIAI": {
+    "market_cap": 237426876.95999998,
+    "shares_outstanding": null,
+    "weighted_shares": 70662761,
+    "name": "AIAI Holdings Corporation Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AIXI": {
+    "market_cap": 353769.97,
+    "shares_outstanding": null,
+    "weighted_shares": 131513,
+    "name": "XIAO-I Corporation American Depositary Shares",
+    "type": "ADRC",
+    "primary_exchange": "XNAS"
+  },
+  "ALAB": {
+    "market_cap": 50522331986.880005,
+    "shares_outstanding": 173485104,
+    "weighted_shares": 173485104,
+    "name": "Astera Labs, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AMAT": {
+    "market_cap": 362269296755.07,
+    "shares_outstanding": 793597443,
+    "weighted_shares": 793597443,
+    "name": "Applied Materials Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AMD": {
+    "market_cap": 842569343427.46,
+    "shares_outstanding": 1632475042,
+    "weighted_shares": 1632475042,
+    "name": "Advanced Micro Devices",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AME": {
+    "market_cap": 55451417086.28,
+    "shares_outstanding": 229203002,
+    "weighted_shares": 229261244,
+    "name": "Ametek, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "APA": {
+    "market_cap": 15671223042.3,
+    "shares_outstanding": 350351510,
+    "weighted_shares": 350351510,
+    "name": "APA Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "APLD": {
+    "market_cap": 7511306713.040001,
+    "shares_outstanding": 291469112,
+    "weighted_shares": 284303812,
+    "name": "Applied Digital Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "APUR": {
+    "market_cap": 147778038.09,
+    "shares_outstanding": null,
+    "weighted_shares": 14733603,
+    "name": "Aperture AC Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ARBE": {
+    "market_cap": 99833821.416,
+    "shares_outstanding": 122649743,
+    "weighted_shares": 127404060,
+    "name": "Arbe Robotics Ltd. Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ARM": {
+    "market_cap": 282795341085.51,
+    "shares_outstanding": 1068078760,
+    "weighted_shares": 1067998569,
+    "name": "Arm Holdings plc American Depositary Shares",
+    "type": "ADRC",
+    "primary_exchange": "XNAS"
+  },
+  "ASAN": {
+    "market_cap": 2008067926.09,
+    "shares_outstanding": 159441754,
+    "weighted_shares": 228970117,
+    "name": "Asana, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "ASO": {
+    "market_cap": 3409007405.7599998,
+    "shares_outstanding": 62018371,
+    "weighted_shares": 61578891,
+    "name": "Academy Sports and Outdoors, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ASTS": {
+    "market_cap": 17945387797.3,
+    "shares_outstanding": 299789305,
+    "weighted_shares": 299789305,
+    "name": "AST SpaceMobile, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ATEC": {
+    "market_cap": 1634092384.08,
+    "shares_outstanding": 154451076,
+    "weighted_shares": 154451076,
+    "name": "Alphatec Holdings, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ATHE": {
+    "market_cap": 73743890.39999999,
+    "shares_outstanding": 18208368,
+    "weighted_shares": 18208368,
+    "name": "Alterity Therapeutics Limited American Depositary Shares",
+    "type": "ADRC",
+    "primary_exchange": "XNAS"
+  },
+  "ATI": {
+    "market_cap": 27066587028.91,
+    "shares_outstanding": 136170383,
+    "weighted_shares": 136170383,
+    "name": "ATI Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "AVAV": {
+    "market_cap": 7455905190.42,
+    "shares_outstanding": 50822615,
+    "weighted_shares": 50820702,
+    "name": "AeroVironment, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AVEX": {
+    "market_cap": 1112697504.4799998,
+    "shares_outstanding": null,
+    "weighted_shares": 69197606,
+    "name": "AEVEX Corp.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "AXGN": {
+    "market_cap": 2266585388.08,
+    "shares_outstanding": 53761513,
+    "weighted_shares": 53761513,
+    "name": "Axogen, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AXTA": {
+    "market_cap": 7310923097.5199995,
+    "shares_outstanding": 214019997,
+    "weighted_shares": 214019997,
+    "name": "Axalta Coating Systems Ltd.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "AXTI": {
+    "market_cap": 4247176941.24,
+    "shares_outstanding": 65573212,
+    "weighted_shares": 65573212,
+    "name": "AXT Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "AZN": {
+    "market_cap": 248406998545.37997,
+    "shares_outstanding": null,
+    "weighted_shares": 1550895914,
+    "name": "AstraZeneca PLC",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "BABA": {
+    "market_cap": 271678661119.5,
+    "shares_outstanding": 2485623615,
+    "weighted_shares": 2485623615,
+    "name": "Alibaba Group Holding Limited American Depositary Shares, each represents eight Ordinary Shares",
+    "type": "ADRC",
+    "primary_exchange": "XNYS"
+  },
+  "BBIO": {
+    "market_cap": 14161512702.68,
+    "shares_outstanding": 195487474,
+    "weighted_shares": 195492997,
+    "name": "BridgeBio Pharma, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BBNX": {
+    "market_cap": 745479130.16,
+    "shares_outstanding": 44989688,
+    "weighted_shares": 44989688,
+    "name": "Beta Bionics, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BE": {
+    "market_cap": 81215915659.5,
+    "shares_outstanding": 294527346,
+    "weighted_shares": 294527346,
+    "name": "Bloom Energy Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "BEAM": {
+    "market_cap": 2477871083.35,
+    "shares_outstanding": 103287665,
+    "weighted_shares": 103287665,
+    "name": "Beam Therapeutics Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BHVN": {
+    "market_cap": 1919766456.5100002,
+    "shares_outstanding": 151043781,
+    "weighted_shares": 151043781,
+    "name": "Biohaven Ltd.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "BJDX": {
+    "market_cap": 928449.7694999999,
+    "shares_outstanding": 4468051,
+    "weighted_shares": 1034715,
+    "name": "Bluejay Diagnostics, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BLZE": {
+    "market_cap": 767560000.0,
+    "shares_outstanding": 61900000,
+    "weighted_shares": 61900000,
+    "name": "Backblaze, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BNC": {
+    "market_cap": 197634480.0,
+    "shares_outstanding": 41173850,
+    "weighted_shares": 41173850,
+    "name": "CEA Industries Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BNKK": {
+    "market_cap": 11121306.6,
+    "shares_outstanding": 8000940,
+    "weighted_shares": 8000940,
+    "name": "Bonk, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BOW": {
+    "market_cap": 1109190978.3500001,
+    "shares_outstanding": 32943005,
+    "weighted_shares": 32943005,
+    "name": "Bowhead Specialty Holdings Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "BRNX": {
+    "market_cap": 4305368.58,
+    "shares_outstanding": 720888,
+    "weighted_shares": 1695027,
+    "name": "BrenX Ltd. Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BRZE": {
+    "market_cap": 2719211182.38,
+    "shares_outstanding": 112631669,
+    "weighted_shares": 113584427,
+    "name": "Braze, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BTBT": {
+    "market_cap": 573407269.77,
+    "shares_outstanding": 360633503,
+    "weighted_shares": 360633503,
+    "name": "Bit Digital, Inc. Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "BUKS": {
+    "market_cap": null,
+    "shares_outstanding": null,
+    "weighted_shares": null,
+    "name": "BUTLER NATL CORP",
+    "type": "CS",
+    "primary_exchange": "OTC Link"
+  },
+  "CAN": {
+    "market_cap": 251490186.1098,
+    "shares_outstanding": 749194858,
+    "weighted_shares": 747148503,
+    "name": "Canaan Inc. American Depositary Shares",
+    "type": "ADRC",
+    "primary_exchange": "XNAS"
+  },
+  "CAT": {
+    "market_cap": 376276073888.73004,
+    "shares_outstanding": 459674889,
+    "weighted_shares": 459674889,
+    "name": "Caterpillar Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "CC": {
+    "market_cap": 2261999894.85,
+    "shares_outstanding": 150498995,
+    "weighted_shares": 150498995,
+    "name": "The Chemours Company",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "CCB": {
+    "market_cap": 725489079.42,
+    "shares_outstanding": 15286327,
+    "weighted_shares": 15286327,
+    "name": "Coastal Financial Corporation",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CCHH": {
+    "market_cap": 23177784.21,
+    "shares_outstanding": null,
+    "weighted_shares": 18843727,
+    "name": "CCH Holdings Ltd Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CDNL": {
+    "market_cap": 728279946.5,
+    "shares_outstanding": null,
+    "weighted_shares": 20428610,
+    "name": "Cardinal Infrastructure Group Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CE": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/CE?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x772700295430>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "CEG": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/CEG?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x772700296660>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "CELH": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/CELH?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x772700296f60>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "CHAD": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/CHAD?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x772700297860>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "CHYM": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/CHYM?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002974d0>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "CIFR": {
+    "market_cap": 6993267665.700001,
+    "shares_outstanding": 415030722,
+    "weighted_shares": 415030722,
+    "name": "Cipher Digital Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CLSK": {
+    "market_cap": 3510689387.91,
+    "shares_outstanding": 256817073,
+    "weighted_shares": 256817073,
+    "name": "CLEANSPARK INC",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "COIN": {
+    "market_cap": 46240059124.979996,
+    "shares_outstanding": 222803032,
+    "weighted_shares": 263836923,
+    "name": "Coinbase Global, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "COLA": {
+    "market_cap": 47685997.79,
+    "shares_outstanding": 4494439,
+    "weighted_shares": 4494439,
+    "name": "Columbus Acquisition Corp Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "COO": {
+    "market_cap": 10251271899.539999,
+    "shares_outstanding": 195030630,
+    "weighted_shares": 190155294,
+    "name": "The Cooper Companies, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CORZ": {
+    "market_cap": 5764847511.54,
+    "shares_outstanding": 321340441,
+    "weighted_shares": 321340441,
+    "name": "Core Scientific, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CPRT": {
+    "market_cap": 27728053885.899998,
+    "shares_outstanding": 925811482,
+    "weighted_shares": 925811482,
+    "name": "Copart Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CRDO": {
+    "market_cap": 30626765038.1,
+    "shares_outstanding": 187951918,
+    "weighted_shares": 187951918,
+    "name": "Credo Technology Group Holding Ltd Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CRMT": {
+    "market_cap": 15843108.2,
+    "shares_outstanding": 8663493,
+    "weighted_shares": 8338478,
+    "name": "America's Car Mart Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "CSR": {
+    "market_cap": 979131229.65,
+    "shares_outstanding": 16794151,
+    "weighted_shares": 16797585,
+    "name": "Centerspace",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "CVX": {
+    "market_cap": 419900796832.44,
+    "shares_outstanding": 1975771274,
+    "weighted_shares": 1961603274,
+    "name": "Chevron Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "DBGI": {
+    "market_cap": 3447834.0,
+    "shares_outstanding": 933509,
+    "weighted_shares": 574639,
+    "name": "Digital Brands Group, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "DELL": {
+    "market_cap": 360690214947.5,
+    "shares_outstanding": 324873640,
+    "weighted_shares": 635812750,
+    "name": "Dell Technologies Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "DFNS": {
+    "market_cap": 9690647.05,
+    "shares_outstanding": 1663806,
+    "weighted_shares": 1010495,
+    "name": "T3 Defense Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "DKS": {
+    "market_cap": 12007752856.68,
+    "shares_outstanding": 65355923,
+    "weighted_shares": 88926556,
+    "name": "Dick's Sporting Goods, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "DNOW": {
+    "market_cap": 2829299194.15,
+    "shares_outstanding": 180785891,
+    "weighted_shares": 180785891,
+    "name": "DNOW Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "DOV": {
+    "market_cap": 25461296536.25,
+    "shares_outstanding": 134680225,
+    "weighted_shares": 134680225,
+    "name": "Dover Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "DPRO": {
+    "market_cap": 208403214.03,
+    "shares_outstanding": 34375971,
+    "weighted_shares": 37148523,
+    "name": "Draganfly Inc. Common Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "DSS": {
+    "market_cap": 7255719.255,
+    "shares_outstanding": 10042518,
+    "weighted_shares": 10042518,
+    "name": "DSS, Inc.",
+    "type": "CS",
+    "primary_exchange": "XASE"
+  },
+  "DSY": {
+    "market_cap": 17914561.21,
+    "shares_outstanding": null,
+    "weighted_shares": 4751873,
+    "name": "Big Tree Cloud Holdings Limited Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "EAT": {
+    "market_cap": 8874646974.9,
+    "shares_outstanding": 41765010,
+    "weighted_shares": 41765010,
+    "name": "Brinker International, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "EDHL": {
+    "market_cap": 7364935.5,
+    "shares_outstanding": 5959275,
+    "weighted_shares": 1666275,
+    "name": "Everbright Digital Holding Limited Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ELOG": {
+    "market_cap": 7673536.0,
+    "shares_outstanding": 12832000,
+    "weighted_shares": 12832000,
+    "name": "Eastern International Ltd. Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "EQPT": {
+    "market_cap": 4565834853.26,
+    "shares_outstanding": null,
+    "weighted_shares": 253375963,
+    "name": "EquipmentShare.com Inc Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ET": {
+    "market_cap": 74203106401.55,
+    "shares_outstanding": 3443299601,
+    "weighted_shares": 3443299601,
+    "name": "Energy Transfer LP Common Units representing limited partner interests",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "ETN": {
+    "market_cap": 165213708000.0,
+    "shares_outstanding": 388400000,
+    "weighted_shares": 388400000,
+    "name": "Eaton Corporation, plc Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "EVRG": {
+    "market_cap": 18818892578.64,
+    "shares_outstanding": 230567172,
+    "weighted_shares": 230567172,
+    "name": "Evergy, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "EXEL": {
+    "market_cap": 13905508555.039999,
+    "shares_outstanding": 247781692,
+    "weighted_shares": 247781692,
+    "name": "Exelixis Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "FCEL": {
+    "market_cap": 1270472174.44,
+    "shares_outstanding": 79954196,
+    "weighted_shares": 79954196,
+    "name": "FuelCell Energy Inc  NEW (DE)",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "FCX": {
+    "market_cap": 102057765359.60999,
+    "shares_outstanding": 1436017523,
+    "weighted_shares": 1436017523,
+    "name": "Freeport-McMoran Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "FEIM": {
+    "market_cap": 987814213.75,
+    "shares_outstanding": 11177530,
+    "weighted_shares": 11177530,
+    "name": "Frequency Electronics, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "FIZZ": {
+    "market_cap": 2936712023.7400002,
+    "shares_outstanding": 93615302,
+    "weighted_shares": 93615302,
+    "name": "National Beverage Corp.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "FLNC": {
+    "market_cap": 1421614428.84,
+    "shares_outstanding": 143163588,
+    "weighted_shares": 143163588,
+    "name": "Fluence Energy, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "FLWS": {
+    "market_cap": 193518064.44,
+    "shares_outstanding": 37030262,
+    "weighted_shares": 64185096,
+    "name": "1-800-FLOWERS.COM Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "GDDY": {
+    "market_cap": 12420340331.279999,
+    "shares_outstanding": 126647704,
+    "weighted_shares": 126647704,
+    "name": "GoDaddy Inc",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "GENC": {
+    "market_cap": 262812596.85999998,
+    "shares_outstanding": 12338845,
+    "weighted_shares": 14657702,
+    "name": "Gencor Industries, Inc.",
+    "type": "CS",
+    "primary_exchange": "XASE"
+  },
+  "GLND": {
+    "market_cap": 53350836.68,
+    "shares_outstanding": null,
+    "weighted_shares": 43730194,
+    "name": "Greenland Energy Company Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "GLXG": {
+    "market_cap": 5778496.4895,
+    "shares_outstanding": 5601515,
+    "weighted_shares": 5961515,
+    "name": "Galaxy Payroll Group Limited Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "GME": {
+    "market_cap": 10670195938.5,
+    "shares_outstanding": 448691257,
+    "weighted_shares": 504500990,
+    "name": "GameStop Corp. Class A",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "GMEX": {
+    "market_cap": 435463.73,
+    "shares_outstanding": 903642,
+    "weighted_shares": 905330,
+    "name": "GMEX ROBOTICS CORPORATION Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "GOOS": {
+    "market_cap": 774448629.37,
+    "shares_outstanding": 46656876,
+    "weighted_shares": 97660609,
+    "name": "Canada Goose Holdings Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "GRI": {
+    "market_cap": 4153618.5,
+    "shares_outstanding": 2186115,
+    "weighted_shares": 2186115,
+    "name": "GRI Bio, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "HBM": {
+    "market_cap": 11778719035.2,
+    "shares_outstanding": 444144760,
+    "weighted_shares": 444144760,
+    "name": "Hudbay Minerals Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "HCAI": {
+    "market_cap": 18285738.240000002,
+    "shares_outstanding": 7629942,
+    "weighted_shares": 8163276,
+    "name": "Huachen AI Parking Management Technology Holding Co., Ltd. Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "HGTY": {
+    "market_cap": 1383055586.65,
+    "shares_outstanding": 102070523,
+    "weighted_shares": 102070523,
+    "name": "Hagerty, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "HOFT": {
+    "market_cap": 137180887.51,
+    "shares_outstanding": 10741650,
+    "weighted_shares": 10692197,
+    "name": "Hooker Furnishings Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "HOOD": {
+    "market_cap": 101209691471.61,
+    "shares_outstanding": 790630234,
+    "weighted_shares": 899082273,
+    "name": "Robinhood Markets, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "HPE": {
+    "market_cap": 82422288128.11,
+    "shares_outstanding": 1327464779,
+    "weighted_shares": 1327464779,
+    "name": "Hewlett Packard Enterprise Company",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "HPQ": {
+    "market_cap": 31995543580.12,
+    "shares_outstanding": 901790969,
+    "weighted_shares": 901790969,
+    "name": "HP Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "HTLD": {
+    "market_cap": 954284419.74,
+    "shares_outstanding": 77332611,
+    "weighted_shares": 77332611,
+    "name": "Heartland Express Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "HUT": {
+    "market_cap": 12153383544.8,
+    "shares_outstanding": 123259468,
+    "weighted_shares": 123259468,
+    "name": "Hut 8 Corp. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "HXHX": {
+    "market_cap": 6933120.0,
+    "shares_outstanding": 8950000,
+    "weighted_shares": 14720000,
+    "name": "Haoxin Holdings Limited Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "IBTA": {
+    "market_cap": 828913486.28,
+    "shares_outstanding": 20197545,
+    "weighted_shares": 20148602,
+    "name": "Ibotta, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "IESC": {
+    "market_cap": 13776098225.519999,
+    "shares_outstanding": 19924356,
+    "weighted_shares": 39848712,
+    "name": "IES Holdings, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "IMO": {
+    "market_cap": 62862217022.850006,
+    "shares_outstanding": 481577721,
+    "weighted_shares": 483592715,
+    "name": "Imperial Oil Limited",
+    "type": "CS",
+    "primary_exchange": "XASE"
+  },
+  "INBX": {
+    "market_cap": 1608198708.2,
+    "shares_outstanding": 14717660,
+    "weighted_shares": 14717660,
+    "name": "Inhibrx Biosciences, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "INDP": {
+    "market_cap": 369081237.48,
+    "shares_outstanding": 133242324,
+    "weighted_shares": 133242324,
+    "name": "Indaptus Therapeutics, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "INFQ": {
+    "market_cap": 2956684522.24,
+    "shares_outstanding": 225357052,
+    "weighted_shares": 225357052,
+    "name": "Infleqtion, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "INTC": {
+    "market_cap": 544151675670.27997,
+    "shares_outstanding": 5044000000,
+    "weighted_shares": 5286105262,
+    "name": "Intel Corp",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "INV": {
+    "market_cap": 79197446.952,
+    "shares_outstanding": 84612657,
+    "weighted_shares": 84612657,
+    "name": "Innventure, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "IONQ": {
+    "market_cap": 14888735358.0,
+    "shares_outstanding": 381002314,
+    "weighted_shares": 405135656,
+    "name": "IonQ, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "IP": {
+    "market_cap": 18196021592.2,
+    "shares_outstanding": 529569895,
+    "weighted_shares": 529569895,
+    "name": "International Paper Co.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "IPDN": {
+    "market_cap": 58571.9232,
+    "shares_outstanding": 14450323,
+    "weighted_shares": 481677,
+    "name": "Professional Diversity Network, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "IREN": {
+    "market_cap": 17271590629.5,
+    "shares_outstanding": 394058648,
+    "weighted_shares": 394058650,
+    "name": "IREN Limited Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ISPC": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/ISPC?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x772700295760>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "IZM": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/IZM?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c0980>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "JOBY": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/JOBY?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c1220>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "JZ": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/JZ?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c1ac0>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "KBR": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/KBR?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c2360>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "KEEL": {
+    "market_cap": 2204736366.8399997,
+    "shares_outstanding": 617573212,
+    "weighted_shares": 617573212,
+    "name": "Keel Infrastructure Corp. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "KMDA": {
+    "market_cap": 457065615.6,
+    "shares_outstanding": null,
+    "weighted_shares": 57710305,
+    "name": "Kamada Ltd",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "KPTI": {
+    "market_cap": 36517150.6,
+    "shares_outstanding": 22681460,
+    "weighted_shares": 22681460,
+    "name": "Karyopharm Therapeutics Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "KR": {
+    "market_cap": 34860040000.0,
+    "shares_outstanding": 612647282,
+    "weighted_shares": 596000000,
+    "name": "The Kroger Co.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "KRSA": {
+    "market_cap": null,
+    "shares_outstanding": null,
+    "weighted_shares": null,
+    "name": "Korsana Biosciences, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "KTOS": {
+    "market_cap": 8764708757.63,
+    "shares_outstanding": 187721327,
+    "weighted_shares": 187721327,
+    "name": "Kratos Defense & Security Solutions, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "LASE": {
+    "market_cap": 34868384.91,
+    "shares_outstanding": 50177716,
+    "weighted_shares": 50170338,
+    "name": "Laser Photonics Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "LEU": {
+    "market_cap": 3039057879.48,
+    "shares_outstanding": 19233658,
+    "weighted_shares": 19953108,
+    "name": "Centrus Energy Corp.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "LHSW": {
+    "market_cap": 6505296.3785999995,
+    "shares_outstanding": null,
+    "weighted_shares": 13493666,
+    "name": "Lianhe Sowell International Group Ltd Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "LOVE": {
+    "market_cap": 200629953.03,
+    "shares_outstanding": 14638418,
+    "weighted_shares": 14423433,
+    "name": "The Lovesac Company Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "LULU": {
+    "market_cap": 10956971174.25,
+    "shares_outstanding": 105594064,
+    "weighted_shares": 110710025,
+    "name": "lululemon athletica inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "LUNR": {
+    "market_cap": 2302490634.15,
+    "shares_outstanding": 173231343,
+    "weighted_shares": 160452309,
+    "name": "Intuitive Machines, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "M": {
+    "market_cap": 5766780343.679999,
+    "shares_outstanding": 263037954,
+    "weighted_shares": 261176646,
+    "name": "Macy's Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "MARA": {
+    "market_cap": 4627865578.06,
+    "shares_outstanding": 386299297,
+    "weighted_shares": 386299297,
+    "name": "MARA Holdings, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MAS": {
+    "market_cap": 13511282703.599998,
+    "shares_outstanding": 197187430,
+    "weighted_shares": 197187430,
+    "name": "Masco Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "MCFT": {
+    "market_cap": 478025246.44,
+    "shares_outstanding": 16279890,
+    "weighted_shares": 24339371,
+    "name": "MasterCraft Boat Holdings, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MDCX": {
+    "market_cap": 10273167.185999999,
+    "shares_outstanding": 63180610,
+    "weighted_shares": 63180610,
+    "name": "Medicus Pharma Ltd. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "META": {
+    "market_cap": 1650860458986.75,
+    "shares_outstanding": 2205128509,
+    "weighted_shares": 2547506225,
+    "name": "Meta Platforms, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MGN": {
+    "market_cap": 24563,
+    "shares_outstanding": 16250000,
+    "weighted_shares": 145000,
+    "name": "Megan Holdings Limited Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MOBX": {
+    "market_cap": 19850345.340000004,
+    "shares_outstanding": 16847921,
+    "weighted_shares": 17883194,
+    "name": "Mobix Labs, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MRNA": {
+    "market_cap": 57477990939.33,
+    "shares_outstanding": 399235889,
+    "weighted_shares": 399235889,
+    "name": "Moderna, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MSTR": {
+    "market_cap": 52031979010.2,
+    "shares_outstanding": 364585501,
+    "weighted_shares": 397281660,
+    "name": "Strategy Inc Common Stock Class A",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MU": {
+    "market_cap": 1101451964444.26,
+    "shares_outstanding": 1129393151,
+    "weighted_shares": 1129393151,
+    "name": "Micron Technology, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MVIS": {
+    "market_cap": 50165718.919999994,
+    "shares_outstanding": 23788853,
+    "weighted_shares": 30588853,
+    "name": "Microvision Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "MXL": {
+    "market_cap": 6762991252.869999,
+    "shares_outstanding": 90693191,
+    "weighted_shares": 90693191,
+    "name": "MaxLinear, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NAVN": {
+    "market_cap": 5473828562.86,
+    "shares_outstanding": null,
+    "weighted_shares": 260410493,
+    "name": "Navan, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NBIS": {
+    "market_cap": 61045089201.9,
+    "shares_outstanding": 219465088,
+    "weighted_shares": 271855218,
+    "name": "Nebius Group N.V. Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NEE": {
+    "market_cap": 171696866382.79,
+    "shares_outstanding": 2085803189,
+    "weighted_shares": 2085978209,
+    "name": "NextEra Energy, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "NEGG": {
+    "market_cap": 307688580.0,
+    "shares_outstanding": 20973423,
+    "weighted_shares": 20974000,
+    "name": "Newegg Commerce, Inc. Common Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NNE": {
+    "market_cap": 881186575.86,
+    "shares_outstanding": 53698146,
+    "weighted_shares": 53698146,
+    "name": "Nano Nuclear Energy Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NTHI": {
+    "market_cap": 106003798.4,
+    "shares_outstanding": 25936365,
+    "weighted_shares": 28805380,
+    "name": "NeOnc Technologies Holdings, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NTLA": {
+    "market_cap": 1645087375.82,
+    "shares_outstanding": 140126693,
+    "weighted_shares": 140126693,
+    "name": "Intellia Therapeutics, Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NVDA": {
+    "market_cap": 5271048630000.0,
+    "shares_outstanding": 24100000000,
+    "weighted_shares": 24147000000,
+    "name": "Nvidia Corp",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "NVS": {
+    "market_cap": 260702047454.4,
+    "shares_outstanding": 2034819509,
+    "weighted_shares": 1900714840,
+    "name": "Novartis AG",
+    "type": "ADRC",
+    "primary_exchange": "XNYS"
+  },
+  "OCGN": {
+    "market_cap": 345892609.02,
+    "shares_outstanding": 339110401,
+    "weighted_shares": 339110401,
+    "name": "Ocugen, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "OKLO": {
+    "market_cap": 6737559283.0,
+    "shares_outstanding": 186017650,
+    "weighted_shares": 186017650,
+    "name": "Oklo Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "ONDS": {
+    "market_cap": 4131617162.88,
+    "shares_outstanding": 571454656,
+    "weighted_shares": 571454656,
+    "name": "Ondas Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "OPTT": {
+    "market_cap": 958992.7755,
+    "shares_outstanding": 270138823,
+    "weighted_shares": 9004627,
+    "name": "Ocean Power Technologies, Inc.",
+    "type": "CS",
+    "primary_exchange": "XASE"
+  },
+  "OPTX": {
+    "market_cap": 285987133.8,
+    "shares_outstanding": 40279878,
+    "weighted_shares": 40279878,
+    "name": "Syntec Optics Holdings, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ORCL": {
+    "market_cap": 432877181880.0,
+    "shares_outstanding": 2880471000,
+    "weighted_shares": 2880471000,
+    "name": "Oracle Corp",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "OTLK": {
+    "market_cap": 160675385.64000002,
+    "shares_outstanding": 243447554,
+    "weighted_shares": 243447554,
+    "name": "Outlook Therapeutics, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PAVS": {
+    "market_cap": 3883378.5,
+    "shares_outstanding": 856897,
+    "weighted_shares": 862973,
+    "name": "Paranovus Entertainment Technology Ltd. Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PCLA": {
+    "market_cap": 97195568.55,
+    "shares_outstanding": 9613805,
+    "weighted_shares": 9613805,
+    "name": "PicoCELA Inc. American Depositary Shares",
+    "type": "ADRC",
+    "primary_exchange": "XNAS"
+  },
+  "PDEX": {
+    "market_cap": 201185391.87,
+    "shares_outstanding": 3203334,
+    "weighted_shares": 3203334,
+    "name": "Pro-Dex Inc New",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PDSB": {
+    "market_cap": 16505947.5762,
+    "shares_outstanding": 55971338,
+    "weighted_shares": 55971338,
+    "name": "PDS Biotechnology Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PGY": {
+    "market_cap": 1666014084.7099998,
+    "shares_outstanding": 72137266,
+    "weighted_shares": 83425843,
+    "name": "Pagaya Technologies Ltd. Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PL": {
+    "market_cap": 5985299419.05,
+    "shares_outstanding": 340354193,
+    "weighted_shares": 363847989,
+    "name": "Planet Labs PBC",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "PLNT": {
+    "market_cap": 3833304469.75,
+    "shares_outstanding": 75216965,
+    "weighted_shares": 75533093,
+    "name": "Planet Fitness, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "PLTR": {
+    "market_cap": 401863469610.39996,
+    "shares_outstanding": 2300713329,
+    "weighted_shares": 2403058480,
+    "name": "Palantir Technologies Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PLUG": {
+    "market_cap": 2934110083.8,
+    "shares_outstanding": 1397195278,
+    "weighted_shares": 1397195278,
+    "name": "Plug Power Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PMTS": {
+    "market_cap": 260819595.0,
+    "shares_outstanding": 11530669,
+    "weighted_shares": 11591982,
+    "name": "CPI Card Group Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "PRLD": {
+    "market_cap": 366297996.15,
+    "shares_outstanding": 79803485,
+    "weighted_shares": 79803485,
+    "name": "Prelude Therapeutics Incorporated",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "QBTS": {
+    "market_cap": 6377727350.400001,
+    "shares_outstanding": 368835324,
+    "weighted_shares": 379626628,
+    "name": "D-Wave Quantum Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "QNTM": {
+    "market_cap": 134.4,
+    "shares_outstanding": 3816937,
+    "weighted_shares": 42,
+    "name": "Quantum Biopharma Ltd. Class B Subordinate Voting Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "RDDT": {
+    "market_cap": 30354397382.7,
+    "shares_outstanding": 146103200,
+    "weighted_shares": 192396510,
+    "name": "Reddit, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "RDW": {
+    "market_cap": 2654921507.58,
+    "shares_outstanding": 249992609,
+    "weighted_shares": 249992609,
+    "name": "Redwire Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "REGN": {
+    "market_cap": 80458293572.12,
+    "shares_outstanding": 101137842,
+    "weighted_shares": 102954988,
+    "name": "Regeneron Pharmaceuticals Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "RGTI": {
+    "market_cap": 5096648766.69,
+    "shares_outstanding": 333768747,
+    "weighted_shares": 333768747,
+    "name": "Rigetti Computing, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "RH": {
+    "market_cap": 2538368627.1299996,
+    "shares_outstanding": 18900969,
+    "weighted_shares": 18933159,
+    "name": "RH",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "RIOT": {
+    "market_cap": 8056809334.45,
+    "shares_outstanding": 375258935,
+    "weighted_shares": 375258935,
+    "name": "Riot Platforms, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "RKLB": {
+    "market_cap": 40250921757.55,
+    "shares_outstanding": 598350482,
+    "weighted_shares": 639410989,
+    "name": "Rocket Lab Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "RLMD": {
+    "market_cap": 482147703.91999996,
+    "shares_outstanding": 106669846,
+    "weighted_shares": 106669846,
+    "name": "Relmada Therapeutics, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ROIV": {
+    "market_cap": 29485225472.3,
+    "shares_outstanding": 722323015,
+    "weighted_shares": 722323015,
+    "name": "Roivant Sciences Ltd. Common Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "RTX": {
+    "market_cap": 266424829905.92,
+    "shares_outstanding": 1347758144,
+    "weighted_shares": 1347758144,
+    "name": "RTX Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "RXO": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/RXO?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c0f80>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "RXT": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/RXT?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c2900>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "SANM": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/SANM?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c31a0>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "SBLK": {
+    "error": "HTTPSConnectionPool(host='api.polygon.io', port=443): Max retries exceeded with url: /v3/reference/tickers/SBLK?apiKey=2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs (Caused by ConnectTimeoutError(<urllib3.connection.HTTPSConnection object at 0x7727002c3a40>, 'Connection to api.polygon.io timed out. (connect timeout=10)'))"
+  },
+  "SCCO": {
+    "market_cap": 163372059804.14,
+    "shares_outstanding": 834331706,
+    "weighted_shares": 844343686,
+    "name": "Southern Copper Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "SDRL": {
+    "market_cap": 2995735119.7,
+    "shares_outstanding": 62541443,
+    "weighted_shares": 62541443,
+    "name": "Seadrill Limited",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "SFTBY": {
+    "market_cap": null,
+    "shares_outstanding": null,
+    "weighted_shares": null,
+    "name": "SOFTBANK GRP UNSP/ADR",
+    "type": "ADRC",
+    "primary_exchange": "OTC Link"
+  },
+  "SHMD": {
+    "market_cap": 222941092.14,
+    "shares_outstanding": 60958903,
+    "weighted_shares": 65958903,
+    "name": "SCHMID Group N.V. Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SHOE": {
+    "market_cap": 345506288.65000004,
+    "shares_outstanding": 27151308,
+    "weighted_shares": 27183815,
+    "name": "Shoe Station Group, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SIG": {
+    "market_cap": 3841686783.1800003,
+    "shares_outstanding": 39329783,
+    "weighted_shares": 38317243,
+    "name": "Signet Jewelers Limited",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "SKYX": {
+    "market_cap": 182831841.9,
+    "shares_outstanding": 135430994,
+    "weighted_shares": 135430994,
+    "name": "SKYX Platforms Corp. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SLS": {
+    "market_cap": 2331463210.405,
+    "shares_outstanding": 201945709,
+    "weighted_shares": 201945709,
+    "name": "SELLAS Life Sciences Group, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SLXN": {
+    "market_cap": 1986679.4688000001,
+    "shares_outstanding": 5755872,
+    "weighted_shares": 5560256,
+    "name": "Silexion Therapeutics Corp Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SMCI": {
+    "market_cap": 26344311898.4,
+    "shares_outstanding": 656965384,
+    "weighted_shares": 656965384,
+    "name": "Super Micro Computer, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SMR": {
+    "market_cap": 3533453784.4199996,
+    "shares_outstanding": 410389522,
+    "weighted_shares": 410389522,
+    "name": "NuScale Power Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "SNDK": {
+    "market_cap": 239153475283.34998,
+    "shares_outstanding": 146419001,
+    "weighted_shares": 146419001,
+    "name": "Sandisk Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SNX": {
+    "market_cap": 21525695625.92,
+    "shares_outstanding": 79958752,
+    "weighted_shares": 79958752,
+    "name": "TD SYNNEX Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "SNYR": {
+    "market_cap": 1498928.2297999999,
+    "shares_outstanding": 15079956,
+    "weighted_shares": 14899883,
+    "name": "Synergy CHC Corp. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SOUN": {
+    "market_cap": 2780142127.86,
+    "shares_outstanding": 411576753,
+    "weighted_shares": 444112161,
+    "name": "SoundHound AI, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SRPT": {
+    "market_cap": 2160072579.45,
+    "shares_outstanding": 105627021,
+    "weighted_shares": 105627021,
+    "name": "Sarepta Therapeutics,, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SSL": {
+    "market_cap": 9352739780.38,
+    "shares_outstanding": 647761670,
+    "weighted_shares": 641037682,
+    "name": "Sasol Limited",
+    "type": "ADRC",
+    "primary_exchange": "XNYS"
+  },
+  "SSNC": {
+    "market_cap": 18835756528.92,
+    "shares_outstanding": 234654996,
+    "weighted_shares": 234654996,
+    "name": "SS&C Technologies Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "STRL": {
+    "market_cap": 15631956238.720001,
+    "shares_outstanding": 30588518,
+    "weighted_shares": 30588518,
+    "name": "Sterling Infrastructure, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "STX": {
+    "market_cap": 188774858432.38,
+    "shares_outstanding": 226644518,
+    "weighted_shares": 227393014,
+    "name": "Seagate Technology Holdings PLC Ordinary Shares (Ireland)",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SUNB": {
+    "market_cap": 29781712713.960003,
+    "shares_outstanding": null,
+    "weighted_shares": 409764897,
+    "name": "Sunbelt Rentals Holdings, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "SURG": {
+    "market_cap": 4348600.0245,
+    "shares_outstanding": 52908423,
+    "weighted_shares": 25121895,
+    "name": "SurgePays, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SWKS": {
+    "market_cap": 13294270289.699999,
+    "shares_outstanding": 150472782,
+    "weighted_shares": 150472782,
+    "name": "Skyworks Solutions Inc",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SWRD": {
+    "market_cap": 625003890.48,
+    "shares_outstanding": 211149963,
+    "weighted_shares": 211149963,
+    "name": "Stewards, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "SWVL": {
+    "market_cap": 134862413.01500002,
+    "shares_outstanding": 9964344,
+    "weighted_shares": 18954661,
+    "name": "Swvl Holdings Corp Class A Common Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "TAKOF": {
+    "market_cap": null,
+    "shares_outstanding": null,
+    "weighted_shares": null,
+    "name": "VOLATUS AEROSPACE INC",
+    "type": "OS",
+    "primary_exchange": "OTC Link"
+  },
+  "TEN": {
+    "market_cap": 1443112183.7,
+    "shares_outstanding": 30127603,
+    "weighted_shares": 30127603,
+    "name": "Tsakos Energy Navigation Ltd.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "TNON": {
+    "market_cap": 3955588.71,
+    "shares_outstanding": 1032578,
+    "weighted_shares": 667047,
+    "name": "Tenon Medical, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "TPST": {
+    "market_cap": 13425328.8739,
+    "shares_outstanding": 16539767,
+    "weighted_shares": 16539767,
+    "name": "Tempest Therapeutics, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "TRUG": {
+    "market_cap": 1256757.7831,
+    "shares_outstanding": 1903708,
+    "weighted_shares": 1923707,
+    "name": "TruGolf Holdings, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "TSLA": {
+    "market_cap": 1443322599663.36,
+    "shares_outstanding": 3949547394,
+    "weighted_shares": 3949547394,
+    "name": "Tesla, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "TTAN": {
+    "market_cap": 5274864936.04,
+    "shares_outstanding": 82746425,
+    "weighted_shares": 96467903,
+    "name": "ServiceTitan, Inc. Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "TTD": {
+    "market_cap": 6738081981.96,
+    "shares_outstanding": 426771565,
+    "weighted_shares": 469880194,
+    "name": "The Trade Desk, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "TYRA": {
+    "market_cap": 1314682966.17,
+    "shares_outstanding": 59676939,
+    "weighted_shares": 59676939,
+    "name": "Tyra Biosciences, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "UBER": {
+    "market_cap": 146390283872.07,
+    "shares_outstanding": 2042560121,
+    "weighted_shares": 2042560121,
+    "name": "Uber Technologies, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "UNFI": {
+    "market_cap": 2680335000.0,
+    "shares_outstanding": 60519140,
+    "weighted_shares": 60300000,
+    "name": "United Natural Foods Inc",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "UPST": {
+    "market_cap": 2490240847.14,
+    "shares_outstanding": 97313046,
+    "weighted_shares": 97313046,
+    "name": "Upstart Holdings, Inc. Common stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "URI": {
+    "market_cap": 61565290719.68,
+    "shares_outstanding": 62242489,
+    "weighted_shares": 62242489,
+    "name": "United Rentals, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "VAC": {
+    "market_cap": 3563011198.8,
+    "shares_outstanding": 34395320,
+    "weighted_shares": 34395320,
+    "name": "MARRIOTT VACATIONS WORLDWIDE CORPORATION",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "VICR": {
+    "market_cap": 9124983330.119999,
+    "shares_outstanding": 34389014,
+    "weighted_shares": 46106732,
+    "name": "Vicor Corp",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "VOYG": {
+    "market_cap": 2061561646.8,
+    "shares_outstanding": 58217592,
+    "weighted_shares": 61029060,
+    "name": "Voyager Technologies, Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "VRT": {
+    "market_cap": 98965059751.38,
+    "shares_outstanding": 384988173,
+    "weighted_shares": 384988173,
+    "name": "Vertiv Holdings Co Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "VSME": {
+    "market_cap": 2958348.393,
+    "shares_outstanding": 2750784,
+    "weighted_shares": 2765070,
+    "name": "VS Media Holdings Limited Class A Ordinary Shares",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "VST": {
+    "market_cap": 49801550234.1,
+    "shares_outstanding": 335635195,
+    "weighted_shares": 335635195,
+    "name": "Vistra Corp.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "WDH": {
+    "market_cap": 366487992.06,
+    "shares_outstanding": 279111455,
+    "weighted_shares": 359301953,
+    "name": "Waterdrop Inc. American Depositary Shares (each representing the right to receive 10 Class A Ordinary Shares)",
+    "type": "ADRC",
+    "primary_exchange": "XNYS"
+  },
+  "WLTH": {
+    "market_cap": 1564773602.7600002,
+    "shares_outstanding": null,
+    "weighted_shares": 150748902,
+    "name": "Wealthfront Corporation Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "WULF": {
+    "market_cap": 8352735652.98,
+    "shares_outstanding": 498968677,
+    "weighted_shares": 498968677,
+    "name": "TeraWulf Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "WYHG": {
+    "market_cap": 161894305.29999998,
+    "shares_outstanding": null,
+    "weighted_shares": 35581166,
+    "name": "Wing Yip Food Holdings Group Limited American Depositary Shares",
+    "type": "ADRC",
+    "primary_exchange": "XNAS"
+  },
+  "XOM": {
+    "market_cap": 682536266240.4,
+    "shares_outstanding": null,
+    "weighted_shares": 4111911960,
+    "name": "ExxonMobil Holdings Corporation",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "YARW": {
+    "market_cap": 72109839.46000001,
+    "shares_outstanding": 2669746,
+    "weighted_shares": 2669746,
+    "name": "Yarrow Bioscience, Inc. Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "YSS": {
+    "market_cap": 1082377927.4,
+    "shares_outstanding": null,
+    "weighted_shares": 137357605,
+    "name": "York Space Systems Inc.",
+    "type": "CS",
+    "primary_exchange": "XNYS"
+  },
+  "ZEO": {
+    "market_cap": 9908748.9864,
+    "shares_outstanding": 41703489,
+    "weighted_shares": 41703489,
+    "name": "Zeo Energy Corporation Class A Common Stock",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  },
+  "ZUMZ": {
+    "market_cap": 223060419.15,
+    "shares_outstanding": 16872215,
+    "weighted_shares": 15330613,
+    "name": "Zumiez Inc.",
+    "type": "CS",
+    "primary_exchange": "XNAS"
+  }
+}

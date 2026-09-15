@@ -1,0 +1,270 @@
+{
+  "feature": "F05_Intraday_Volatility_at_Entry",
+  "description": "Rolling std of 1-min returns from 5 bars before entry",
+  "hypothesis": "High micro-volatility at entry indicates unstable price action, hurting fills and PnL",
+  "correlation": {
+    "vs_pnl_t2_close": {
+      "pearson_r": -0.2301,
+      "pearson_p": 0.0257,
+      "spearman_r": -0.0867,
+      "spearman_p": 0.406,
+      "n": 94
+    },
+    "vs_pnl_60m_nosl": {
+      "pearson_r": 0.0924,
+      "pearson_p": 0.181,
+      "spearman_r": 0.0815,
+      "spearman_p": 0.2388,
+      "n": 211
+    }
+  },
+  "quartile_analysis": {
+    "note": "could not create quartiles",
+    "n": 94
+  },
+  "threshold_sweep": {
+    "0.001": {
+      "pass": {
+        "n": 31,
+        "avg_pnl": 0.248,
+        "median_pnl": 0.0358,
+        "std": 6.1098,
+        "sharpe": 0.0406,
+        "win_rate": 0.5161,
+        "ci_95_low": -1.9028,
+        "ci_95_high": 2.3988,
+        "max_loss": -15.9096,
+        "max_gain": 11.1681
+      },
+      "fail": {
+        "n": 63,
+        "avg_pnl": -0.3226,
+        "median_pnl": -2.0139,
+        "std": 11.7133,
+        "sharpe": -0.0275,
+        "win_rate": 0.4444,
+        "ci_95_low": -3.215,
+        "ci_95_high": 2.5699,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.0019": {
+      "pass": {
+        "n": 53,
+        "avg_pnl": 0.0819,
+        "median_pnl": 0.0358,
+        "std": 5.8669,
+        "sharpe": 0.014,
+        "win_rate": 0.5094,
+        "ci_95_low": -1.4976,
+        "ci_95_high": 1.6615,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 41,
+        "avg_pnl": -0.4141,
+        "median_pnl": -2.0334,
+        "std": 13.9979,
+        "sharpe": -0.0296,
+        "win_rate": 0.4146,
+        "ci_95_low": -4.6988,
+        "ci_95_high": 3.8707,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.002": {
+      "pass": {
+        "n": 55,
+        "avg_pnl": 0.1026,
+        "median_pnl": 0.0358,
+        "std": 5.8416,
+        "sharpe": 0.0176,
+        "win_rate": 0.5091,
+        "ci_95_low": -1.4412,
+        "ci_95_high": 1.6465,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 39,
+        "avg_pnl": -0.4687,
+        "median_pnl": -2.0334,
+        "std": 14.3114,
+        "sharpe": -0.0328,
+        "win_rate": 0.4103,
+        "ci_95_low": -4.9604,
+        "ci_95_high": 4.0229,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.0043": {
+      "pass": {
+        "n": 74,
+        "avg_pnl": -0.1358,
+        "median_pnl": -0.1406,
+        "std": 5.8825,
+        "sharpe": -0.0231,
+        "win_rate": 0.5,
+        "ci_95_low": -1.4761,
+        "ci_95_high": 1.2045,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 20,
+        "avg_pnl": -0.1293,
+        "median_pnl": -3.1504,
+        "std": 19.3406,
+        "sharpe": -0.0067,
+        "win_rate": 0.35,
+        "ci_95_low": -8.6057,
+        "ci_95_high": 8.3471,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.005": {
+      "pass": {
+        "n": 74,
+        "avg_pnl": -0.1358,
+        "median_pnl": -0.1406,
+        "std": 5.8825,
+        "sharpe": -0.0231,
+        "win_rate": 0.5,
+        "ci_95_low": -1.4761,
+        "ci_95_high": 1.2045,
+        "max_loss": -15.9096,
+        "max_gain": 12.9771
+      },
+      "fail": {
+        "n": 20,
+        "avg_pnl": -0.1293,
+        "median_pnl": -3.1504,
+        "std": 19.3406,
+        "sharpe": -0.0067,
+        "win_rate": 0.35,
+        "ci_95_low": -8.6057,
+        "ci_95_high": 8.3471,
+        "max_loss": -55.8442,
+        "max_gain": 36.2023
+      }
+    },
+    "0.01": {
+      "pass": {
+        "n": 88,
+        "avg_pnl": 0.4103,
+        "median_pnl": -0.3332,
+        "std": 8.3155,
+        "sharpe": 0.0493,
+        "win_rate": 0.4773,
+        "ci_95_low": -1.3271,
+        "ci_95_high": 2.1477,
+        "max_loss": -15.9096,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 6,
+        "avg_pnl": -8.124,
+        "median_pnl": -4.2391,
+        "std": 25.3311,
+        "sharpe": -0.3207,
+        "win_rate": 0.3333,
+        "ci_95_low": -28.393,
+        "ci_95_high": 12.1451,
+        "max_loss": -55.8442,
+        "max_gain": 18.1159
+      }
+    },
+    "0.02": {
+      "pass": {
+        "n": 92,
+        "avg_pnl": 0.5459,
+        "median_pnl": -0.3332,
+        "std": 8.4123,
+        "sharpe": 0.0649,
+        "win_rate": 0.4783,
+        "ci_95_low": -1.1731,
+        "ci_95_high": 2.2649,
+        "max_loss": -15.9096,
+        "max_gain": 36.2023
+      },
+      "fail": {
+        "n": 2,
+        "note": "insufficient"
+      }
+    }
+  },
+  "cross_strategy_consistency": {
+    "score": 1,
+    "total_tested": 4,
+    "details": {
+      "B4_T1_ENTRY": {
+        "n": 2,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D2_SHORT_MOM": {
+        "n": 16,
+        "spearman_r": 0.4941,
+        "spearman_p": 0.0517,
+        "consistent": false
+      },
+      "BASELINE_V1": {
+        "n": 2,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C2_LONG_ORB": {
+        "n": 2,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C1_LONG_FADE": {
+        "n": 4,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "D1_LONG_MOM": {
+        "n": 27,
+        "spearman_r": -0.0598,
+        "spearman_p": 0.7669,
+        "consistent": true
+      },
+      "B1_WIDE_SHORT": {
+        "n": 16,
+        "spearman_r": 0.1676,
+        "spearman_p": 0.5349,
+        "consistent": false
+      },
+      "B3_EOD_ENTRY": {
+        "n": 2,
+        "note": "insufficient",
+        "consistent": null
+      },
+      "C3_EARNINGS": {
+        "n": 9,
+        "spearman_r": 0.0333,
+        "spearman_p": 0.9322,
+        "consistent": false
+      },
+      "B2_NO_ORB": {
+        "n": 5,
+        "note": "insufficient",
+        "consistent": null
+      }
+    }
+  },
+  "conclusion": {
+    "passes": false,
+    "max_abs_corr": 0.2301,
+    "min_p_value": 0.0257,
+    "consistency_score": "1/4",
+    "summary": "Intraday volatility at entry FAILS feature gate."
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4
+}

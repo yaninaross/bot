@@ -1,6 +1,6 @@
 # Scanner Optimization: Combined Experiment Results
 
-**Generated**: 2026-09-13 | **Dates**: Sep 8–11, 2026 | **Hold**: T+2 Close (SHORT direction, local_high entry)
+**Generated**: 2026-09-13 (updated with full volume data) | **Dates**: Sep 8–11, 2026 | **Hold**: T+2 Close (SHORT direction, local_high entry)
 
 ---
 
@@ -10,6 +10,7 @@
 
 **Dataset**: B1_WIDE_SHORT — all gap-up >= 1.5%, price >= $5, SHORT direction
 **Funnel**: 3,181 gap-ups → 2,483 qualifying (after bars/entry filter) → 1,017 with T+2
+**Volume coverage**: 2,478 / 2,483 trades (99.8%) — computed from 24 dates of Polygon grouped daily
 
 ## Baseline
 
@@ -71,39 +72,53 @@ Market cap proxy (price × float shares):
 
 ---
 
-## A3: Volume Signal Analysis
+## A3: Volume Signal Analysis (UPDATED — full coverage)
 
-**UNUSABLE** — only 144/2,483 B1 trades (6%) have volume ratio data. The v2_daily_data.json covers only the 253 LLM-universe tickers, not the full B1 universe. Volume cannot serve as a ranking signal for Agent 1 without fetching broader daily history.
+**Now covers 2,478 / 2,483 trades (99.8%)** — previously only 144 (6%). Volume ratios computed from 24 dates of Polygon grouped daily data with 20-day lookback.
+
+**VERDICT: Volume is NOT a useful standalone filter.** All VR thresholds produce Sharpe *below* the 0.462 baseline. The prior finding of VR >= 1.5x = Sharpe 0.658 was an artifact of 6% coverage bias (sampling only LLM-universe tickers).
 
 | Volume Ratio >= | n | n_T+2 | Avg% | Sharpe | CI_lo |
 |-----------------|---|-------|------|--------|-------|
-| 1.0x | 88 | 49 | +3.06 | 0.491 | +1.32 |
-| 1.5x | 48 | 26 | +4.08 | 0.658 | +1.70 |
-| 2.0x | 33 | 14 | +2.76 | 0.373 | -1.12 |
-| 3.0x | 21 | 7 | -0.56 | -0.070 | -6.52 |
-| 5.0x | 11 | 4 | +2.64 | 0.338 | -5.00 |
+| 1.0x | 1,143 | 554 | +2.93 | 0.388 | +2.30 |
+| 1.5x | 485 | 262 | +3.37 | 0.376 | +2.29 |
+| 2.0x | 279 | 157 | +2.89 | 0.283 | +1.29 |
+| 3.0x | 118 | 61 | +2.66 | 0.211 | -0.50 |
+| 5.0x | 48 | 23 | -0.33 | -0.019 | -7.47 |
+| 10.0x | 19 | 11 | +2.85 | 0.206 | -5.31 |
 
-Joint filter (gap >= 5% AND VR >= 3.0): n=7 T+2, avg -0.56% — does not help.
+Volume rank within day:
+
+| Percentile | n (T+2) | Avg% | Sharpe |
+|------------|---------|------|--------|
+| Top 10% | 100 | +2.00 | 0.169 |
+| Top 5% | 50 | +2.22 | 0.167 |
+| Top 3% | 30 | +0.59 | 0.038 |
+| Top 1% | 10 | +6.30 | 0.564 |
+
+**Joint filter** (gap >= 5% AND VR >= 3.0): n=28 T+2, avg +5.34%, Sharpe 0.435 — beats avg but not Sharpe of gap-only T4.
 
 ---
 
-## A4: Ranking Function Optimization
+## A4: Ranking Function Optimization (UPDATED — with real volume)
 
-The 4-signal ranking function (gap + volume + price + PM retrace) is effectively a 2-signal ranker (gap + price) due to volume data gaps. With only 6 T+2 trades in the top-3 simulation, results are noisy.
+With full volume data, the ranking function **underperforms the baseline**. Best combo (balanced) averages +1.54% vs baseline +3.28%. Volume-heavy weights actively destroy edge: `volume_dominant` = -5.09% avg.
 
 ### Top 3/day — Weight Combos
 
 | Combo | Weights (g/v/p/pm) | n_T+2 | Avg% | Sharpe |
 |-------|--------------------|-------|------|--------|
-| **gap_dominant** | **0.5/0.3/0.1/0.1** | **6** | **+4.46** | **0.562** |
-| gap_vol_equal | 0.4/0.4/0.1/0.1 | 6 | +4.46 | 0.562 |
-| pure_gap | 0.6/0.2/0.1/0.1 | 6 | +4.46 | 0.562 |
-| volume_dominant | 0.3/0.5/0.1/0.1 | 6 | +3.41 | 0.510 |
-| balanced | 0.35/0.35/0.15/0.15 | 6 | +3.41 | 0.510 |
-| pure_volume | 0.2/0.6/0.1/0.1 | 6 | +3.41 | 0.510 |
-| gap_price | 0.4/0.2/0.3/0.1 | 6 | +0.94 | 0.270 |
+| **balanced** | **0.35/0.35/0.15/0.15** | **6** | **+1.54** | **0.424** |
+| gap_price | 0.4/0.2/0.3/0.1 | 6 | +1.54 | 0.424 |
+| pure_gap | 0.6/0.2/0.1/0.1 | 6 | +1.36 | 0.352 |
+| gap_dominant | 0.5/0.3/0.1/0.1 | 6 | +0.49 | 0.113 |
+| gap_vol_equal | 0.4/0.4/0.1/0.1 | 6 | -0.42 | -0.102 |
+| volume_dominant | 0.3/0.5/0.1/0.1 | 6 | -5.09 | -0.675 |
+| pure_volume | 0.2/0.6/0.1/0.1 | 6 | -5.09 | -0.675 |
 
-Best combo (gap_dominant) across top-N: Top 1 avg -0.53% | Top 2 avg +3.09% | **Top 3 avg +4.46%** | Top 4 avg +2.67% | Top 5 avg +3.02%
+Best combo (balanced) across top-N: Top 1 avg -1.44% | Top 2 avg -0.03% | **Top 3 avg +1.54%** | Top 4 avg +0.71% | Top 5 avg -1.82%
+
+**Conclusion**: The composite ranking approach is worse than simple gap-tier filtering. T4 xlarge (gap 5–8%) at Sharpe 0.770 remains the strongest single signal. Ranking pulls in lower-gap tickers weighted by volume/price, which dilutes the edge.
 
 ![Ranking Function Optimization](agent1_ranking.png)
 
@@ -122,41 +137,45 @@ Untestable — SPY was down on both T+2 dates. Correlation: r = -0.054, p = 0.08
 
 ---
 
-## Agent 1: Top-3 Simulation
+## Agent 1: Top-3 Simulation (UPDATED)
 
-Using gap_dominant ranking (gap=0.5, vol=0.3, price=0.1, pm=0.1):
+Using balanced ranking (gap=0.35, vol=0.35, price=0.15, pm=0.15):
 
 | Date | Rank | Ticker | Gap% | Price | Vol Ratio | Score | T+2 PnL |
 |------|------|--------|------|-------|-----------|-------|---------|
-| 2026-09-08 | #1 | ROIV | +14.5% | $39.98 | 3.2x | 0.918 | -0.02% |
-| 2026-09-08 | #2 | WYHG | +36.0% | $5.52 | 13.8x | 0.902 | +14.31% |
-| 2026-09-08 | #3 | IONQ | +7.1% | $42.32 | 2.3x | 0.894 | +15.05% |
-| 2026-09-09 | #1 | SIG | +14.9% | $95.01 | 6.4x | 0.986 | -1.04% |
-| 2026-09-09 | #2 | CSR | +9.7% | $57.84 | 17.9x | 0.964 | -0.88% |
-| 2026-09-09 | #3 | META | +5.7% | $648.64 | 2.2x | 0.921 | -0.68% |
-| 2026-09-10 | #1 | PCLA | +23.3% | $9.15 | 18.2x | 0.879 | no data |
-| 2026-09-10 | #2 | MCFT | +5.8% | $24.12 | 4.0x | 0.868 | no data |
-| 2026-09-10 | #3 | BWET | +7.9% | $629.61 | — | 0.814 | no data |
-| 2026-09-11 | #1 | ORCL | +7.5% | $164.43 | 3.4x | 0.980 | no data |
-| 2026-09-11 | #2 | FEIM | +33.1% | $82.61 | 7.0x | 0.978 | no data |
-| 2026-09-11 | #3 | PCLA | +29.4% | $12.58 | 9.3x | 0.922 | no data |
+| 2026-09-08 | #1 | QCOM | +6.9% | $180.40 | 2.9x | 0.928 | -1.83% |
+| 2026-09-08 | #2 | LINT | +10.2% | $118.12 | 2.2x | 0.918 | +3.62% |
+| 2026-09-08 | #3 | ZCSH | +10.9% | $92.94 | 2.8x | 0.908 | +1.69% |
+| 2026-09-09 | #1 | SIG | +14.9% | $95.01 | 6.4x | 0.977 | -1.04% |
+| 2026-09-09 | #2 | CSR | +9.7% | $57.84 | 17.9x | 0.958 | -0.88% |
+| 2026-09-09 | #3 | ZCSH | +10.6% | $101.39 | 1.9x | 0.928 | +7.69% |
+| 2026-09-10 | #1 | AXTQ | +8.5% | $40.62 | 2.5x | 0.874 | no data |
+| 2026-09-10 | #2 | SKHN | +9.8% | $10.39 | 5.0x | 0.868 | no data |
+| 2026-09-10 | #3 | ZSL | +7.5% | $24.31 | 2.1x | 0.851 | no data |
+| 2026-09-11 | #1 | ORCL | +7.5% | $164.43 | 3.4x | 0.974 | no data |
+| 2026-09-11 | #2 | FEIM | +33.1% | $82.61 | 7.0x | 0.967 | no data |
+| 2026-09-11 | #3 | WF | +5.8% | $78.90 | 2.5x | 0.912 | no data |
 
-**Simulation total**: 6 trades with T+2, avg = +4.46%, total = +26.74%, WR = 33%
+**Simulation total**: 6 trades with T+2, avg = +1.54%, total = +9.25%, WR = 50%
 
 ![Top-3 Simulation](agent1_simulation.png)
 
 ---
 
-## Agent 1: Final Specification
+## Agent 1: Final Specification (REVISED)
 
 | Parameter | Value |
 |-----------|-------|
-| Ranking function | gap_dominant |
-| Weights | gap=0.5, volume=0.3, price=0.1, pm_retrace=0.1 |
-| Selection | Top 3 per day |
-| Expected avg PnL | +4.46% (vs +3.28% baseline) |
-| Win rate | 33% |
-| Caveat | 4 dates (2 with T+2), n=6. Volume effectively missing. |
+| **Recommended filter** | **Gap tier T4 xlarge (5–8%)** |
+| Sharpe | 0.770 (best of all signals tested) |
+| Avg PnL | +5.50% |
+| Win rate | 80% |
+| Trades/day | ~47 qualifying, select top 3 by gap magnitude |
+| Ranking function | **NOT RECOMMENDED** — underperforms baseline |
+| Volume filter | **NOT RECOMMENDED** — all thresholds below baseline Sharpe |
+| Caveat | 4 dates (2 with T+2), n=115 for T4 tier |
+
+**Key revision**: The composite ranking function (gap + volume + price + PM retrace) was abandoned after full volume data revealed that volume actively hurts selection. Simple gap-tier filtering at T4 (5–8%) is the strongest signal with Sharpe 0.770 vs baseline 0.462.
 
 ---
 ---
@@ -221,7 +240,6 @@ no_exclusions has best Sharpe (0.919) but minimal_earnings_only is the best trad
 |-----|----------|---|-------|-----|------|--------|------|
 | current | earnings, deal, macro, breaking | 23 | 6 | 5.8 | +14.44 | 0.819 | YES |
 | add_breaking | earnings, deal, macro | 25 | 8 | 6.2 | +11.67 | 0.735 | YES |
-| add_macro | earnings, deal | 25 | 8 | 6.2 | +11.67 | 0.735 | YES |
 | **minimal_earnings_only** | **earnings** | **28** | **9** | **7.0** | **+12.74** | **0.838** | **YES** |
 | no_exclusions | — | 39 | 14 | 9.8 | +11.49 | 0.919 | YES |
 
@@ -242,7 +260,7 @@ Discovery scanner massively outperforms premarket at T+2. Premarket has 4x highe
 
 ## B4: n_runs Signal Analysis
 
-**INVERTED** vs V2 finding. V2 said n_runs >= 4 = positive edge. New analysis on SHORT gap-up subset shows n_runs=1 outperforms — but with only 8 total T+2 trades, this is not trustworthy. Do not use n_runs as a filter until sample grows.
+**INVERTED** vs V2 finding. n_runs=1 outperforms but with only 8 total T+2 trades. Do not use as filter until sample grows.
 
 | n_runs >= | n | n_T+2 | t/d | Avg% | WR | Sharpe | CI>0 |
 |-----------|---|-------|-----|------|-----|--------|------|
@@ -257,7 +275,7 @@ Discovery scanner massively outperforms premarket at T+2. Premarket has 4x highe
 
 ## Multi-Hold Analysis
 
-T+2 is the only hold with CI > 0. Shorter holds (30m through EOD) have positive avg but wide CIs crossing zero. This confirms the swing-hold thesis for SHORT gap-ups.
+T+2 is the only hold with CI > 0. Confirms the swing-hold thesis for SHORT gap-ups.
 
 | Hold | n | Avg% | Med% | WR | Sharpe | CI_lo | CI>0 |
 |------|---|------|------|-----|--------|-------|------|
@@ -340,29 +358,36 @@ Rank within tier by `n_runs × |gap_pct|`
 |-----------|----------------------|----------------------|
 | Universe size | 2,483 qualifying (1,017 T+2) | 316 signals (117 T+2) |
 | Baseline avg PnL | +3.28% | +11.67% (SHORT gap >= 2%) |
-| Best filter | Gap T4 xlarge (5–8%): +5.50% | Discovery scanner: +20.99% |
-| Best Sharpe | 0.770 (T4 xlarge) | 1.230 (gap >= 5%) |
-| Trades/day | 3 (forced) | 1.8 (organic) |
-| Volume signal | Unusable (6% coverage) | Available (253 tickers) |
-| Regime signal | Untestable (2 dates) | Untestable (2 dates) |
-| Key risk | Low WR (33%) on small n | Below target volume (1.8 vs 3/day) |
+| Best filter | Gap T4 xlarge (5–8%): +5.50%, Sharpe 0.770 | Discovery scanner: +20.99%, Sharpe 1.226 |
+| Volume signal | **NOT useful** — all thresholds below baseline Sharpe | Available (253 tickers) |
+| Ranking function | **Underperforms baseline** (+1.54% vs +3.28%) | N/A |
+| Trades/day | ~47 in T4 tier (select top 3 by gap) | 1.8 (organic, below 3 target) |
+| Regime signal | Untestable (2 dates, both SPY down) | Untestable (2 dates) |
+| Key risk | Need more dates for regime test | Below target volume (1.8 vs 3/day) |
 | T+2 sample | 1,017 (robust) | 8 (fragile) |
 
 ## Key Takeaways
 
-1. **Gap magnitude is the strongest signal** in both universes — monotonic staircase from T1 (+1.90%) to T5 (+6.31%) in B1; Sharpe 1.230 at >= 5% in LLM
-2. **Discovery scanner >> premarket** — +20.99% vs +2.36% avg T+2. Prioritize discovery signals
-3. **T+2 is the only hold with CI > 0** — confirms swing-hold thesis for SHORT gap-ups
-4. **Volume data gap blocks Agent 1** — ranking function is effectively gap-only until broader daily data is fetched
-5. **n_runs signal inverted** from V2 — do not use as filter until sample grows past 30+
-6. **Agent 2 tier system undershoots target** — 1.8/day vs 3/day. Sep 9 had 0 trades. Needs looser T3 or lower gap floor
-7. **Offerings dominate** — PDSB +35.39%, offering catalyst avg +35.80%. T1 tier (offering/regulatory) is correctly prioritized
-8. **Both agents need more dates** — 2 T+2 dates is the binding constraint. Run 2+ more weeks before committing parameters
+1. **Gap magnitude is THE signal** — monotonic staircase from T1 (+1.90%) to T5 (+6.31%). T4 xlarge (5–8%) has best Sharpe 0.770, 80% WR, CI confirmed. All other signals tested are inferior.
+2. **Volume is NOT a useful filter** — with full data coverage (99.8%), all VR thresholds produce Sharpe *below* baseline. The prior VR >= 1.5x = Sharpe 0.658 was a 6% sample bias artifact. Volume-heavy ranking weights actively destroy edge (-5.09%).
+3. **Composite ranking underperforms simple gap filtering** — best ranking combo (+1.54%) is worse than baseline (+3.28%). Top-3 selection by composite score dilutes the gap-tier edge.
+4. **Discovery scanner >> premarket** — +20.99% vs +2.36% avg T+2. Prioritize discovery signals.
+5. **T+2 is the only hold with CI > 0** — confirms swing-hold thesis for SHORT gap-ups.
+6. **n_runs signal inverted** from V2 — do not use as filter until sample grows past 30+.
+7. **Agent 2 tier system undershoots target** — 1.8/day vs 3/day. Sep 9 had 0 trades. Needs looser T3 or lower gap floor.
+8. **Offerings dominate** — PDSB +35.39%, offering catalyst avg +35.80%. T1 tier (offering/regulatory) correctly prioritized.
+
+## Revised Agent 1 Recommendation
+
+**Drop the ranking function entirely.** Instead:
+- Filter to gap tier T4 (5–8%) — Sharpe 0.770, avg +5.50%, 80% WR, ~47 trades/day
+- Select top 3 by raw gap magnitude (no composite score needed)
+- This outperforms every ranking combo tested
 
 ## Next Steps
 
-- [ ] Fetch 20-day daily volume for full B1 universe (~3,000 tickers) to unlock volume ranking for Agent 1
 - [ ] Accumulate T+2 data for Sep 10–11 (and subsequent trading days) to double the sample
 - [ ] Test SPY regime filter once an up-day appears in the T+2 window
 - [ ] Loosen Agent 2 T3 criteria (gap >= 1.0%?) to hit 3 trades/day target
 - [ ] Deploy logging schema and begin 4-week live collection period
+- [ ] ~~Fetch volume data for full B1 universe~~ **DONE** — volume confirmed NOT useful

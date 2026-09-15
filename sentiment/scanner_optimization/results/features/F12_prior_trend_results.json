@@ -1,0 +1,130 @@
+{
+  "feature": "F12_prior_trend_direction",
+  "description": "10-day linear regression slope of closing prices, normalized by first close",
+  "lookback": 10,
+  "coverage": 314,
+  "total_rows": 316,
+  "correlation_overall": {
+    "n": 279,
+    "pearson_r": -0.0801,
+    "pearson_p": 0.1823,
+    "spearman_r": 0.02,
+    "spearman_p": 0.7388
+  },
+  "correlation_r2": {
+    "n": 279,
+    "pearson_r": 0.0407,
+    "pearson_p": 0.4981,
+    "spearman_r": -0.0151,
+    "spearman_p": 0.8016
+  },
+  "quartile_analysis": {
+    "Q2": {
+      "n": 70,
+      "avg_pnl": 0.5725,
+      "median_pnl": -0.076,
+      "trimmed_mean": 0.2354,
+      "std": 7.8329,
+      "sharpe": 0.0731,
+      "win_rate": 0.4714,
+      "ci_95_low": -1.2625,
+      "ci_95_high": 2.4074,
+      "max_loss": -35.3233,
+      "max_gain": 35.3893
+    },
+    "Q4_high": {
+      "n": 70,
+      "avg_pnl": -0.062,
+      "median_pnl": 0.263,
+      "trimmed_mean": 0.1452,
+      "std": 4.1728,
+      "sharpe": -0.0149,
+      "win_rate": 0.5571,
+      "ci_95_low": -1.0396,
+      "ci_95_high": 0.9155,
+      "max_loss": -13.1313,
+      "max_gain": 12.4801
+    },
+    "Q1_low": {
+      "n": 70,
+      "avg_pnl": 0.7064,
+      "median_pnl": -0.0748,
+      "trimmed_mean": 0.1458,
+      "std": 8.2825,
+      "sharpe": 0.0853,
+      "win_rate": 0.4714,
+      "ci_95_low": -1.2339,
+      "ci_95_high": 2.6467,
+      "max_loss": -16.7442,
+      "max_gain": 36.2023
+    },
+    "Q3": {
+      "n": 69,
+      "avg_pnl": -0.4784,
+      "median_pnl": 0.1385,
+      "trimmed_mean": -0.1648,
+      "std": 4.6603,
+      "sharpe": -0.1027,
+      "win_rate": 0.5217,
+      "ci_95_low": -1.578,
+      "ci_95_high": 0.6212,
+      "max_loss": -23.1512,
+      "max_gain": 12.5201
+    }
+  },
+  "by_direction": {
+    "SHORT": {
+      "n": 141,
+      "pearson_r": -0.0689,
+      "pearson_p": 0.4166,
+      "spearman_r": -0.12,
+      "spearman_p": 0.1565
+    },
+    "LONG": {
+      "n": 138,
+      "pearson_r": -0.0287,
+      "pearson_p": 0.7382,
+      "spearman_r": 0.2231,
+      "spearman_p": 0.0085
+    }
+  },
+  "cross_strategy": {
+    "per_strategy": {
+      "B1_short_small": {
+        "spearman_r": -0.1464,
+        "p": 0.6025,
+        "n": 15
+      },
+      "B2_short_large": {
+        "spearman_r": -0.226,
+        "p": 0.3672,
+        "n": 18
+      },
+      "B3_short_tiny": {
+        "spearman_r": 0.116,
+        "p": 0.5565,
+        "n": 28
+      },
+      "C2_long_small": {
+        "spearman_r": 0.3461,
+        "p": 0.045,
+        "n": 34
+      },
+      "D1_momentum_long": {
+        "spearman_r": 0.1697,
+        "p": 0.3699,
+        "n": 30
+      },
+      "D2_momentum_short": {
+        "spearman_r": -0.1277,
+        "p": 0.543,
+        "n": 25
+      }
+    },
+    "consistent_direction": 3,
+    "total_strategies": 6,
+    "is_consistent": false
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4
+}

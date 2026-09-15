@@ -1,0 +1,149 @@
+{
+  "features_tested": [
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15"
+  ],
+  "overall_rankings": [
+    {
+      "feature_id": "F11",
+      "feature_name": "historical_fade_rate",
+      "coverage": 257,
+      "pearson_r": -0.0744,
+      "pearson_p": 0.2631,
+      "spearman_r": -0.0717,
+      "spearman_p": 0.2812,
+      "abs_spearman": 0.0717
+    },
+    {
+      "feature_id": "F12",
+      "feature_name": "prior_trend_slope",
+      "coverage": 314,
+      "pearson_r": -0.0801,
+      "pearson_p": 0.1823,
+      "spearman_r": 0.02,
+      "spearman_p": 0.7388,
+      "abs_spearman": 0.02
+    },
+    {
+      "feature_id": "F15",
+      "feature_name": "idiosyncratic_gap",
+      "coverage": 214,
+      "pearson_r": 0.2266,
+      "pearson_p": 0.0023,
+      "spearman_r": 0.0107,
+      "spearman_p": 0.8874,
+      "abs_spearman": 0.0107
+    },
+    {
+      "feature_id": "F14",
+      "feature_name": "position_in_20d_range",
+      "coverage": 315,
+      "pearson_r": -0.0113,
+      "pearson_p": 0.8512,
+      "spearman_r": 0.0085,
+      "spearman_p": 0.8876,
+      "abs_spearman": 0.0085
+    },
+    {
+      "feature_id": "F13",
+      "feature_name": "volume_spike_vs_avg",
+      "coverage": 299,
+      "pearson_r": 0.124,
+      "pearson_p": 0.0418,
+      "spearman_r": -0.0022,
+      "spearman_p": 0.9716,
+      "abs_spearman": 0.0022
+    }
+  ],
+  "short_rankings": [
+    {
+      "feature_id": "F12",
+      "feature_name": "prior_trend_slope",
+      "spearman_r": -0.12,
+      "spearman_p": 0.1565,
+      "abs_spearman": 0.12
+    },
+    {
+      "feature_id": "F13",
+      "feature_name": "volume_spike_vs_avg",
+      "spearman_r": 0.1004,
+      "spearman_p": 0.2483,
+      "abs_spearman": 0.1004
+    },
+    {
+      "feature_id": "F15",
+      "feature_name": "idiosyncratic_gap",
+      "spearman_r": 0.0962,
+      "spearman_p": 0.346,
+      "abs_spearman": 0.0962
+    },
+    {
+      "feature_id": "F11",
+      "feature_name": "historical_fade_rate",
+      "spearman_r": 0.0682,
+      "spearman_p": 0.4629,
+      "abs_spearman": 0.0682
+    },
+    {
+      "feature_id": "F14",
+      "feature_name": "position_in_20d_range",
+      "spearman_r": 0.0414,
+      "spearman_p": 0.6263,
+      "abs_spearman": 0.0414
+    }
+  ],
+  "long_rankings": [
+    {
+      "feature_id": "F12",
+      "feature_name": "prior_trend_slope",
+      "spearman_r": 0.2231,
+      "spearman_p": 0.0085,
+      "abs_spearman": 0.2231
+    },
+    {
+      "feature_id": "F11",
+      "feature_name": "historical_fade_rate",
+      "spearman_r": -0.177,
+      "spearman_p": 0.0644,
+      "abs_spearman": 0.177
+    },
+    {
+      "feature_id": "F14",
+      "feature_name": "position_in_20d_range",
+      "spearman_r": 0.1223,
+      "spearman_p": 0.1528,
+      "abs_spearman": 0.1223
+    },
+    {
+      "feature_id": "F13",
+      "feature_name": "volume_spike_vs_avg",
+      "spearman_r": -0.0557,
+      "spearman_p": 0.5195,
+      "abs_spearman": 0.0557
+    },
+    {
+      "feature_id": "F15",
+      "feature_name": "idiosyncratic_gap",
+      "spearman_r": -0.0404,
+      "spearman_p": 0.7204,
+      "abs_spearman": 0.0404
+    }
+  ],
+  "sample_sizes": {
+    "total_trades": 316,
+    "pnl_valid": 280,
+    "pnl_t2_close_valid": 117,
+    "dates": [
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11"
+    ]
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4,
+  "warning": "Only 4 trading days of data. All results require out-of-sample validation."
+}

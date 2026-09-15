@@ -1,0 +1,16 @@
+{
+  "feature": "F19_put_call_ratio",
+  "validation_required": true,
+  "live_trading_weeks_needed": 4,
+  "data_collected": 5,
+  "correlation": {
+    "n": 6,
+    "pearson_r": 0.3133,
+    "pearson_p": 0.5454,
+    "spearman_r": 0.1309,
+    "spearman_p": 0.8047
+  },
+  "quartile": {
+    "note": "insufficient data (n=6)"
+  }
+}

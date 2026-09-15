@@ -1,0 +1,116 @@
+{
+  "investigation": "Feature Investigation F01-F06",
+  "date": "2026-09-13",
+  "dataset": "v2_features_full.csv (316 trades, 4 days)",
+  "targets": [
+    "pnl_t2_close (117 non-null)",
+    "pnl_60m_nosl (272 non-null)"
+  ],
+  "pass_criteria": {
+    "correlation": "abs(r) >= 0.15",
+    "significance": "p < 0.05",
+    "cross_strategy_consistency": ">= 6/10"
+  },
+  "rankings": [
+    {
+      "feature": "F01_Gap_Magnitude_Bucket",
+      "passes": false,
+      "max_abs_corr": 0.4035,
+      "min_p_value": 0.0034,
+      "consistency": "3/4",
+      "summary": "Gap magnitude FAILS feature gate. Best bucket: medium_3_5 (ci_low=-2.4872)."
+    },
+    {
+      "feature": "F02_Opening_Bar_Volatility",
+      "passes": false,
+      "max_abs_corr": 0.3135,
+      "min_p_value": 0.0028,
+      "consistency": "1/4",
+      "summary": "Opening bar volatility FAILS feature gate."
+    },
+    {
+      "feature": "F05_Intraday_Volatility_at_Entry",
+      "passes": false,
+      "max_abs_corr": 0.2301,
+      "min_p_value": 0.0257,
+      "consistency": "1/4",
+      "summary": "Intraday volatility at entry FAILS feature gate."
+    },
+    {
+      "feature": "F06_Day_of_Week",
+      "passes": false,
+      "max_abs_corr": 0.0439,
+      "min_p_value": 0.5227,
+      "consistency": 0.3125,
+      "summary": "Day of week FAILS feature gate. Only 4 days in sample -- very limited statistical power."
+    },
+    {
+      "feature": "F04_Entry_Delay_Minutes",
+      "passes": false,
+      "max_abs_corr": 0.0364,
+      "min_p_value": 0.5497,
+      "consistency": "2/4",
+      "summary": "Entry delay FAILS feature gate."
+    },
+    {
+      "feature": "F03_Gap_Retrace_at_Entry",
+      "passes": false,
+      "max_abs_corr": 0.0216,
+      "min_p_value": 0.7304,
+      "consistency": "2/4",
+      "summary": "Gap retrace FAILS feature gate."
+    }
+  ],
+  "passing_features": [],
+  "failing_features": [
+    {
+      "feature": "F01_Gap_Magnitude_Bucket",
+      "passes": false,
+      "max_abs_corr": 0.4035,
+      "min_p_value": 0.0034,
+      "consistency": "3/4",
+      "summary": "Gap magnitude FAILS feature gate. Best bucket: medium_3_5 (ci_low=-2.4872)."
+    },
+    {
+      "feature": "F02_Opening_Bar_Volatility",
+      "passes": false,
+      "max_abs_corr": 0.3135,
+      "min_p_value": 0.0028,
+      "consistency": "1/4",
+      "summary": "Opening bar volatility FAILS feature gate."
+    },
+    {
+      "feature": "F05_Intraday_Volatility_at_Entry",
+      "passes": false,
+      "max_abs_corr": 0.2301,
+      "min_p_value": 0.0257,
+      "consistency": "1/4",
+      "summary": "Intraday volatility at entry FAILS feature gate."
+    },
+    {
+      "feature": "F06_Day_of_Week",
+      "passes": false,
+      "max_abs_corr": 0.0439,
+      "min_p_value": 0.5227,
+      "consistency": 0.3125,
+      "summary": "Day of week FAILS feature gate. Only 4 days in sample -- very limited statistical power."
+    },
+    {
+      "feature": "F04_Entry_Delay_Minutes",
+      "passes": false,
+      "max_abs_corr": 0.0364,
+      "min_p_value": 0.5497,
+      "consistency": "2/4",
+      "summary": "Entry delay FAILS feature gate."
+    },
+    {
+      "feature": "F03_Gap_Retrace_at_Entry",
+      "passes": false,
+      "max_abs_corr": 0.0216,
+      "min_p_value": 0.7304,
+      "consistency": "2/4",
+      "summary": "Gap retrace FAILS feature gate."
+    }
+  ],
+  "caveat": "Only 4 trading days and 117 T+2 PnL observations. All findings require live validation before deployment."
+}

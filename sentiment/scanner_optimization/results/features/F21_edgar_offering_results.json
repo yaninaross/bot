@@ -1,0 +1,277 @@
+{
+  "feature": "F21_edgar_offering",
+  "description": "SEC EDGAR filing check for offerings near gap date",
+  "validation_required": true,
+  "live_trading_weeks_needed": 4,
+  "catalyst_offering": {
+    "offering": {
+      "n": 16,
+      "avg_pnl": 6.2903,
+      "median_pnl": 2.1012,
+      "trimmed_mean": 5.9371,
+      "std": 14.1741,
+      "sharpe": 0.4438,
+      "win_rate": 0.5625,
+      "ci_95_low": -0.655,
+      "ci_95_high": 13.2356,
+      "max_loss": -18.6765,
+      "max_gain": 36.2023
+    },
+    "non_offering": {
+      "n": 133,
+      "avg_pnl": -0.2994,
+      "median_pnl": -0.1065,
+      "trimmed_mean": -0.0158,
+      "std": 6.875,
+      "sharpe": -0.0435,
+      "win_rate": 0.4887,
+      "ci_95_low": -1.4678,
+      "ci_95_high": 0.869,
+      "max_loss": -35.3233,
+      "max_gain": 21.2598
+    }
+  },
+  "offering_LONG": {
+    "offering": {
+      "n": 4,
+      "note": "insufficient"
+    },
+    "non_offering": {
+      "n": 76,
+      "avg_pnl": -2.7559,
+      "median_pnl": -2.2869,
+      "trimmed_mean": -2.2739,
+      "std": 6.4587,
+      "sharpe": -0.4267,
+      "win_rate": 0.3026,
+      "ci_95_low": -4.208,
+      "ci_95_high": -1.3038,
+      "max_loss": -35.3233,
+      "max_gain": 12.5201
+    }
+  },
+  "offering_SHORT": {
+    "offering": {
+      "n": 12,
+      "avg_pnl": 8.0157,
+      "median_pnl": 4.3977,
+      "trimmed_mean": 7.8663,
+      "std": 16.1048,
+      "sharpe": 0.4977,
+      "win_rate": 0.5833,
+      "ci_95_low": -1.0964,
+      "ci_95_high": 17.1279,
+      "max_loss": -18.6765,
+      "max_gain": 36.2023
+    },
+    "non_offering": {
+      "n": 57,
+      "avg_pnl": 2.9759,
+      "median_pnl": 3.6248,
+      "trimmed_mean": 2.9959,
+      "std": 6.036,
+      "sharpe": 0.493,
+      "win_rate": 0.7368,
+      "ci_95_low": 1.4089,
+      "ci_95_high": 4.5429,
+      "max_loss": -16.7442,
+      "max_gain": 21.2598
+    }
+  },
+  "edgar_vs_catalyst_crosstab": {
+    "false": {
+      "false": 222,
+      "true": 20
+    },
+    "true": {
+      "false": 70,
+      "true": 4
+    }
+  },
+  "edgar_confirmed_pnl": {
+    "confirmed": {
+      "n": 24,
+      "avg_pnl": 1.3422,
+      "median_pnl": 1.7612,
+      "trimmed_mean": 1.3359,
+      "std": 7.0913,
+      "sharpe": 0.1893,
+      "win_rate": 0.7083,
+      "ci_95_low": -1.4949,
+      "ci_95_high": 4.1793,
+      "max_loss": -18.6765,
+      "max_gain": 23.3285
+    },
+    "not_confirmed": {
+      "n": 125,
+      "avg_pnl": 0.2289,
+      "median_pnl": -0.1413,
+      "trimmed_mean": 0.0647,
+      "std": 8.372,
+      "sharpe": 0.0273,
+      "win_rate": 0.456,
+      "ci_95_low": -1.2388,
+      "ci_95_high": 1.6966,
+      "max_loss": -35.3233,
+      "max_gain": 36.2023
+    }
+  },
+  "edgar_api_status": "available",
+  "edgar_checks_run": 316,
+  "catalyst_type_comparison": {
+    "breaking": {
+      "n": 18,
+      "avg_pnl": -1.8554,
+      "median_pnl": -0.3269,
+      "trimmed_mean": -1.7089,
+      "std": 5.7381,
+      "sharpe": -0.3233,
+      "win_rate": 0.4444,
+      "ci_95_low": -4.5063,
+      "ci_95_high": 0.7955,
+      "max_loss": -13.1313,
+      "max_gain": 7.0764
+    },
+    "premarket_move": {
+      "n": 12,
+      "avg_pnl": -0.4649,
+      "median_pnl": -1.2622,
+      "trimmed_mean": -0.5619,
+      "std": 6.7655,
+      "sharpe": -0.0687,
+      "win_rate": 0.3333,
+      "ci_95_low": -4.2929,
+      "ci_95_high": 3.363,
+      "max_loss": -12.9368,
+      "max_gain": 12.9771
+    },
+    "insider": {
+      "n": 7,
+      "avg_pnl": 0.5843,
+      "median_pnl": 1.5121,
+      "trimmed_mean": 0.5843,
+      "std": 4.8809,
+      "sharpe": 0.1197,
+      "win_rate": 0.5714,
+      "ci_95_low": -3.0315,
+      "ci_95_high": 4.2001,
+      "max_loss": -7.3541,
+      "max_gain": 6.3275
+    },
+    "deal": {
+      "n": 17,
+      "avg_pnl": -0.8142,
+      "median_pnl": -1.5385,
+      "trimmed_mean": -1.5701,
+      "std": 7.5216,
+      "sharpe": -0.1083,
+      "win_rate": 0.2941,
+      "ci_95_low": -4.3897,
+      "ci_95_high": 2.7613,
+      "max_loss": -11.5496,
+      "max_gain": 21.2598
+    },
+    "regulatory": {
+      "n": 14,
+      "avg_pnl": 0.7252,
+      "median_pnl": -0.2422,
+      "trimmed_mean": 0.3872,
+      "std": 4.9029,
+      "sharpe": 0.1479,
+      "win_rate": 0.4286,
+      "ci_95_low": -1.8432,
+      "ci_95_high": 3.2935,
+      "max_loss": -7.0148,
+      "max_gain": 12.5201
+    },
+    "macro": {
+      "n": 5,
+      "avg_pnl": 0.5621,
+      "median_pnl": -0.1413,
+      "trimmed_mean": 0.5621,
+      "std": 1.7757,
+      "sharpe": 0.3166,
+      "win_rate": 0.2,
+      "ci_95_low": -0.9943,
+      "ci_95_high": 2.1186,
+      "max_loss": -0.5053,
+      "max_gain": 3.7224
+    },
+    "analyst": {
+      "n": 25,
+      "avg_pnl": 0.125,
+      "median_pnl": 0.4722,
+      "trimmed_mean": 0.409,
+      "std": 4.2125,
+      "sharpe": 0.0297,
+      "win_rate": 0.64,
+      "ci_95_low": -1.5263,
+      "ci_95_high": 1.7763,
+      "max_loss": -11.1978,
+      "max_gain": 5.9748
+    },
+    "earnings": {
+      "n": 22,
+      "avg_pnl": -1.6971,
+      "median_pnl": -0.2493,
+      "trimmed_mean": -0.4526,
+      "std": 10.8044,
+      "sharpe": -0.1571,
+      "win_rate": 0.5,
+      "ci_95_low": -6.212,
+      "ci_95_high": 2.8177,
+      "max_loss": -35.3233,
+      "max_gain": 18.1159
+    },
+    "offering": {
+      "n": 16,
+      "avg_pnl": 6.2903,
+      "median_pnl": 2.1012,
+      "trimmed_mean": 5.9371,
+      "std": 14.1741,
+      "sharpe": 0.4438,
+      "win_rate": 0.5625,
+      "ci_95_low": -0.655,
+      "ci_95_high": 13.2356,
+      "max_loss": -18.6765,
+      "max_gain": 36.2023
+    },
+    "unknown": {
+      "n": 7,
+      "avg_pnl": -0.5705,
+      "median_pnl": 0.4902,
+      "trimmed_mean": -0.5705,
+      "std": 9.4397,
+      "sharpe": -0.0604,
+      "win_rate": 0.5714,
+      "ci_95_low": -7.5635,
+      "ci_95_high": 6.4226,
+      "max_loss": -16.7442,
+      "max_gain": 12.4801
+    },
+    "bankruptcy": {
+      "n": 1,
+      "note": "insufficient"
+    },
+    "squeeze": {
+      "n": 0,
+      "note": "insufficient"
+    },
+    "SEC lawsuit": {
+      "n": 4,
+      "note": "insufficient"
+    },
+    "financial": {
+      "n": 0,
+      "note": "insufficient"
+    },
+    "clinical": {
+      "n": 0,
+      "note": "insufficient"
+    },
+    "other": {
+      "n": 1,
+      "note": "insufficient"
+    }
+  }
+}

@@ -101,7 +101,9 @@ TIME_STR = NOW_PT.strftime('%H:%M')
 
 MIN_MOVE_PCT       = 5.0
 MAX_NEWS_AGE_HOURS = 16
-SCANNER_VERSION    = 'V3.5'
+SCANNER_VERSION    = 'V3.7'
+STRONG_CATALYST_SCORE = 7
+STRONG_CATALYST_MOVE  = 8.0
 FINAL_LONG         = 5
 FINAL_SHORT        = 5
 MAX_WORKERS        = 4
@@ -1418,10 +1420,29 @@ for i, c in enumerate(candidates[:15]):
 # ==============================================================================
 # STAGE 2: DEEP ANALYSIS — top candidates
 # ==============================================================================
-# Take top candidates by move_score, prioritize non-deploy tickers
-deep_pool = sorted(candidates, key=lambda x: (-int(not x.get('in_deploy', False)),
-                                                -x['move_score']))
+# Sort purely by move_score — deploy tickers compete fairly.
+deep_pool = sorted(candidates, key=lambda x: -x['move_score'])
 deep_candidates = deep_pool[:20]
+
+# Strong catalyst override: force-include tickers outside top-20 that have
+# catalyst_strength >= 7 OR expected_move >= 8%. Prevents high-conviction
+# deploy tickers from being dropped by the top-N cutoff.
+_deep_tickers = set(c.get('ticker') for c in deep_candidates)
+_strong_overrides = []
+for c in deep_pool[20:]:
+    _tk = c.get('ticker', '')
+    if _tk in _deep_tickers:
+        continue
+    _cs = int(c.get('catalyst_strength', 0))
+    _em = abs(float(c.get('expected_move_pct', 0)))
+    if _cs >= STRONG_CATALYST_SCORE or _em >= STRONG_CATALYST_MOVE:
+        deep_candidates.append(c)
+        _deep_tickers.add(_tk)
+        _strong_overrides.append((_tk, _cs, _em))
+if _strong_overrides:
+    print(f"\n  Strong catalyst override: +{len(_strong_overrides)} tickers forced into Stage 2:")
+    for _t, _cs, _em in _strong_overrides:
+        print(f"    {_t}: catalyst_strength={_cs}/10, expected_move={_em:.1f}%")
 
 def _fetch_price_and_fundamentals(ticker):
     pd_info = fetch_price_data(ticker)
@@ -1518,7 +1539,10 @@ if deep_candidates:
         print(f"OK ({CLAUDE_MODEL})")
         claude_ok = True
     except Exception as e:
-        print(f"\n  Claude not available — falling back to Gemini")
+        print(f"\n  Claude not available: {e}")
+        print(f"  Falling back to Gemini for Stage 2")
+
+    print(f"  Stage 2 primary model: {CLAUDE_MODEL if claude_ok else GEMINI_MODEL + ' (Claude unavailable)'}")
 
     t2 = time.time()
     deep_results = {}
@@ -1654,12 +1678,28 @@ if deep_candidates:
 
     def _deep_analyze_one(ticker_prompt_pair):
         _ticker, _prompt = ticker_prompt_pair
+        _meta = {'claude_attempted': False, 'claude_error': '', 'model_used': ''}
         if claude_ok:
-            return _ticker, claude_analyze(_prompt, DEEP_SYSTEM, claude_client)
+            _meta['claude_attempted'] = True
+            _result = claude_analyze(_prompt, DEEP_SYSTEM, claude_client)
+            if 'error' not in _result:
+                _meta['model_used'] = CLAUDE_MODEL
+                _result['_s2_meta'] = _meta
+                return _ticker, _result
+            _meta['claude_error'] = str(_result['error'])[:200]
+            print(f"    ⟳ {_ticker} Claude failed ({_result['error'][:60]}), trying Gemini...")
+            _result = gemini_search(_prompt, DEEP_SYSTEM)
+            _meta['model_used'] = GEMINI_MODEL if 'error' not in _result else ''
+            _result['_s2_meta'] = _meta
+            return _ticker, _result
         else:
-            return _ticker, gemini_search(_prompt, DEEP_SYSTEM)
+            _result = gemini_search(_prompt, DEEP_SYSTEM)
+            _meta['model_used'] = GEMINI_MODEL if 'error' not in _result else ''
+            _result['_s2_meta'] = _meta
+            return _ticker, _result
 
     raw_results = {}
+    _s2_errors = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS_DEEP) as executor:
         deep_futures = {executor.submit(_deep_analyze_one, (t, p)): t
                         for t, p in stage2_prompts.items()}
@@ -1668,9 +1708,14 @@ if deep_candidates:
             try:
                 _, _res = fut.result()
                 raw_results[_tk] = _res
-                print(f"    ✓ {_tk} done")
+                if 'error' in _res:
+                    _s2_errors.append((_tk, _res['error'][:100]))
+                    print(f"    ✗ {_tk} error: {_res['error'][:80]}")
+                else:
+                    print(f"    ✓ {_tk} done")
             except Exception as e:
                 raw_results[_tk] = {'error': str(e)[:200]}
+                _s2_errors.append((_tk, str(e)[:100]))
                 print(f"    ✗ {_tk} failed: {str(e)[:60]}")
 
     # ── Phase C: Post-process results (sequential — clean output) ────────────
@@ -1730,8 +1775,32 @@ if deep_candidates:
 
         deep_results[ticker] = result
 
+    _s2_ok = sum(1 for r in deep_results.values() if 'error' not in r)
+    _s2_err = sum(1 for r in deep_results.values() if 'error' in r)
+    _s2_missing = len(deep_candidates) - len(deep_results)
+    _n_claude = sum(1 for r in deep_results.values()
+                    if r.get('_s2_meta', {}).get('model_used') == CLAUDE_MODEL)
+    _n_gemini_fb = sum(1 for r in deep_results.values()
+                       if r.get('_s2_meta', {}).get('claude_error') and 'error' not in r)
+    _n_gemini_direct = sum(1 for r in deep_results.values()
+                           if not r.get('_s2_meta', {}).get('claude_attempted') and 'error' not in r)
     elapsed_s2 = time.time() - t2
     print(f"\n  Stage 2 complete: {elapsed_s2:.0f}s")
+    print(f"    {_s2_ok}/{len(deep_candidates)} succeeded, "
+          f"{_s2_err} errors, {_s2_missing} missing")
+    print(f"    Models: {_n_claude} Claude, {_n_gemini_fb} Gemini-fallback, "
+          f"{_n_gemini_direct} Gemini-direct, {_s2_err} failed-both")
+    if _s2_errors:
+        print(f"    Error details:")
+        for _et, _ee in _s2_errors:
+            print(f"      {_et}: {_ee}")
+    _claude_errors = [(t, r.get('_s2_meta', {}).get('claude_error', ''))
+                      for t, r in deep_results.items()
+                      if r.get('_s2_meta', {}).get('claude_error')]
+    if _claude_errors:
+        print(f"    Claude errors (recovered via Gemini):")
+        for _ct, _ce in _claude_errors:
+            print(f"      {_ct}: {_ce[:80]}")
 else:
     deep_results = {}
     print(f"\n  No candidates above threshold for deep analysis.")
@@ -2191,6 +2260,33 @@ longs.sort(key=lambda x: x['tradability_score'], reverse=True)
 shorts.sort(key=lambda x: x['tradability_score'], reverse=True)
 
 
+# ── Fix C: Cross-scanner dedup — check premarket scanner for direction conflicts
+BQ_PREMARKET_TABLE = "ys-time-series.scoring_logs.premarket_scanner"
+_premarket_selected = {}
+try:
+    _bq_xdedup = bigquery.Client()
+    _xdedup_q = f"""
+    SELECT ticker, direction
+    FROM `{BQ_PREMARKET_TABLE}`
+    WHERE scan_date = '{TODAY_STR}' AND selected = TRUE
+    """
+    for row in _bq_xdedup.query(_xdedup_q).result():
+        _premarket_selected[row['ticker']] = row['direction']
+    if _premarket_selected:
+        print(f"\n  Cross-scanner dedup: {len(_premarket_selected)} premarket selections loaded")
+except Exception as _xd_err:
+    print(f"\n  Cross-scanner dedup: BQ check failed ({_xd_err}), skipping")
+
+for e in longs + shorts:
+    tk = e['ticker']
+    if tk in _premarket_selected:
+        pm_dir = _premarket_selected[tk]
+        disc_dir = e.get('direction', '')
+        if pm_dir != disc_dir:
+            e['gate_reason'] = f'CROSS_SCANNER_CONFLICT (premarket={pm_dir}, discovery={disc_dir})'
+            print(f"  ⚠ {tk}: direction conflict — premarket {pm_dir} vs discovery {disc_dir} → gated")
+
+
 # ── V3 POST-LLM QUALITY GATES ──────────────────────────────────────────────────
 SELF_CONTRADICTION_PHRASES = [
     'untradeable', 'un-tradeable', 'zero remaining edge', 'zero edge',
@@ -2353,6 +2449,46 @@ for e in longs + shorts:
     if is_clinical and direction == 'LONG' and not gate_reasons:
         gate_reasons.append(f'CLINICAL_DATA_TRAP')
 
+    # Gate 9 (Fix H): Original event staleness — aggregators recycle old news
+    _timeline = e.get('news_timeline', [])
+    if isinstance(_timeline, list) and _timeline and not gate_reasons:
+        _earliest_time_str = None
+        for _ev in _timeline:
+            if isinstance(_ev, dict):
+                _evt = str(_ev.get('time', ''))
+                if _evt and (not _earliest_time_str or _evt < _earliest_time_str):
+                    _earliest_time_str = _evt
+        if _earliest_time_str:
+            _orig_dt = _parse_news_time(_earliest_time_str)
+            if _orig_dt:
+                _orig_age_h = (NOW_ET - _orig_dt.astimezone(_ET)).total_seconds() / 3600
+                if _orig_age_h > 36:
+                    gate_reasons.append(
+                        f'STALE_EVENT (original event {_orig_age_h:.0f}h ago: {_earliest_time_str[:25]})')
+
+    # Gate 10 (Fix I): Deal materiality — tiny deals relative to market cap
+    if cat_type == 'deal' and not gate_reasons:
+        _deal_mat = str(e.get('deal_materiality', '')).lower()
+        if _deal_mat in ('immaterial', 'low', 'minimal'):
+            gate_reasons.append(f'IMMATERIAL_DEAL (materiality={_deal_mat})')
+
+    # Gate 11 (Fix K): Vague analyst — no named firm for analyst catalyst
+    if cat_type == 'analyst' and not gate_reasons:
+        _cat_text = str(e.get('catalyst', ''))
+        _has_firm = bool(re.search(
+            r'(?:Morgan Stanley|Goldman|JPMorgan|Citi|BofA|Barclays|UBS|'
+            r'Deutsche|RBC|Wells Fargo|Jefferies|Piper|Cowen|Needham|'
+            r'Wedbush|Stifel|Raymond James|Baird|Oppenheimer|Wolfe|'
+            r'Truist|KeyBanc|DA Davidson|Canaccord|HC Wainwright|'
+            r'Bernstein|BTIG|Mizuho|Evercore|William Blair|Cantor|'
+            r'Loop Capital|B\. Riley|Craig-Hallum|Northland|Roth|'
+            r'Benchmark|Ladenburg|Maxim|Lake Street)', _cat_text, re.IGNORECASE))
+        if not _has_firm:
+            _vague_phrases = ['multiple analysts', 'multiple upgrades', 'several analysts',
+                              'analyst consensus', 'wall street', 'analysts']
+            if any(vp in _cat_text.lower() for vp in _vague_phrases):
+                gate_reasons.append('VAGUE_ANALYST (no named firm)')
+
     if gate_reasons:
         e['gate_reason'] = '; '.join(gate_reasons)
         if not e.get('_flipped'):
@@ -2472,6 +2608,9 @@ def log_discovery_to_bq(longs, shorts, all_discovered, market_ctx):
         ('mismatch_index', 'FLOAT64'),
         ('volume_ratio', 'FLOAT64'),
         ('volume_mult', 'FLOAT64'),
+        ('stage2_attempted', 'BOOL'),
+        ('stage2_error', 'STRING'),
+        ('claude_error', 'STRING'),
     ]:
         try:
             bq_client.query(f"ALTER TABLE `{BQ_TABLE}` ADD COLUMN {col_name} {col_type}").result()
@@ -2517,7 +2656,7 @@ def log_discovery_to_bq(longs, shorts, all_discovered, market_ctx):
                 'bear_case': str(e.get('bear_case', ''))[:500],
                 'risks': str(e.get('risks', ''))[:500],
                 'pre_market_action': str(e.get('pre_market', ''))[:500],
-                'stage2_model': 'gemini-2.5-flash',
+                'stage2_model': str(deep_results.get(e['ticker'], {}).get('_s2_meta', {}).get('model_used', ''))[:50],
                 'market_futures': futures,
                 'market_risk': risk,
                 'vix_level': vix,
@@ -2533,21 +2672,36 @@ def log_discovery_to_bq(longs, shorts, all_discovered, market_ctx):
                 'volume_mult': e.get('volume_mult', 1.0),
                 'scanner_version': SCANNER_VERSION,
                 'gate_reason': str(e.get('gate_reason', ''))[:500],
+                'stage2_attempted': True,
+                'stage2_error': '',
+                'claude_error': str(deep_results.get(e['ticker'], {}).get('_s2_meta', {}).get('claude_error', ''))[:200],
             })
 
     # Also log scan-only discoveries (not deep-analyzed)
-    # Direction set to NEUTRAL — Stage 1 direction is a rough classification, not a signal
+    # Log actual Stage 1 direction (was force-set to NEUTRAL before Fix M)
     deep_tickers = set(e['ticker'] for e in longs + shorts)
+    _deep_cand_tickers = set(c.get('ticker') for c in deep_candidates) if 'deep_candidates' in dir() else set()
     for ticker, d in all_discovered.items():
         if ticker in deep_tickers:
             continue
+        _was_attempted = ticker in _deep_cand_tickers
+        _s2_err = ''
+        _s2_claude_err = ''
+        _s2_model = ''
+        if _was_attempted and ticker in deep_results:
+            _dr = deep_results[ticker]
+            _dm = _dr.get('_s2_meta', {})
+            if 'error' in _dr:
+                _s2_err = str(_dr['error'])[:200]
+            _s2_claude_err = str(_dm.get('claude_error', ''))[:200]
+            _s2_model = str(_dm.get('model_used', ''))[:50]
         rows.append({
             'scan_timestamp': now_utc,
             'scan_date': TODAY_STR,
             'scan_time_pt': TIME_STR,
             'ticker': ticker,
             'company': str(d.get('company', ''))[:200],
-            'direction': 'NEUTRAL',
+            'direction': str(d.get('direction', 'NEUTRAL')).upper() or 'NEUTRAL',
             'rank_in_direction': 0,
             'selected': False,
             'in_deploy_universe': d.get('in_deploy', False),
@@ -2572,11 +2726,14 @@ def log_discovery_to_bq(longs, shorts, all_discovered, market_ctx):
             'bear_case': '',
             'risks': '',
             'pre_market_action': str(d.get('premarket_move', ''))[:200],
-            'stage2_model': '',
+            'stage2_model': _s2_model,
             'market_futures': futures,
             'market_risk': risk,
             'vix_level': vix,
             'scanner_version': SCANNER_VERSION,
+            'stage2_attempted': _was_attempted,
+            'stage2_error': _s2_err,
+            'claude_error': _s2_claude_err,
         })
 
     if rows:

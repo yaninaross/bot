@@ -1,0 +1,77 @@
+{
+  "frozen_date": "2026-09-12",
+  "description": "Frozen reference metrics for live trading comparison",
+  "old_baseline": {
+    "rules": "LLM-flagged, both dirs, 09:30 entry, 60m hold, 2.5% SL, equal weight",
+    "metrics": {
+      "n": 301,
+      "avg": 0.12039665631037837,
+      "median": -0.32679738562093447,
+      "trimmed_mean": -0.2454555351090847,
+      "std": 3.2137166083909117,
+      "se": 0.18523554582934748,
+      "sharpe": 0.03746337060213291,
+      "win_rate": 0.4318936877076412,
+      "profit_factor": 1.1112025901593414,
+      "max_loss": -2.500000000000008,
+      "max_gain": 26.18199841395718,
+      "ci95_lo": -0.2426650135151427,
+      "ci95_hi": 0.48345832613589945,
+      "total_pnl": 36.23939354942389
+    }
+  },
+  "new_baseline_v1_equal_weight": {
+    "rules": "SHORT only, excl earnings/deal/macro, ORB confirms, local high entry, T+2, no SL",
+    "metrics": {
+      "n": 21,
+      "avg": 5.579067493570836,
+      "median": 3.6034019695613235,
+      "trimmed_mean": 3.7206905197022344,
+      "std": 10.483979795445567,
+      "se": 2.2877919522389027,
+      "sharpe": 0.5321516830845558,
+      "win_rate": 0.8571428571428571,
+      "profit_factor": 24.701484836359608,
+      "max_loss": -1.665619107479576,
+      "max_gain": 48.13291659812469,
+      "ci95_lo": 1.094995267182587,
+      "ci95_hi": 10.063139719959086,
+      "total_pnl": 117.16041736498755
+    }
+  },
+  "new_baseline_v1_gap_weighted": {
+    "rules": "Same as equal weight + gap_pct sizing",
+    "metrics": {
+      "n": 21,
+      "avg": 98.32725058289584,
+      "median": 1.783659799827568,
+      "trimmed_mean": 12.207249279981985,
+      "std": 405.8180562024698,
+      "se": 88.55676004417434,
+      "sharpe": 0.24229392724171603,
+      "win_rate": 0.8571428571428571,
+      "profit_factor": 67.86212894048187,
+      "max_loss": -28.285015803466184,
+      "max_gain": 1861.2195417246214,
+      "ci95_lo": -75.24399910368585,
+      "ci95_hi": 271.89850026947755,
+      "total_pnl": 2064.8722622408127
+    }
+  },
+  "significance": {
+    "welch_t": 2.378217025268577,
+    "welch_p": 0.027339205291487412,
+    "mw_u": 5065.0,
+    "mw_p": 1.955098030928236e-06,
+    "welch_t_weighted": 1.1089682937516285,
+    "welch_p_weighted": 0.2806012931290386
+  },
+  "excluded_counts": {
+    "not_short": 156,
+    "bad_catalyst": 39,
+    "no_bars": 3,
+    "no_orb_confirm": 63,
+    "no_t2": 34,
+    "no_entry": 0
+  }
+}

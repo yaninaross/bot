@@ -1,0 +1,149 @@
+{
+  "feature": "F13_volume_spike_significance",
+  "description": "PM volume relative to prior 20-day daily volume (max and avg)",
+  "lookback": 20,
+  "coverage": 299,
+  "total_rows": 316,
+  "correlation_vs_max": {
+    "n": 270,
+    "pearson_r": 0.0752,
+    "pearson_p": 0.2184,
+    "spearman_r": -0.0058,
+    "spearman_p": 0.9249
+  },
+  "correlation_vs_avg": {
+    "n": 270,
+    "pearson_r": 0.124,
+    "pearson_p": 0.0418,
+    "spearman_r": -0.0022,
+    "spearman_p": 0.9716
+  },
+  "correlation_log_vs_avg": {
+    "n": 270,
+    "pearson_r": 0.269,
+    "pearson_p": 0.0,
+    "spearman_r": -0.0022,
+    "spearman_p": 0.9716
+  },
+  "quartile_analysis_vs_avg": {
+    "Q2": {
+      "n": 67,
+      "avg_pnl": -0.6655,
+      "median_pnl": -0.1439,
+      "trimmed_mean": -0.135,
+      "std": 5.385,
+      "sharpe": -0.1236,
+      "win_rate": 0.4478,
+      "ci_95_low": -1.955,
+      "ci_95_high": 0.6239,
+      "max_loss": -35.3233,
+      "max_gain": 6.2702
+    },
+    "Q3": {
+      "n": 67,
+      "avg_pnl": 0.1971,
+      "median_pnl": -0.1413,
+      "trimmed_mean": 0.1367,
+      "std": 4.2535,
+      "sharpe": 0.0463,
+      "win_rate": 0.4925,
+      "ci_95_low": -0.8214,
+      "ci_95_high": 1.2156,
+      "max_loss": -11.1978,
+      "max_gain": 12.9771
+    },
+    "Q1_low": {
+      "n": 68,
+      "avg_pnl": -0.3892,
+      "median_pnl": 0.345,
+      "trimmed_mean": 0.1862,
+      "std": 4.1308,
+      "sharpe": -0.0942,
+      "win_rate": 0.6029,
+      "ci_95_low": -1.3711,
+      "ci_95_high": 0.5926,
+      "max_loss": -23.1512,
+      "max_gain": 5.3091
+    },
+    "Q4_high": {
+      "n": 68,
+      "avg_pnl": 1.3096,
+      "median_pnl": -0.0103,
+      "trimmed_mean": 0.2422,
+      "std": 10.2288,
+      "sharpe": 0.128,
+      "win_rate": 0.4853,
+      "ci_95_low": -1.1217,
+      "ci_95_high": 3.7408,
+      "max_loss": -16.7442,
+      "max_gain": 36.2023
+    }
+  },
+  "record_volume": {
+    "record": {
+      "n": 12,
+      "avg_pnl": 9.815,
+      "median_pnl": 4.6758,
+      "trimmed_mean": 8.6593,
+      "std": 14.5778,
+      "sharpe": 0.6733,
+      "win_rate": 0.75,
+      "ci_95_low": 1.5668,
+      "ci_95_high": 18.0632,
+      "max_loss": -5.0146,
+      "max_gain": 36.2023
+    },
+    "non_record": {
+      "n": 268,
+      "avg_pnl": -0.3145,
+      "median_pnl": -0.0145,
+      "trimmed_mean": -0.0637,
+      "std": 5.6581,
+      "sharpe": -0.0556,
+      "win_rate": 0.4925,
+      "ci_95_low": -0.9919,
+      "ci_95_high": 0.3629,
+      "max_loss": -35.3233,
+      "max_gain": 24.4921
+    }
+  },
+  "cross_strategy": {
+    "per_strategy": {
+      "B1_short_small": {
+        "spearman_r": 0.0879,
+        "p": 0.7752,
+        "n": 13
+      },
+      "B2_short_large": {
+        "spearman_r": 0.5501,
+        "p": 0.018,
+        "n": 18
+      },
+      "B3_short_tiny": {
+        "spearman_r": 0.0892,
+        "p": 0.6516,
+        "n": 28
+      },
+      "C2_long_small": {
+        "spearman_r": -0.0686,
+        "p": 0.6999,
+        "n": 34
+      },
+      "D1_momentum_long": {
+        "spearman_r": -0.2872,
+        "p": 0.1238,
+        "n": 30
+      },
+      "D2_momentum_short": {
+        "spearman_r": 0.3,
+        "p": 0.1451,
+        "n": 25
+      }
+    },
+    "consistent_direction": 4,
+    "total_strategies": 6,
+    "is_consistent": true
+  },
+  "validation_required": true,
+  "live_trading_weeks_needed": 4
+}

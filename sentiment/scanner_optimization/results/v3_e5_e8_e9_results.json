@@ -1,0 +1,902 @@
+{
+  "experiment_date": "2026-09-12",
+  "data_source": "v2_features_full.csv (316 trades)",
+  "E5_short_timing": {
+    "description": "SHORT swing entry timing comparison -> T+2 PnL",
+    "n_short_trades": 160,
+    "strategies": [
+      {
+        "label": "Market Open (09:30)",
+        "n": 49,
+        "avg": 4.98157947313257,
+        "trimmed": 5.237867392240024,
+        "median": 4.907975460122691,
+        "win_rate": 85.71428571428571,
+        "sharpe": 0.42081113707525336,
+        "low_n": false
+      },
+      {
+        "label": "10:30 AM Entry",
+        "n": 49,
+        "avg": 4.33941071563402,
+        "trimmed": 4.594417238840614,
+        "median": 4.331650279032693,
+        "win_rate": 85.71428571428571,
+        "sharpe": 0.4869359696621375,
+        "low_n": false
+      },
+      {
+        "label": "ORB Break Below",
+        "n": 35,
+        "avg": 3.515381514322709,
+        "trimmed": 4.484015905480794,
+        "median": 3.8401428890377294,
+        "win_rate": 82.85714285714286,
+        "sharpe": 0.28461649704469555,
+        "low_n": false
+      },
+      {
+        "label": "Scanner Entry (baseline)",
+        "n": 50,
+        "avg": 4.423947639093941,
+        "trimmed": 4.872313291985985,
+        "median": 5.098907756233729,
+        "win_rate": 84.0,
+        "sharpe": 0.3700133114268763,
+        "low_n": false
+      }
+    ],
+    "orb_break_rate": 0.6875
+  },
+  "E8_pm_orb_combo": {
+    "description": "PM retrace + ORB agreement stacking analysis",
+    "heatmap": {
+      "held": {
+        "True": {
+          "label": "PM=held, ORB=agree",
+          "n": 36,
+          "avg": 0.6182424149266464,
+          "trimmed": 0.5090524705501025,
+          "median": 0.3039685054153246,
+          "win_rate": 55.55555555555556,
+          "sharpe": 0.3174001328074585,
+          "low_n": false
+        },
+        "False": {
+          "label": "PM=held, ORB=disagree",
+          "n": 26,
+          "avg": -0.37191499127840155,
+          "trimmed": -0.4001277319427396,
+          "median": -0.03416591281652985,
+          "win_rate": 50.0,
+          "sharpe": -0.05289969754625486,
+          "low_n": false
+        }
+      },
+      "partial": {
+        "True": {
+          "label": "PM=partial, ORB=agree",
+          "n": 88,
+          "avg": 1.7666622359056108,
+          "trimmed": 1.1176283031387226,
+          "median": 0.49742433032588085,
+          "win_rate": 61.36363636363637,
+          "sharpe": 0.3156498870051343,
+          "low_n": false
+        },
+        "False": {
+          "label": "PM=partial, ORB=disagree",
+          "n": 76,
+          "avg": -2.33653389314883,
+          "trimmed": -2.015200822454805,
+          "median": -0.3867864898683012,
+          "win_rate": 34.21052631578947,
+          "sharpe": -0.5184768154215545,
+          "low_n": false
+        }
+      },
+      "full": {
+        "True": {
+          "label": "PM=full, ORB=agree",
+          "n": 24,
+          "avg": 0.5841548522825056,
+          "trimmed": 0.5484842548923283,
+          "median": 0.2731812432931225,
+          "win_rate": 66.66666666666666,
+          "sharpe": 0.3962066604794998,
+          "low_n": false
+        },
+        "False": {
+          "label": "PM=full, ORB=disagree",
+          "n": 22,
+          "avg": -0.02975342752743733,
+          "trimmed": -0.0968419256675422,
+          "median": -0.24013178781565306,
+          "win_rate": 45.45454545454545,
+          "sharpe": -0.012900620180069138,
+          "low_n": false
+        }
+      }
+    },
+    "specific_combos": [
+      {
+        "label": "SHORT+ORB_agree+PM_held -> T+2",
+        "n": 6,
+        "avg": 3.2243303783110924,
+        "trimmed": 3.2243303783110924,
+        "median": 4.591450415372396,
+        "win_rate": 66.66666666666666,
+        "sharpe": 1.0373888537001306,
+        "low_n": true
+      },
+      {
+        "label": "SHORT+ORB_agree+PM_full -> T+2",
+        "n": 3,
+        "avg": 6.721229829626043,
+        "trimmed": 6.721229829626043,
+        "median": 6.583345443976167,
+        "win_rate": 100.0,
+        "sharpe": 3.8387461857199323,
+        "low_n": true
+      },
+      {
+        "label": "LONG+ORB_agree+PM_held -> 60m",
+        "n": 20,
+        "avg": 0.6391676088952003,
+        "trimmed": 0.4247191140820057,
+        "median": 0.11453597873859889,
+        "win_rate": 50.0,
+        "sharpe": 0.3003786749152829,
+        "low_n": false
+      },
+      {
+        "label": "LONG+ORB+PM_held+n_runs>=4 -> 60m",
+        "n": 2,
+        "avg": 4.092604611219271,
+        "trimmed": null,
+        "median": 4.092604611219271,
+        "win_rate": 100.0,
+        "sharpe": null,
+        "low_n": true
+      },
+      {
+        "label": "SHORT+ORB+PM_held+n_runs>=4 -> T+2",
+        "n": 0,
+        "avg": null,
+        "trimmed": null,
+        "median": null,
+        "win_rate": null,
+        "sharpe": null,
+        "low_n": true
+      }
+    ],
+    "long_stacking": [
+      {
+        "label": "LONG (no filter)",
+        "n": 135,
+        "avg": -0.282586328023958,
+        "trimmed": -0.1514541771846199,
+        "median": 0.0595450756222426,
+        "win_rate": 50.37037037037037,
+        "sharpe": -0.07942087602863347,
+        "low_n": false
+      },
+      {
+        "label": "+ PM held",
+        "n": 31,
+        "avg": 0.34117387033322183,
+        "trimmed": 0.19361781694905897,
+        "median": -0.1127499482270797,
+        "win_rate": 45.16129032258064,
+        "sharpe": 0.17380699173610312,
+        "low_n": false
+      },
+      {
+        "label": "+ ORB agrees",
+        "n": 76,
+        "avg": 0.8420349958546007,
+        "trimmed": 0.606905837065131,
+        "median": 0.4550270680214452,
+        "win_rate": 63.1578947368421,
+        "sharpe": 0.2835653506784375,
+        "low_n": false
+      },
+      {
+        "label": "+ PM held + ORB agrees",
+        "n": 20,
+        "avg": 0.6391676088952003,
+        "trimmed": 0.4247191140820057,
+        "median": 0.11453597873859889,
+        "win_rate": 50.0,
+        "sharpe": 0.3003786749152829,
+        "low_n": false
+      },
+      {
+        "label": "+ PM held + ORB + n_runs>=4",
+        "n": 2,
+        "avg": 4.092604611219271,
+        "trimmed": null,
+        "median": 4.092604611219271,
+        "win_rate": 100.0,
+        "sharpe": null,
+        "low_n": true
+      }
+    ],
+    "short_stacking": [
+      {
+        "label": "SHORT (no filter)",
+        "n": 50,
+        "avg": 4.423947639093941,
+        "trimmed": 4.872313291985985,
+        "median": 5.098907756233729,
+        "win_rate": 84.0,
+        "sharpe": 0.3700133114268763,
+        "low_n": false
+      },
+      {
+        "label": "+ PM held",
+        "n": 12,
+        "avg": 1.6948577348036877,
+        "trimmed": 1.6948577348036877,
+        "median": 4.591450415372396,
+        "win_rate": 66.66666666666666,
+        "sharpe": 0.25000069467266456,
+        "low_n": true
+      },
+      {
+        "label": "+ ORB agrees",
+        "n": 28,
+        "avg": 6.4465337476696165,
+        "trimmed": 5.632842613939163,
+        "median": 5.098907756233729,
+        "win_rate": 89.28571428571429,
+        "sharpe": 0.8807293871402111,
+        "low_n": false
+      },
+      {
+        "label": "+ PM held + ORB agrees",
+        "n": 6,
+        "avg": 3.2243303783110924,
+        "trimmed": 3.2243303783110924,
+        "median": 4.591450415372396,
+        "win_rate": 66.66666666666666,
+        "sharpe": 1.0373888537001306,
+        "low_n": true
+      },
+      {
+        "label": "+ PM held + ORB + n_runs>=4",
+        "n": 0,
+        "avg": null,
+        "trimmed": null,
+        "median": null,
+        "win_rate": null,
+        "sharpe": null,
+        "low_n": true
+      }
+    ]
+  },
+  "E9_sympathy": {
+    "description": "Sympathy ticker analysis (lead vs follow within catalyst clusters)",
+    "n_multi_clusters": 28,
+    "lead_vs_follow": {
+      "60m": {
+        "lead_avg": 1.6380372217938612,
+        "follow_avg": -0.22700308664227742,
+        "lead_n": 25,
+        "follow_n": 181
+      },
+      "eod": {
+        "lead_avg": 0.9912845990563606,
+        "follow_avg": 0.05232413706835551,
+        "lead_n": 28,
+        "follow_n": 206
+      },
+      "t2": {
+        "lead_avg": 3.664007964775637,
+        "follow_avg": -0.6455971801001081,
+        "lead_n": 11,
+        "follow_n": 84
+      }
+    },
+    "cluster_details": [
+      {
+        "cluster": "2026-09-08_SEC lawsuit",
+        "size": 4,
+        "lead_ticker": "AVEX",
+        "lead_gap": 1.3357619914997112,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "CDNL",
+          "DKS",
+          "CCB"
+        ],
+        "follow_gaps": [
+          -1.1803458687894584,
+          -0.4168163851958408,
+          0.0
+        ],
+        "lead_pnl_60m": 0.8388256440982659,
+        "lead_pnl_eod": -2.5763930497303758,
+        "follow_avg_pnl_60m": 2.844894404873279,
+        "follow_avg_pnl_eod": -0.0717934314001969
+      },
+      {
+        "cluster": "2026-09-08_analyst",
+        "size": 17,
+        "lead_ticker": "BE",
+        "lead_gap": 5.888401154743539,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "AGCO",
+          "ACMR",
+          "APLD",
+          "ETN",
+          "SMR",
+          "KTOS",
+          "CVX",
+          "WULF",
+          "CORZ",
+          "CIFR",
+          "CAT",
+          "MRNA",
+          "TSLA",
+          "BTBT",
+          "SMCI",
+          "CRDO"
+        ],
+        "follow_gaps": [
+          -4.137931034482766,
+          3.4255776464266487,
+          3.147516116799386,
+          3.1227942071315526,
+          2.7835051546391893,
+          2.174822250104557,
+          1.5148609779482247,
+          1.502119927316763,
+          1.442146450531018,
+          1.1837655016910986,
+          1.1548762808069362,
+          -0.8725523874957128,
+          0.8515024853140655,
+          -0.3048780487804813,
+          0.1894417782268141,
+          -0.014656739168673
+        ],
+        "lead_pnl_60m": 2.291230953092318,
+        "lead_pnl_eod": 4.567523155064244,
+        "follow_avg_pnl_60m": 0.7382739437523117,
+        "follow_avg_pnl_eod": 1.778036822877075
+      },
+      {
+        "cluster": "2026-09-08_breaking",
+        "size": 15,
+        "lead_ticker": "BNC",
+        "lead_gap": 53.86819484240687,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "SNYR",
+          "KEEL",
+          "BEAM",
+          "RDW",
+          "PLUG",
+          "ALAB",
+          "AXTI",
+          "BLZE",
+          "ARM",
+          "IREN",
+          "HUT",
+          "AMD",
+          "ONDS",
+          "ACHR"
+        ],
+        "follow_gaps": [
+          -32.39024390243902,
+          10.230547550432275,
+          -9.777478084962908,
+          6.030389363722696,
+          5.529953917050697,
+          -5.231958762886583,
+          4.607397793640498,
+          3.827573392790788,
+          3.7327938434686008,
+          3.2676812891674145,
+          3.0733871398792023,
+          2.376614946499994,
+          1.5091863517060395,
+          -0.1751313485113798
+        ],
+        "lead_pnl_60m": 10.61452513966481,
+        "lead_pnl_eod": 1.3463687150838035,
+        "follow_avg_pnl_60m": -0.5369571261905157,
+        "follow_avg_pnl_eod": -1.1577064179531968
+      },
+      {
+        "cluster": "2026-09-08_deal",
+        "size": 12,
+        "lead_ticker": "ARBE",
+        "lead_gap": 29.89771833202204,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "MOBX",
+          "ISPC",
+          "QBTS",
+          "ASTS",
+          "CLSK",
+          "NBIS",
+          "AVAV",
+          "HOOD",
+          "RKLB",
+          "RTX",
+          "PLTR"
+        ],
+        "follow_gaps": [
+          27.405655305881087,
+          23.7012987012987,
+          10.434258142340171,
+          6.146685925212644,
+          5.099290780141844,
+          3.7347055965369553,
+          3.539578292430007,
+          2.424043894848902,
+          1.5717398070339104,
+          -1.0159868519348534,
+          -0.4187460563299593
+        ],
+        "lead_pnl_60m": -1.538461538461544,
+        "lead_pnl_eod": -4.300423985463352,
+        "follow_avg_pnl_60m": -0.8880779600523923,
+        "follow_avg_pnl_eod": -0.21377049776174364
+      },
+      {
+        "cluster": "2026-09-08_insider",
+        "size": 4,
+        "lead_ticker": "SHMD",
+        "lead_gap": 8.253968253968262,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "UBER",
+          "MXL",
+          "NVDA"
+        ],
+        "follow_gaps": [
+          -3.425290390707496,
+          2.9486770800127533,
+          1.193783642993575
+        ],
+        "lead_pnl_60m": null,
+        "lead_pnl_eod": 1.4662756598240547,
+        "follow_avg_pnl_60m": 0.3353373853191657,
+        "follow_avg_pnl_eod": -0.0845203561047551
+      },
+      {
+        "cluster": "2026-09-08_offering",
+        "size": 10,
+        "lead_ticker": "PDSB",
+        "lead_gap": 121.81818181818184,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "GMEX",
+          "AIXI",
+          "INTC",
+          "SBLK",
+          "ATHE",
+          "DSS",
+          "JOBY",
+          "XOM",
+          "CHAD"
+        ],
+        "follow_gaps": [
+          10.33364852086992,
+          -7.317073170731703,
+          5.219206680584551,
+          -3.300431832202345,
+          -1.982378854625548,
+          0.6024096385542175,
+          0.5044510385756649,
+          -0.2445601053489599,
+          0.0
+        ],
+        "lead_pnl_60m": 35.40983606557377,
+        "lead_pnl_eod": 37.47950819672131,
+        "follow_avg_pnl_60m": -1.831720274004169,
+        "follow_avg_pnl_eod": -0.3620731064847307
+      },
+      {
+        "cluster": "2026-09-08_premarket_move",
+        "size": 11,
+        "lead_ticker": "NNE",
+        "lead_gap": 9.170428893905193,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "FLNC",
+          "AEHR",
+          "MSTR",
+          "COIN",
+          "MU",
+          "CEG",
+          "VRT",
+          "SLS",
+          "MVIS",
+          "VOYG"
+        ],
+        "follow_gaps": [
+          7.584541062801935,
+          4.787850683978664,
+          -3.627450980392161,
+          -2.144714038128239,
+          1.9486715391652545,
+          1.685175274284189,
+          1.5934124692546352,
+          -0.6493506493506483,
+          -0.6060606060606066,
+          0.2651738361815068
+        ],
+        "lead_pnl_60m": -0.4910829671749748,
+        "lead_pnl_eod": 0.0258464719565911,
+        "follow_avg_pnl_60m": 0.6902298473608908,
+        "follow_avg_pnl_eod": 1.1108532451819937
+      },
+      {
+        "cluster": "2026-09-08_regulatory",
+        "size": 12,
+        "lead_ticker": "BJDX",
+        "lead_gap": 23.137914464199888,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "ROIV",
+          "NVS",
+          "SRPT",
+          "RGTI",
+          "INBX",
+          "TTD",
+          "TAKOF",
+          "OKLO",
+          "NTLA",
+          "NEE",
+          "RXT"
+        ],
+        "follow_gaps": [
+          14.45748640137417,
+          -13.482092630789438,
+          -9.541777777777773,
+          7.796052631578963,
+          -6.156639432202697,
+          -3.1531531531531534,
+          2.024070021881843,
+          1.9142234068330484,
+          0.7064364207221339,
+          0.6472491909385018,
+          -0.3134796238244447
+        ],
+        "lead_pnl_60m": -5.014634146341454,
+        "lead_pnl_eod": 3.3170731707317103,
+        "follow_avg_pnl_60m": -0.5104425376417264,
+        "follow_avg_pnl_eod": -0.6156326298612244
+      },
+      {
+        "cluster": "2026-09-09_analyst",
+        "size": 5,
+        "lead_ticker": "ACMR",
+        "lead_gap": -3.387075802886477,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "CVX",
+          "VST",
+          "ARM",
+          "MU"
+        ],
+        "follow_gaps": [
+          1.873212583412764,
+          -1.1336672818349582,
+          0.8029671548197235,
+          -0.1454621798332474
+        ],
+        "lead_pnl_60m": 0.5046766704797793,
+        "lead_pnl_eod": 0.6257990713949309,
+        "follow_avg_pnl_60m": 0.7131639656724907,
+        "follow_avg_pnl_eod": 0.3938039508319317
+      },
+      {
+        "cluster": "2026-09-09_breaking",
+        "size": 2,
+        "lead_ticker": "OCGN",
+        "lead_gap": -17.293233082706767,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "XOM"
+        ],
+        "follow_gaps": [
+          1.378687912361511
+        ],
+        "lead_pnl_60m": 0.454545454545465,
+        "lead_pnl_eod": 2.8000000000000145,
+        "follow_avg_pnl_60m": 0.353031465848036,
+        "follow_avg_pnl_eod": 0.8503453568687588
+      },
+      {
+        "cluster": "2026-09-09_deal",
+        "size": 3,
+        "lead_ticker": "CSR",
+        "lead_gap": 9.732498577120095,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "KBR",
+          "BLZE"
+        ],
+        "follow_gaps": [
+          -1.9978401727861823,
+          -0.6479481641468672
+        ],
+        "lead_pnl_60m": -0.1383125864453758,
+        "lead_pnl_eod": -0.7434301521438569,
+        "follow_avg_pnl_60m": -0.3623188405797152,
+        "follow_avg_pnl_eod": -1.8448317163732237
+      },
+      {
+        "cluster": "2026-09-10_analyst",
+        "size": 15,
+        "lead_ticker": "RDDT",
+        "lead_gap": 6.934580715651462,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "PGY",
+          "CLSK",
+          "HOOD",
+          "OKLO",
+          "ORCL",
+          "CEG",
+          "AAPL",
+          "SANM",
+          "ETN",
+          "CAT",
+          "ATI",
+          "ET",
+          "SSNC",
+          "SOUN"
+        ],
+        "follow_gaps": [
+          -5.000000000000008,
+          -2.409638554216857,
+          -2.2467036780013907,
+          -2.114164904862576,
+          -1.924147744849338,
+          -1.2742212619723885,
+          1.1511384537324958,
+          -0.9071064758670891,
+          -0.8429266412985886,
+          -0.7123939379076887,
+          -0.663309770504505,
+          0.2283210332103407,
+          -0.2268716914545082,
+          -0.0771604938271725
+        ],
+        "lead_pnl_60m": -0.440627095373414,
+        "lead_pnl_eod": -0.7854656917526037,
+        "follow_avg_pnl_60m": -0.01619014197227751,
+        "follow_avg_pnl_eod": -0.727333055498618
+      },
+      {
+        "cluster": "2026-09-10_breaking",
+        "size": 4,
+        "lead_ticker": "RXT",
+        "lead_gap": 8.64197530864197,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "BE",
+          "CVX",
+          "XOM"
+        ],
+        "follow_gaps": [
+          -3.183303624480075,
+          1.6790608484168204,
+          -0.2070267308043618
+        ],
+        "lead_pnl_60m": -9.375000000000002,
+        "lead_pnl_eod": -10.51136363636364,
+        "follow_avg_pnl_60m": 0.07236172316631884,
+        "follow_avg_pnl_eod": -0.8719528040285839
+      },
+      {
+        "cluster": "2026-09-10_deal",
+        "size": 6,
+        "lead_ticker": "SKYX",
+        "lead_gap": -15.642857142857132,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "NBIS",
+          "DFNS",
+          "PLTR",
+          "VST",
+          "OPTX"
+        ],
+        "follow_gaps": [
+          -3.474100270438941,
+          -3.0010319917440564,
+          -0.6370553884268344,
+          -0.5095962938451237,
+          -0.131406044678064
+        ],
+        "lead_pnl_60m": -4.57239627434378,
+        "lead_pnl_eod": -11.346316680778992,
+        "follow_avg_pnl_60m": -1.1559620714134242,
+        "follow_avg_pnl_eod": -0.8083402296403797
+      },
+      {
+        "cluster": "2026-09-10_insider",
+        "size": 2,
+        "lead_ticker": "STX",
+        "lead_gap": -2.394121365360295,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "GOOS"
+        ],
+        "follow_gaps": [
+          1.844532279314896
+        ],
+        "lead_pnl_60m": -0.9621722889754872,
+        "lead_pnl_eod": 0.2023799886667206,
+        "follow_avg_pnl_60m": -0.1293661060802157,
+        "follow_avg_pnl_eod": -1.423027166882281
+      },
+      {
+        "cluster": "2026-09-10_macro",
+        "size": 6,
+        "lead_ticker": "HBM",
+        "lead_gap": -7.807078417765441,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "FCX",
+          "SCCO",
+          "RIOT",
+          "MARA",
+          "MAS"
+        ],
+        "follow_gaps": [
+          -7.149416240325335,
+          -6.776259199082471,
+          -3.851381966470328,
+          -3.7332214765100695,
+          -2.176419717497825
+        ],
+        "lead_pnl_60m": -0.2446368084305655,
+        "lead_pnl_eod": -0.2822732404967982,
+        "follow_avg_pnl_60m": 0.2671609294104432,
+        "follow_avg_pnl_eod": 0.14053794301807296
+      },
+      {
+        "cluster": "2026-09-10_offering",
+        "size": 2,
+        "lead_ticker": "INTC",
+        "lead_gap": -5.515060240963857,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "AXGN"
+        ],
+        "follow_gaps": [
+          -4.516606727311202
+        ],
+        "lead_pnl_60m": -0.5470169594185442,
+        "lead_pnl_eod": -0.6168510312729192,
+        "follow_avg_pnl_60m": 3.2679738562091534,
+        "follow_avg_pnl_eod": 7.322477013404232
+      },
+      {
+        "cluster": "2026-09-10_premarket_move",
+        "size": 2,
+        "lead_ticker": "KEEL",
+        "lead_gap": -3.234501347708898,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "IMO"
+        ],
+        "follow_gaps": [
+          -0.0531874477623445
+        ],
+        "lead_pnl_60m": 1.253481894150416,
+        "lead_pnl_eod": 3.0027855153203253,
+        "follow_avg_pnl_60m": -0.410521514368247,
+        "follow_avg_pnl_eod": -0.5017485175611955
+      },
+      {
+        "cluster": "2026-09-10_regulatory",
+        "size": 11,
+        "lead_ticker": "BHVN",
+        "lead_gap": -9.940666666666663,
+        "lead_dir": "SHORT",
+        "follow_tickers": [
+          "OTLK",
+          "CORZ",
+          "IREN",
+          "CC",
+          "MRNA",
+          "GDDY",
+          "MDCX",
+          "PRLD",
+          "REGN",
+          "TSLA"
+        ],
+        "follow_gaps": [
+          3.2613759900605714,
+          -2.294085129906021,
+          -1.8294026890015396,
+          1.6622340425531914,
+          -0.929135019541346,
+          0.8226495726495836,
+          -0.8215962441314464,
+          0.7269155206286823,
+          -0.4643100352875627,
+          0.1848780620429044
+        ],
+        "lead_pnl_60m": 6.358030631657649,
+        "lead_pnl_eod": 3.619095559223926,
+        "follow_avg_pnl_60m": 0.5744650995293685,
+        "follow_avg_pnl_eod": 1.3089133534933457
+      },
+      {
+        "cluster": "2026-09-11_analyst",
+        "size": 26,
+        "lead_ticker": "KRSA",
+        "lead_gap": 24.144951140065142,
+        "lead_dir": "LONG",
+        "follow_tickers": [
+          "SMR",
+          "DELL",
+          "IESC",
+          "HPQ",
+          "LOVE",
+          "MSTR",
+          "AME",
+          "SNDK",
+          "CAT",
+          "RIOT",
+          "RKLB",
+          "ETN",
+          "AMD",
+          "CE",
+          "IP",
+          "DNOW",
+          "COIN",
+          "EAT",
+          "AXTA",
+          "GENC",
+          "BOW",
+          "URI",
+          "PLTR",
+          "PL",
+          "HOOD"
+        ],
+        "follow_gaps": [
+          -11.262487757100889,
+          9.944336978405904,
+          7.667751627441162,
+          6.538344026886652,
+          -4.768583450210376,
+          3.904791537025521,
+          3.6863900273224006,
+          -3.645891798958981,
+          2.289440993788814,
+          2.2434367541766225,
+          1.7630729502905067,
+          1.527557130636686,
+          1.41183478951548,
+          1.3670166229221348,
+          1.3414989792942575,
+          1.3164641241111812,
+          1.0273972602739787,
+          -0.9734966696166584,
+          0.8818342151675401,
+          0.8301051466519013,
+          0.4461629982153649,
+          0.3831843733570554,
+          0.3617508742312759,
+          -0.1198322348711777,
+          0.0176475778699338
+        ],
+        "lead_pnl_60m": null,
+        "lead_pnl_eod": 5.018038701213529,
+        "follow_avg_pnl_60m": -0.12679424576283754,
+        "follow_avg_pnl_eod": -0.2564238658216364
+      }
+    ]
+  }
+}
