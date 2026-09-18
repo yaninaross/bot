@@ -297,24 +297,79 @@ Note: The features (sustained_drop, stale, etc.) are valuable as **post-selectio
 | Vol <1.5x ADV | 0.656 | 63 | Needs borrow cost overlay |
 | no_pm (no premarket bars) | 0.656 | 19 | Too small to act on |
 
-### Recommended Composite Filter (needs separate backtest)
+### Deployed Configuration (validated via E2 grid + E3b + Universe Float)
 
 ```
-EXCLUDE ETFs
-RANK BY pure gap size (biggest gap wins)
-HOLD = T+5 (or T+2 if capital constrained)
-OPEN_PATTERN = sustained_drop (skip drop_then_recover, mild_drop)
-GAP_FRESHNESS ≠ very_fresh (PM high must be >30m before open)
-PRICE >= $50 (optional, trades off coverage for quality)
+DIRECTION = SHORT
+FILTER = CS + sustained_drop (CS+SD)
+RANK BY = pure gap size (biggest gap wins)
+TOP_N = 1 (single biggest gap each day)
+EXIT = 17:00 ET same day (1h after close, after-hours)
+FLOAT FILTER = SOFT (hardcoded dict; unknown tickers pass through)
 ```
 
-Expected: ~80-120 trades over 174 days, Sharpe potentially 0.50-0.60. Must verify filter interactions don't create selection bias.
+**Performance:** 160 trades, +14.71% avg, Sharpe 0.594, 79% WR, PF 6.26, $+2.35M on $100K pool.
 
-### Don't Do
+### Don't Do (validated by experiments)
 
-- Don't add minimum ADV filter (Q1 lowest is best)
+- Don't add minimum ADV filter (Q1 lowest is best — E3)
 - Don't add multi-feature ranking weights (E10 proves pure gap is optimal)
 - Don't prefer idiosyncratic gaps (v2 reversed this — sector-wide is actually slightly better)
+- Don't use hard float filter (kills $1.64M in profit — Universe Float Comparison)
+- Don't hold overnight T+1 (dead zone, Sharpe 0.027-0.074 — E2 Part 2)
+- Don't use PM retrace filter (costs -$378K — PM Retrace Comparison)
+
+---
+
+---
+
+## E2 Grid: N×Hold + Capital Efficiency + Intraday Exit (2026-09-15)
+
+**Script:** `agent1_e2_nhold_grid.py` — CS+SD filter, 174 trading days, 497 CS+SD trades across 160 active days.
+
+### Part 1 — Raw Grid: N=1 T+5 best (Sharpe 0.604, +26.11%, 84% WR, PF 6.09)
+### Part 2 — Capital Efficiency: N=1 EOD best pool$ ($1.98M, Sharpe 0.533)
+### Part 3 — Intraday Exit: **N=1 exit@17:00 AH = $+2.34M** (best overall)
+- Sharpe peaks 11:00-12:00 (0.788-0.790) — most reliable window
+- AH spike 16:00→17:00 — biggest single-hour jump
+- T+1 dead zone (Sharpe 0.027-0.074) — overnight destroys edge
+
+---
+
+## E3b: Gap Size Impact (2026-09-15)
+
+**Config:** CS+SD, N=1, exit@17:00, 160 trades.
+
+| Bucket | n | Avg PnL | Sharpe | WR | Pool $ | % of Total |
+|--------|---|---------|--------|-----|--------|------------|
+| 5-8% | 1 | +0.00% | — | — | $0 | 0% |
+| 8-12% | 3 | -4.82% | -0.783 | 0% | -$14K | -0.6% |
+| 12-20% | 17 | +4.52% | 0.498 | 71% | +$77K | 3.3% |
+| 20-30% | 30 | +9.19% | **0.875** | 83% | +$276K | 11.8% |
+| 30-50% | 37 | +14.67% | 0.718 | 78% | +$543K | 23.2% |
+| 50%+ | 72 | **+20.20%** | 0.631 | 82% | +$1.45M | **62.3%** |
+
+**Verdict:** Keep biggest-gap ranking. 50%+ gaps = 62% of all dollars. Non-monotonic but positive correlation (r=+0.247).
+
+---
+
+## Universe Float Comparison: Soft vs Hard (2026-09-15)
+
+**Script:** `agent1_universe_float.py` — CS+SD, N=1, exit@17:00.
+
+| Metric | SOFT_FLOAT (current) | HARD_FLOAT (Polygon ≥10M) | Delta |
+|--------|---------------------|--------------------------|-------|
+| Trades | 160 | 126 | -34 |
+| Avg PnL | +14.71% | +5.67% | **-9.04%** |
+| Sharpe | 0.594 | 0.478 | -0.116 |
+| WR | 79% | 70% | -9% |
+| Pool $ | $+2.35M | $+715K | **-$1.64M** |
+| Max Loss | -132.6% | -40.4% | +92.2% better |
+
+**SOFT-only trades (removed by hard filter):** n=94, avg +20.39%, Sharpe 0.706, WR 86% — the BEST trades.
+**HARD-only trades (replacements):** n=60, avg +4.63%, Sharpe 0.514, WR 72% — much weaker.
+
+**Verdict:** KEEP soft float. Small-float stocks ARE the edge. Hard float kills $1.64M profit.
 
 ---
 

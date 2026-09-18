@@ -32,7 +32,7 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET = "time-series-bucket-ys"
+BUCKET = os.environ.get("GCS_BUCKET", "")
 OHLCV_DIR = "Data/Inference"
 INFERENCE_V2_DIR = "Data/Inference_v2"
 PST = pytz.timezone('America/Los_Angeles')

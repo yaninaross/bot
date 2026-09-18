@@ -38,7 +38,7 @@ bq_client = bigquery.Client()
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 MODEL_VERSION = 'robust_wf_v12_short_a1'
 DEPLOY_PNL_THRESHOLD = 0.018   # 1.8% avg PnL — same bar as long models
 MIN_TEST_TRADES = 3

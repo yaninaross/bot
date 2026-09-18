@@ -44,7 +44,7 @@ bq = bigquery.Client()
 # CONFIG
 # ==============================================================================
 W = 130
-BQ_TABLE = 'ys-time-series.scoring_logs.wf_optimization_results'
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 MV_400 = 'robust_wf_v12_short'
 MV_410 = 'robust_wf_v12_short_a1'
 DEPLOY_PNL_THRESHOLD = 0.018

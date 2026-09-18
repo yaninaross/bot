@@ -6,8 +6,8 @@ import pytz
 from polygon import RESTClient
 
 PST = pytz.timezone('America/Los_Angeles')
-BUCKET = "time-series-bucket-ys"
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+BUCKET = os.environ.get("GCS_BUCKET", "")
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 
 today_utc = pd.Timestamp.now(tz='UTC').normalize()
 today_str = today_utc.strftime('%Y-%m-%d')

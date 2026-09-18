@@ -14,8 +14,8 @@ L5-2 training data produces better SHORT spike predictions than L5-1, and a hybr
 - Folds: F5/F6/F7 (hybrid selection per ticker)
 - F7 gate: val_b_avg_pnl >= 3.0%
 - 26 tickers: L2_F5 (12), L2_F6 (7), L2_F7 (7)
-- GCS data: `gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_data/`
-- GCS models: `gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_models/`
+- GCS data: `gs://<GCS_BUCKET>/Algos/RA_MoE/short_L5_2_data/`
+- GCS models: `gs://<GCS_BUCKET>/Algos/RA_MoE/short_L5_2_models/`
 - BQ model_versions: `spike_transformer_short_L5_2_fold{5,6,7}`
 
 ## Results

@@ -39,8 +39,8 @@ from google.cloud import bigquery
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
-BUCKET_NAME = "time-series-bucket-ys"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
 SPIKE_THRESHOLD = 0.10
 

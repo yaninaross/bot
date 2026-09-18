@@ -24,10 +24,10 @@
 #  11. Quote_Intensity   — quote updates per minute (market maker activity)
 #  12. Spread_CV         — std(spread)/mean(spread) within bar
 #
-# Reads:  gs://time-series-bucket-ys/Data/TradesQuotes/{ticker}/{ticker}_trades_{date}.parquet
-#         gs://time-series-bucket-ys/Data/TradesQuotes/{ticker}/{ticker}_quotes_{date}.parquet
+# Reads:  gs://{GCS_BUCKET}/Data/TradesQuotes/{ticker}/{ticker}_trades_{date}.parquet
+#         gs://{GCS_BUCKET}/Data/TradesQuotes/{ticker}/{ticker}_quotes_{date}.parquet
 #
-# Writes: gs://time-series-bucket-ys/Data/Inference/Microstructure_Advanced/{ticker}_1m_advanced_micro.parquet
+# Writes: gs://{GCS_BUCKET}/Data/Inference/Microstructure_Advanced/{ticker}_1m_advanced_micro.parquet
 #
 # Incremental: detects existing output, processes only new dates.
 # Colab-ready, config vars at top.
@@ -70,7 +70,7 @@ import matplotlib.pyplot as plt
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = 'time-series-bucket-ys'
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 GCS_TQ_DIR  = 'Data/TradesQuotes'
 GCS_OUT_DIR = 'Data/Inference/Microstructure_Advanced'
 

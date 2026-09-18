@@ -302,6 +302,24 @@ Guards eliminated 4 of 5 catastrophic trades. Only VCX survives (legitimate larg
 
 ---
 
+## Universe Float Comparison: Soft vs Hard (2026-09-15)
+
+**Script:** `agent1_universe_float.py` — CS+SD, N=1, exit@17:00, 174 trading days.
+
+| Metric | SOFT_FLOAT (current) | HARD_FLOAT (Polygon ≥10M) | Delta |
+|--------|---------------------|--------------------------|-------|
+| Trades | 160 | 126 | -34 |
+| Avg PnL | +14.71% | +5.67% | -9.04% |
+| Sharpe | 0.594 | 0.478 | -0.116 |
+| Pool $ | $+2.35M | $+715K | -$1.64M |
+| Max Loss | -132.6% | -40.4% | +92.2% better tail |
+
+**Key finding:** The 94 trades removed by hard float filter are the BEST trades (avg +20.39%, Sharpe 0.706, WR 86%). Small-float stocks gap up harder and fade harder — they ARE the edge.
+
+**Verdict:** KEEP soft float filter. Do NOT switch to hard float.
+
+---
+
 ## Future Universe Ideas (not yet tested)
 
 | ID | Name | Filter | Hypothesis |

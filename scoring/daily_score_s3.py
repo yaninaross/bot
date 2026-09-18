@@ -63,9 +63,9 @@ except Exception:
 # ==============================================================================
 # SHARED CONSTANTS
 # ==============================================================================
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
-BQ_TABLE       = "ys-time-series.scoring_logs.live_predictions"
+BQ_TABLE       = f"{GCP_PROJECT}.scoring_logs.live_predictions"
 INFERENCE_DIR  = "Data/Inference_v2"
 TAIL_DAYS      = 25
 VOL_LOOKBACK_DAYS = 30
@@ -135,7 +135,7 @@ EXP_160 = {
 # Deploy: best config by score_pnl2 per ticker across scorable families.
 # ==============================================================================
 WF_MODEL_VERSION = 'robust_wf_v12'
-WF_BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+WF_BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 WF_MIN_TRADES = 3
 WF_DEPLOY_THRESHOLD = 0.018
 WF_MIN_SEEDS = 3

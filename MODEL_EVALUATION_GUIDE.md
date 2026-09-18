@@ -17,10 +17,10 @@ Before running any evaluation, ensure the data pipeline is current:
 All three are incremental — they only fetch/build new dates. Run them daily or whenever you need fresh data.
 
 **GCS data locations:**
-- `gs://time-series-bucket-ys/Data/Inference_v2/{TICKER}_master_inference.parquet`
-- `gs://time-series-bucket-ys/Data/Inference/Microstructure/{TICKER}_micro.parquet`
+- `gs://<GCS_BUCKET>/Data/Inference_v2/{TICKER}_master_inference.parquet`
+- `gs://<GCS_BUCKET>/Data/Inference/Microstructure/{TICKER}_micro.parquet`
 
-**BQ table:** `ys-time-series.scoring_logs.wf_optimization_results` (WF optimizer configs, model_version `robust_wf_v12`)
+**BQ table:** `<GCP_PROJECT>.scoring_logs.wf_optimization_results` (WF optimizer configs, model_version `robust_wf_v12`)
 
 ---
 
@@ -33,7 +33,7 @@ All three are incremental — they only fetch/build new dates. Run them daily or
 ```
 # Colab cell — needs GPU runtime
 # Scores experiments 152, 160, 175, 185, 200
-# Writes CSVs to gs://time-series-bucket-ys/Algos/Results_scored_20260703/
+# Writes CSVs to gs://<GCS_BUCKET>/Algos/Results_scored_20260703/
 ```
 
 **What it produces:** One CSV per (ticker, experiment, seed):
@@ -49,7 +49,7 @@ Each CSV contains columns: `Date`, `Prob_Spike`, plus features. Only dates after
 ```python
 from google.cloud import storage
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket("<GCS_BUCKET>")
 blobs = list(bucket.list_blobs(prefix="Algos/Results_scored_20260703/185_CLSK"))
 print(f"CLSK exp-185 seeds scored: {len(blobs)}")  # expect 15
 ```

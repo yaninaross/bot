@@ -74,8 +74,8 @@ JUNE_START = '2026-06-01'
 
 STARTING_CAPITAL = 200_000
 
-BUCKET_NAME    = "time-series-bucket-ys"
-BQ_TABLE       = "ys-time-series.scoring_logs.wf_optimization_results"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE       = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 INFERENCE_DIR  = "Data/Inference_v2"
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 STATS_DIR      = "Data/Inference_v2"

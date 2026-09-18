@@ -25,7 +25,7 @@ from google.cloud import bigquery
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 DEPLOY_PNL_THRESHOLD = 0.018
 MIN_TRADES = 3
 

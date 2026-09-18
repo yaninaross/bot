@@ -19,7 +19,7 @@ from scipy.stats import trim_mean, sem
 warnings.filterwarnings('ignore')
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-BASE = '/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization'
+BASE = 'os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization'
 RESULTS = os.path.join(BASE, 'results')
 
 CSV_PATH = os.path.join(RESULTS, 'v2_features_full.csv')

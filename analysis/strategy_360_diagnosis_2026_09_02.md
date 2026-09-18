@@ -421,4 +421,4 @@ All analysis scripts saved to `/tmp/`:
 ---
 
 *Analysis conducted September 2, 2026 using 7 parallel investigation agents.*
-*Data sources: GCS (gs://time-series-bucket-ys), BigQuery (ys-time-series.scoring_logs), 130 tickers scanned.*
+*Data sources: GCS (gs://<GCS_BUCKET>), BigQuery (<GCP_PROJECT>.scoring_logs), 130 tickers scanned.*

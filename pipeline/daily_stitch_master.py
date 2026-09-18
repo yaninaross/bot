@@ -61,7 +61,7 @@ TAIL_DAYS = 5
 MAX_WORKERS = 6
 BATCH_SIZE = 20
 
-BUCKET_NAME     = "time-series-bucket-ys"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_OHLCV_DIR   = "Data/Inference"
 GCS_MICRO_DIR   = "Data/Inference/Microstructure"
 GCS_MASTER_DIR  = "Data/Inference_v2"

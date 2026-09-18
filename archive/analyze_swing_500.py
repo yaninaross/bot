@@ -34,7 +34,7 @@ bq_client = bigquery.Client()
 # ══════════════════════════════════════════════════════════════════════════════
 W = 120
 MODEL_VERSION = 'robust_wf_v12_swing'
-BQ_TABLE = 'ys-time-series.scoring_logs.wf_optimization_results'
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 DEPLOY_PNL_THRESHOLD = 0.010
 MIN_SEEDS_SURVIVING = 5

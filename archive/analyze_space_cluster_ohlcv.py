@@ -79,7 +79,7 @@ ALL_CANDIDATES = [
 
 CONTEXT_ASSETS = ['ITA', 'VIX', 'TLT', 'IWM', 'SMH']
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference"
 
 SPIKE_THRESHOLDS = [0.06, 0.08, 0.10, 0.15]

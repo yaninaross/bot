@@ -51,7 +51,7 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 RESULTS_DIR = "Algos/Results_all_v2"
 OHLCV_DIR = "Data/Inference"
 INFERENCE_DIR = "Data/Inference_v2"

@@ -670,7 +670,7 @@ Two new BQ columns added via ALTER TABLE:
 This makes failed Stage 2 calls queryable:
 ```sql
 SELECT ticker, stage2_error, scan_score
-FROM `ys-time-series.scoring_logs.premarket_scanner`
+FROM `<GCP_PROJECT>.scoring_logs.premarket_scanner`
 WHERE stage2_attempted = TRUE AND stage2_error != ''
 ORDER BY scan_date DESC
 ```
@@ -691,7 +691,7 @@ ORDER BY scan_date DESC
 3. **New `claude_error` BQ column** captures Claude errors even when Gemini fallback succeeded. Query:
    ```sql
    SELECT ticker, stage2_model, claude_error
-   FROM `ys-time-series.scoring_logs.premarket_scanner`
+   FROM `<GCP_PROJECT>.scoring_logs.premarket_scanner`
    WHERE stage2_attempted = TRUE AND claude_error != ''
    ORDER BY scan_date DESC
    ```

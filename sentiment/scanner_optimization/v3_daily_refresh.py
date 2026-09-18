@@ -10,7 +10,7 @@ except ImportError:
     import subprocess; subprocess.check_call([sys.executable, "-m", "pip", "install", "polygon-api-client", "--quiet"])
     from polygon import RESTClient as PolygonClient
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 
 try:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))

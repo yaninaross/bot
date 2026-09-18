@@ -29,8 +29,8 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BQ_TABLE    = "ys-time-series.scoring_logs.live_predictions"
-BUCKET_NAME = "time-series-bucket-ys"
+BQ_TABLE    = f"{GCP_PROJECT}.scoring_logs.live_predictions"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 EXIT_TIME_MIN = 780
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 PST = pytz.timezone('America/Los_Angeles')

@@ -6,8 +6,8 @@
 #   1. Multi-Res v2: dual backbone (1m + 15m), 150k training samples
 #   2. X-ASSET: BTC/ETH lead-lag features (47 seq + 26 regime)
 #
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_v2_xasset_data/fold_5_*.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_v2_xasset_models/fold_5/weights.*
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_v2_xasset_data/fold_5_*.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_v2_xasset_models/fold_5/weights.*
 #
 # GPU recommended. Colab-ready.
 
@@ -40,7 +40,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DATA_DIR = '/tmp/ra_moe_short_L5_2_multires_v2_xasset_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_L5_2_multires_v2_xasset_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_2_multires_v2_xasset_models'
 

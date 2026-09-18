@@ -46,7 +46,7 @@ from google.cloud import storage as gcs_storage
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference"
 
 PST = pytz.timezone('America/Los_Angeles')

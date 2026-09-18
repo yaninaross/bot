@@ -22,9 +22,9 @@ from google.cloud import storage as gcs_storage
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BQ_TABLE        = "ys-time-series.scoring_logs.live_predictions"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BQ_TABLE        = f"{GCP_PROJECT}.scoring_logs.live_predictions"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR   = "Data/Inference"
 EXIT_TIME_MIN   = 780  # 13:00 ET
 

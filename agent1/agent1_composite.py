@@ -81,7 +81,7 @@ PNL_CAP        = -50.0        # cap worst-case PnL per trade (% — clips catast
 # Capital model
 CAPITAL        = 100_000      # fixed capital each morning, equal split
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 _BASE = "https://api.polygon.io"
 _TK_RE = re.compile(r'^[A-Z]{1,5}$')
 ET = pytz.timezone('America/New_York')

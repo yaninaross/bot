@@ -56,8 +56,8 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 RESULTS_DIR = "Algos/Results_all_v2"
 OHLCV_DIR = "Data/Inference"
 INFERENCE_DIR = "Data/Inference_v2"

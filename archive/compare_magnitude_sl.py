@@ -55,7 +55,7 @@ q_fixed = f"""
 WITH base AS (
   SELECT *,
     {COMPOSITE_SQL}
-  FROM `ys-time-series.scoring_logs.wf_optimization_results`
+  FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
   WHERE model_version = '{FIXED_VERSION}'
     {S8_MIX_FILTER}
     AND val_b_start = '{TEST_START}'
@@ -86,7 +86,7 @@ q_mag = f"""
 WITH base AS (
   SELECT *,
     {COMPOSITE_SQL}
-  FROM `ys-time-series.scoring_logs.wf_optimization_results`
+  FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
   WHERE model_version = '{MAG_VERSION}'
     {S8_MIX_FILTER}
     AND val_b_start = '{TEST_START}'
@@ -122,7 +122,7 @@ SELECT ticker, experiment, seed, tpsl_mode, prob_thresh,
        val_b_avg_pnl, val_b_win_rate, val_b_count,
        sl_pct, opt_avg_pnl, opt_win_rate, opt_count,
        survived_a, survived_b
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE model_version = '{MAG_VERSION}'
   AND val_b_start = '{TEST_START}'
 """
@@ -133,7 +133,7 @@ df_all_mag = client.query(q_all_mag).to_dataframe()
 # ==============================================================================
 q_mag_unfiltered = f"""
 SELECT DISTINCT ticker, tpsl_mode
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE model_version = '{MAG_VERSION}'
   AND survived_a = TRUE
   AND val_b_start = '{TEST_START}'

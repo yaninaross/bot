@@ -39,11 +39,11 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 DEPLOY_PNL_THRESHOLD = 0.018
 VAL_START = '2026-01-02'
 VAL_END   = '2026-04-29'
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 EXIT_TIME_MIN = 780
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}

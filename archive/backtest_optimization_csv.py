@@ -54,7 +54,7 @@ def _release_memory():
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 RESULTS_DIR = "Algos/Results_scored_20260703"
 RESULTS_FALLBACK = "Algos/Results_all_v2"
 INFERENCE_DIR = "Data/Inference_v2"
@@ -422,7 +422,7 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        dip_pct, max_wait_minutes, vol_filter_pct,
        val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
        val_b_avg_pnl, opt_avg_pnl, is_ensemble
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE model_version IN ('robust_wf_v12', 'robust_wf_v12_stitched')
   AND survived_a = TRUE
   AND val_a_count >= 3

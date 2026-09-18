@@ -21,7 +21,7 @@ except (ImportError, Exception):
     pass
 
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 MICRO_COLS = ['Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',
               'bsize', 'asize', 'Total_Vol']
@@ -50,7 +50,7 @@ print(f"Found {len(tickers)} master files\n")
 results = []
 
 for ticker in tickers:
-    uri = f"gs://time-series-bucket-ys/Data/Inference_v2/{ticker}_master_inference.parquet"
+    uri = f"gs://{GCS_BUCKET}/Data/Inference_v2/{ticker}_master_inference.parquet"
     try:
         df = pd.read_parquet(uri)
         df = df.reset_index()

@@ -439,10 +439,10 @@ After running the full investigation, report these three numbers:
 | What | Path |
 |------|------|
 | Raw .npy paths | TBD (wherever batch job saves them) |
-| Per-ticker feature CSVs | `gs://time-series-bucket-ys/Algos/MOIRAI/features/` |
+| Per-ticker feature CSVs | `gs://<GCS_BUCKET>/Algos/MOIRAI/features/` |
 | Master training CSV | `/tmp/moirai_features_master.csv` |
 | Frozen LightGBM model | `/tmp/moirai_lgbm_model.pkl` |
 | Scored OPT data (May-Jun) | `/tmp/moirai_opt_scored.csv` |
 | Scored TEST data (Jul) | `/tmp/moirai_test_scored.csv` |
-| Market data | `gs://time-series-bucket-ys/Data/Inference_v2/{TICKER}_master_inference.parquet` |
+| Market data | `gs://<GCS_BUCKET>/Data/Inference_v2/{TICKER}_master_inference.parquet` |
 | Diagnostics chart | `/tmp/moirai_lgbm_diagnostics.png` |

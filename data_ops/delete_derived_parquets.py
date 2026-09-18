@@ -21,7 +21,7 @@ Usage:
 import sys
 from google.cloud import storage
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 
 ALL_TQ_ASSETS = [
     'ACHR', 'AMD', 'APLD', 'ASTS', 'AVAV', 'BBAI', 'BITF', 'BTBT',

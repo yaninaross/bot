@@ -21,7 +21,7 @@ from pathlib import Path
 warnings.filterwarnings('ignore')
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-BASE = Path('/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization')
+BASE = Path('os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization')
 RESULTS = BASE / 'results'
 CSV_PATH = RESULTS / 'v2_features_full.csv'
 MINUTE_PATH = RESULTS / 'v3_minute_bars.json'

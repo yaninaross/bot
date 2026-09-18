@@ -52,7 +52,7 @@ except Exception:
 # ⚙️  CONFIGURATION
 # ==============================================================================
 MODEL_ID    = "97_MICRO"
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 
 # Context assets — same as training
 CONTEXT_ASSETS = ['SMH', 'MOD', 'TLT', 'IWM', 'VIX', 'BTCUSD']
@@ -94,7 +94,7 @@ GCS_INFERENCE_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
 GCS_MODEL_PATH    = f"Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 GCS_STATS_PATH    = f"Data/Inference_v2/scaling_stats_experiment_{MODEL_ID}.json"
 
-BQ_TABLE = "ys-time-series.scoring_logs.live_predictions"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.live_predictions"
 
 # ==============================================================================
 # 🎯  ASSET CONFIGS

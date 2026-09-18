@@ -2,7 +2,7 @@
 from google.cloud import storage
 
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 renames = [
     ("Data/Inference_v2/MIGI_1m_full_historical_data.parquet",

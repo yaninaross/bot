@@ -37,7 +37,7 @@ from google.cloud import bigquery
 MODEL_VERSION = 'robust_wf_v8'
 DEPLOY_THRESHOLD = 0.018
 MIN_TRADES = 3
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SPY', 'IWM', 'MSTR'}
 W = 130

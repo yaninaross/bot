@@ -19,8 +19,8 @@
 #   5. Gate: agreement > 50% AND n_families >= 2
 #   6. Score: val_a^2 * agreement_rate, pick best family per ticker
 #
-# Input:  gs://time-series-bucket-ys/Algos/MOIRAI/paths/path_validation_summary.parquet
-# Output: gs://time-series-bucket-ys/Algos/MOIRAI/optimizer_v1/
+# Input:  gs://{GCS_BUCKET}/Algos/MOIRAI/paths/path_validation_summary.parquet
+# Output: gs://{GCS_BUCKET}/Algos/MOIRAI/optimizer_v1/
 # ==============================================================================
 
 import os, time, gc
@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-BUCKET_NAME = 'time-series-bucket-ys'
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 GCS_SUMMARY = 'Algos/MOIRAI/paths/path_validation_summary.parquet'
 GCS_INFER   = 'Data/Inference_v2/{ticker}_master_inference.parquet'
 GCS_OUTPUT  = 'Algos/MOIRAI/optimizer_v1'

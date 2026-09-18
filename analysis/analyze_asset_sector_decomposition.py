@@ -56,10 +56,10 @@ from matplotlib.patches import Patch
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
-BQ_LIVE_TABLE = "ys-time-series.scoring_logs.live_predictions"
-BQ_WF_TABLE   = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_LIVE_TABLE = f"{GCP_PROJECT}.scoring_logs.live_predictions"
+BQ_WF_TABLE   = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 PST           = pytz.timezone('America/Los_Angeles')
 
 ANALYSIS_START = '2026-07-01'

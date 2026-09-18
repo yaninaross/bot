@@ -1,6 +1,6 @@
 # %% Agent 3 — Long Strategy Scanner (Pension Account)
 # Two LONG strategies — no shorting, no leverage:
-#   A6: Gap-down sustained rise → buy at local low, hold T+2
+#   A6: Gap-down sustained rise → buy at local low, hold T+1
 #   C1: Multi-day reversal → prior 5d decline + gap-up, buy open, hold T+3
 #
 # Usage:
@@ -64,7 +64,7 @@ SCAN_DATE = None             # None = today, 'YYYY-MM-DD' = historical
 DRY_RUN = False
 REPORT_WEEKS = 4
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 _BASE = "https://api.polygon.io"
 
 try:
@@ -81,7 +81,7 @@ A6_GAP_MIN_PCT     = 5.0       # gap-DOWN >= 5%
 A6_PRICE_MIN       = 10.0
 A6_TOP_N           = 5         # top 5 by abs(gap_pct)
 A6_PRE_FILTER_N    = 15
-A6_HOLD_DAYS       = 2         # T+2
+A6_HOLD_DAYS       = 1         # T+1 (E1/E1b: Sharpe 0.600 vs T+2 0.458; pre-market 08:00 peak 0.703)
 LOW_WINDOW         = 3
 MAX_LOW_BAR        = 12
 FALLBACK_BAR       = 15
@@ -437,6 +437,29 @@ def fetch_grouped_daily(dt_str):
     return out
 
 
+def fetch_snapshot_all():
+    """Live snapshot — returns dict keyed by ticker with 'o' set to current/premarket price."""
+    data = _pg(f"{_BASE}/v2/snapshot/locale/us/markets/stocks/tickers",
+               {"include_otc": "false"})
+    out = {}
+    for t in data.get('tickers', []):
+        tk = t.get('ticker', '')
+        if not _TK_RE.match(tk): continue
+        day = t.get('day', {})
+        prev = t.get('prevDay', {})
+        cur_price = day.get('o') or day.get('c') or 0
+        if cur_price <= 0:
+            mn = t.get('min', {})
+            cur_price = mn.get('c') or mn.get('o') or 0
+        if cur_price <= 0:
+            continue
+        out[tk] = {'o': float(cur_price), 'h': float(day.get('h', 0)),
+                   'l': float(day.get('l', 0)), 'c': float(day.get('c', 0)),
+                   'v': int(day.get('v', 0))}
+    log.info(f"Snapshot (live): {len(out)} tickers with price data")
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ASYNC MINUTE BAR FETCH (RTH only — for A6 pattern + entry)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -695,6 +718,7 @@ def print_watchlists(a6_selected, c1_selected, scan_date_str):
     print(f"  Strategy: BUY at local low (~bar 6-12), HOLD to T+{A6_HOLD_DAYS} close ({t_strs[A6_HOLD_DAYS-1] if len(t_strs) >= A6_HOLD_DAYS else 'TBD'})")
     print(f"  Filter:   gap-DOWN >= {A6_GAP_MIN_PCT}%, CS only, sustained_rise pattern, local_low entry")
     print(f"  Universe: _FLOAT ({len(_FLOAT_UNIVERSE)} tickers, float >= 10M)")
+    print(f"  E1b note: Pre-mkt @08:00 Sharpe 0.703 WR 79% | Close @16:00 Sharpe 0.600")
     print(f"  {'─'*74}")
 
     if not a6_selected:
@@ -909,9 +933,9 @@ def run_report(weeks=REPORT_WEEKS):
     print(f"  Total A6:        {n_a6}")
     print(f"  Total C1:        {n_c1}")
 
-    for strat, pnl_col, hold in [('A6', 'pnl_t2', A6_HOLD_DAYS), ('C1', 'pnl_t3', C1_HOLD_DAYS)]:
+    for strat, pnl_col, hold in [('A6', 'pnl_t1', A6_HOLD_DAYS), ('C1', 'pnl_t3', C1_HOLD_DAYS)]:
         strat_trades = [t for t in trades if t[2] == strat]
-        pnl_idx = 8 if strat == 'A6' else 9  # pnl_t2 or pnl_t3
+        pnl_idx = 7 if strat == 'A6' else 9  # pnl_t1 or pnl_t3
         pnls = [t[pnl_idx] for t in strat_trades if t[pnl_idx] is not None]
 
         print(f"\n  ── {strat} — T+{hold} Performance ──")
@@ -999,7 +1023,7 @@ def run_scan(scan_date_str=None, dry_run=False):
 
     t1 = time.time()
     prior_data = fetch_grouped_daily(prior_str)
-    today_data = fetch_grouped_daily(scan_date_str)
+    today_data = fetch_snapshot_all() if mode == 'live' else fetch_grouped_daily(scan_date_str)
 
     # C1 lookback: need close from 5 TDs ago
     close_5d_date = get_nth_prior_td(prior_str, 4)

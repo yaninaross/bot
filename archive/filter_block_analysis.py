@@ -23,7 +23,7 @@ from google.cloud import storage as gcs_storage
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 GCS_INFERENCE_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
 
 # Average thresholds across all 27 active assets (Exp-97 + Exp-103)

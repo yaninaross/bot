@@ -3,8 +3,8 @@
 # Downloads 1-min OHLCV data for BTC-USD and ETH-USD from Polygon.io,
 # builds master_inference parquet files matching the format used by
 # existing equity tickers, and uploads to:
-#   gs://time-series-bucket-ys/Data/Inference_v2/BTCUSD_master_inference.parquet
-#   gs://time-series-bucket-ys/Data/Inference_v2/ETHUSD_master_inference.parquet
+#   gs://{GCS_BUCKET}/Data/Inference_v2/BTCUSD_master_inference.parquet
+#   gs://{GCS_BUCKET}/Data/Inference_v2/ETHUSD_master_inference.parquet
 #
 # Crypto trades 24/7 — ~1440 bars/day, ~525k bars/year.
 # Full rebuild from 2022-01-01 to today.
@@ -46,9 +46,9 @@ def log(msg, level='INFO'):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 
-GCS_BUCKET    = 'time-series-bucket-ys'
+GCS_BUCKET    = os.environ.get("GCS_BUCKET", "")
 GCS_PREFIX    = 'Data/Inference_v2'
 LOCAL_DIR     = '/tmp/crypto_master_inference'
 os.makedirs(LOCAL_DIR, exist_ok=True)

@@ -17,12 +17,12 @@ HOLD_MINUTES  = 60        # compute return at entry + N minutes
 EOD_TIME_PT   = '12:55'   # 12:55 PM PT = 3:55 PM ET (near close)
 MARKET_OPEN_PT = '06:30'  # earliest possible entry (market open)
 
-GCP_PROJECT   = 'YOUR_GCP_PROJECT'
-BQ_PREMARKET  = 'YOUR_GCP_PROJECT.scoring_logs.premarket_scanner'
-BQ_DISCOVERY  = 'YOUR_GCP_PROJECT.scoring_logs.discovery_scanner'
-BQ_PATTERNS   = 'YOUR_GCP_PROJECT.scoring_logs.scanner_patterns'
+GCP_PROJECT   = os.environ.get("GCP_PROJECT", "")
+BQ_PREMARKET  = f"{GCP_PROJECT}.scoring_logs.premarket_scanner"
+BQ_DISCOVERY  = f"{GCP_PROJECT}.scoring_logs.discovery_scanner"
+BQ_PATTERNS   = f"{GCP_PROJECT}.scoring_logs.scanner_patterns"
 
-POLYGON_API_KEY = 'YOUR_POLYGON_API_KEY'
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CELL 2: FETCH SCANNER SIGNALS FROM BQ

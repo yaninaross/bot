@@ -13,7 +13,7 @@ try:
 except (ImportError, Exception):
     pass
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 client = storage.Client()
 bucket = client.bucket(BUCKET_NAME)
 

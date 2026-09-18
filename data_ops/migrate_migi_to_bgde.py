@@ -41,7 +41,7 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 SRC_TICKER  = "MIGI"
 DST_TICKER  = "BGDE"
 

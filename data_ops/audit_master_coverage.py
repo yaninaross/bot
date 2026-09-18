@@ -35,12 +35,12 @@ except (ImportError, Exception):
     pass
 
 client = gcs_storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 GCS_MASTER_DIR = "Data/Inference_v2"
 
 TRAIN_START = pd.Timestamp("2022-02-01", tz='UTC')

@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 from google.cloud import bigquery
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 bq_client = bigquery.Client()
 

@@ -45,7 +45,7 @@ def _release_memory():
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 SPIKE_THRESHOLD = 0.10
 
 FOLDS = {

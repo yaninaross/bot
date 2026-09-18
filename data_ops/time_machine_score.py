@@ -63,7 +63,7 @@ except Exception:
 # CONSTANTS
 # ==============================================================================
 PST = pytz.timezone('America/Los_Angeles')
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 GCS_INFERENCE_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 ROC_HORIZONS = [5, 30, 60, 120]

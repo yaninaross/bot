@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 # ============================================================================
 # CONFIG: all 24 scored tickers with their entry_minute and GCS file name
 # ============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference"
 PST = pytz.timezone("America/Los_Angeles")
 LOOKBACK_TRADING_DAYS = 60

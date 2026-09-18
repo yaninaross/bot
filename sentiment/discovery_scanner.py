@@ -81,17 +81,17 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-GCP_PROJECT  = "YOUR_GCP_PROJECT"
+GCP_PROJECT  = os.environ.get("GCP_PROJECT", "")
 GCP_LOCATION = "us-central1"
 GEMINI_MODEL = "gemini-2.5-flash"
 
 CLAUDE_REGION  = "YOUR_REGION"
 CLAUDE_MODEL   = "claude-sonnet-4-6"
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 OUTPUT_DIR  = "Data/Scanner"
-BQ_TABLE    = "YOUR_GCP_PROJECT.scoring_logs.discovery_scanner"
-BQ_PATTERNS_TABLE = "YOUR_GCP_PROJECT.scoring_logs.scanner_patterns"
+BQ_TABLE    = f"{GCP_PROJECT}.scoring_logs.discovery_scanner"
+BQ_PATTERNS_TABLE = f"{GCP_PROJECT}.scoring_logs.scanner_patterns"
 
 PST = pytz.timezone('America/Los_Angeles')
 NOW_PT = datetime.now(PST)
@@ -771,7 +771,7 @@ def fetch_similar_patterns(catalyst_type, ticker=None, max_results=3):
 
 # POLYGON-BASED EVENT TIMING & ABSORPTION TOOLS
 # ==============================================================================
-POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 
 try:
     from polygon import RESTClient as _PolygonClient
@@ -2261,7 +2261,7 @@ shorts.sort(key=lambda x: x['tradability_score'], reverse=True)
 
 
 # ── Fix C: Cross-scanner dedup — check premarket scanner for direction conflicts
-BQ_PREMARKET_TABLE = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
+BQ_PREMARKET_TABLE = f"{GCP_PROJECT}.scoring_logs.premarket_scanner"
 _premarket_selected = {}
 try:
     _bq_xdedup = bigquery.Client()

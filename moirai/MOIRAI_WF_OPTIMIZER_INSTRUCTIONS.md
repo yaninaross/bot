@@ -58,7 +58,7 @@ The optimizer needs one DataFrame with these columns, covering **May 1 - Jun 30,
 | `forward_low` | float[60] | 60 subsequent 1-minute low prices after entry |
 | `entry_price` | float | Close price at prediction bar |
 
-The forward bars come from the master_inference parquets in GCS (`gs://time-series-bucket-ys/Data/Inference_v2/{TICKER}_master_inference.parquet`). Join on ticker + datetime.
+The forward bars come from the master_inference parquets in GCS (`gs://<GCS_BUCKET>/Data/Inference_v2/{TICKER}_master_inference.parquet`). Join on ticker + datetime.
 
 ---
 
@@ -368,7 +368,7 @@ Save to `/tmp/moirai_wf_test_results.png` as 2x1:
 Write all results (not just top 20) to BigQuery:
 
 ```python
-table_id = 'ys-time-series.scoring_logs.wf_optimization_results'
+table_id = '<GCP_PROJECT>.scoring_logs.wf_optimization_results'
 
 for _, row in results_df.iterrows():
     bq_row = {

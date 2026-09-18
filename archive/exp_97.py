@@ -45,7 +45,7 @@ try:
 except ImportError:
     pass  # Not running in Colab — GCS credentials handled externally
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
@@ -110,7 +110,7 @@ SAMPLE_WEIGHT_CAP = 5.0
 # 🎯 Precision@TopK
 PREC_TOP_K = 0.02
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 
 # Directories
 LOCAL_RESULTS_DIR = "Results"

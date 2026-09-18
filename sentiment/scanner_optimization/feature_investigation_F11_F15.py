@@ -13,7 +13,7 @@ Data: v2_features_full.csv (316 trades), v2_daily_data.json (253 tickers x ~29 b
 """
 
 # ── Config ───────────────────────────────────────────────────────────────────
-BASE_DIR = "/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization"
+BASE_DIR = "os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization"
 RESULTS_DIR = f"{BASE_DIR}/results"
 OUTPUT_DIR  = f"{RESULTS_DIR}/features"
 

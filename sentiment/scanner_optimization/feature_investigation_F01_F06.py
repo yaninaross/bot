@@ -19,7 +19,7 @@ from collections import OrderedDict
 warnings.filterwarnings('ignore')
 
 # ── Config ───────────────────────────────────────────────────────────────────
-BASE_DIR = '/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization'
+BASE_DIR = 'os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization'
 RESULTS_DIR = os.path.join(BASE_DIR, 'results')
 FEATURES_DIR = os.path.join(RESULTS_DIR, 'features')
 os.makedirs(FEATURES_DIR, exist_ok=True)

@@ -6,8 +6,8 @@
 # 150k sample cap per fold, ~1.0 samples/param ratio.
 # ALL tickers discovered from GCS master_inference (data prep handles this).
 #
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_v2_data/fold_10_*.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_v2_models/fold_10/
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_v2_data/fold_10_*.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_v2_models/fold_10/
 #
 # F10 timeline: Train→Jul 21, OPT Jul 22–Aug 21, TEST Aug 22–Aug 30
 #
@@ -42,7 +42,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DATA_DIR = '/tmp/ra_moe_short_L5_2_multires_v2_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_L5_2_multires_v2_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_2_multires_v2_models'
 

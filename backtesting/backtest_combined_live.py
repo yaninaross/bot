@@ -61,7 +61,7 @@ if tf.config.list_physical_devices('GPU'):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 RESULTS_DIR_V2 = "Algos/Results_all_v2"
 INFERENCE_DIR  = "Data/Inference_v2"
@@ -852,7 +852,7 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        vix_threshold, tlt_crash, spy_ignore,
        val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
        val_b_avg_pnl, opt_avg_pnl, is_ensemble
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE (model_version IN ({mv_str})
        OR model_version LIKE 'robust_wf_v12_17%'
        OR model_version LIKE 'robust_wf_v12_18%'
@@ -977,7 +977,7 @@ SELECT ticker, tpsl_mode, entry_minute,
        prob_thresh, tp_pct, sl_pct, sl_mult, grace_minutes,
        opt_avg_pnl, val_a_avg_pnl, val_a_win_rate, val_a_count,
        is_ensemble, model_version
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE model_version IN ({short_mv_str})
   AND opt_avg_pnl > 0
   AND tpsl_mode IN ({modes_str})

@@ -50,8 +50,8 @@ HORIZON_LABELS = {0: '15m', 1: '30m', 2: '60m'}
 D_MODEL = 64; N_HEADS = 4; D_FF = 128; N_TRANSFORMER_BLOCKS = 2
 DROPOUT = 0.1; FILM_HIDDEN = 64
 
-GCS_BUCKET = 'time-series-bucket-ys'
-BQ_TABLE_ID = 'ys-time-series.scoring_logs.wf_optimization_results'
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE_ID = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 EXPERIMENTS = {
     'L5-1': {

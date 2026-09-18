@@ -7,8 +7,8 @@
 # v2 targets ~1.0 samples/param ratio to reduce overfitting.
 # Architecture, loss, and hyperparameters are unchanged.
 #
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_v2_data/fold_5_*.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_v2_models/fold_5/weights.*
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_v2_data/fold_5_*.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_v2_models/fold_5/weights.*
 #
 # GPU recommended. Colab-ready.
 
@@ -41,7 +41,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DATA_DIR = '/tmp/ra_moe_short_L5_2_multires_v2_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_L5_2_multires_v2_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_2_multires_v2_models'
 

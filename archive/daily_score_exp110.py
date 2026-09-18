@@ -49,9 +49,9 @@ except Exception:
 # ==============================================================================
 # CONSTANTS
 # ==============================================================================
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
-BQ_TABLE       = "ys-time-series.scoring_logs.live_predictions"
+BQ_TABLE       = f"{GCP_PROJECT}.scoring_logs.live_predictions"
 INFERENCE_DIR  = "Data/Inference"
 TAIL_DAYS      = 7
 TIME_STEPS     = 240

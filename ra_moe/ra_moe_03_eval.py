@@ -10,9 +10,9 @@
 #   5. Per-ticker AUC ranking
 #
 # GPU recommended. Colab-ready. All artifacts loaded from / saved to GCS.
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/real_data/
-#         gs://time-series-bucket-ys/Algos/RA_MoE/real_models/
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/real_eval/
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/real_data/
+#         gs://{GCS_BUCKET}/Algos/RA_MoE/real_models/
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/real_eval/
 
 import os, time, warnings, gc
 import numpy as np
@@ -49,7 +49,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(EVAL_DIR, exist_ok=True)
 
-GCS_BUCKET = 'time-series-bucket-ys'
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 if DATA_MODE == 'real':
     GCS_DATA_PREFIX  = 'Algos/RA_MoE/real_data'
     GCS_MODEL_PREFIX = 'Algos/RA_MoE/real_models'

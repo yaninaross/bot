@@ -60,7 +60,7 @@ import matplotlib.pyplot as plt
 DATA_DIR  = '/tmp/ra_moe_long_L5_1_multires_v2_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET      = 'time-series-bucket-ys'
+GCS_BUCKET      = os.environ.get("GCS_BUCKET", "")
 GCS_INFER_DIR   = 'Data/Inference_v2'
 GCS_DATA_PREFIX = 'Algos/RA_MoE/long_L5_1_multires_v2_data'
 

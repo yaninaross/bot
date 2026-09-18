@@ -71,7 +71,7 @@ def _release_memory():
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME     = "time-series-bucket-ys"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_MODEL_PATH  = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 RESULTS_DIR     = "Algos/Results_all_v2"
 INFERENCE_DIR   = "Data/Inference_v2"
@@ -99,7 +99,7 @@ CONTEXT_ASSETS = ['SPY', 'VIX', 'TLT', 'IWM']
 
 SHORT_TICKERS = ['SMR', 'MVIS', 'NTLA', 'SOUN', 'MARA']
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 BQ_MODEL_VERSIONS = ('robust_wf_v12_short', 'robust_wf_v12_short_a1')
 BQ_ALLOWED_MODES  = ('static', 'atr_sl', 'grace')
 MIN_BQ_TRADES = 3

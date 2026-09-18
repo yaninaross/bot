@@ -17,9 +17,9 @@
 # saves best weights per fold.
 #
 # GPU recommended. Colab-ready. All artifacts persisted to GCS.
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/real_data/fold_{1..4}_{train,val,test}.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/real_models/fold_{1..4}/weights.*
-#         gs://time-series-bucket-ys/Algos/RA_MoE/real_models/training_diagnostics.png
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/real_data/fold_{1..4}_{train,val,test}.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/real_models/fold_{1..4}/weights.*
+#         gs://{GCS_BUCKET}/Algos/RA_MoE/real_models/training_diagnostics.png
 
 import os, time, warnings, gc
 import numpy as np
@@ -52,7 +52,7 @@ DATA_MODE = 'real'
 DATA_DIR = '/tmp/ra_moe_real_data' if DATA_MODE == 'real' else '/tmp/ra_moe_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET = 'time-series-bucket-ys'
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 if DATA_MODE == 'real':
     GCS_DATA_PREFIX  = 'Algos/RA_MoE/real_data'
     GCS_MODEL_PREFIX = 'Algos/RA_MoE/real_models'

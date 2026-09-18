@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 from scipy import stats
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-BASE = "/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization"
+BASE = "os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization"
 RESULTS = os.path.join(BASE, "results")
 CSV_PATH = os.path.join(RESULTS, "v2_features_full.csv")
 DAILY_PATH = os.path.join(RESULTS, "v2_daily_data.json")
@@ -40,7 +40,7 @@ PREV_DATES = {
     "2026-09-10": "2026-09-09",
     "2026-09-11": "2026-09-10",
 }
-POLYGON_KEY = "YOUR_POLYGON_API_KEY"
+POLYGON_KEY = os.environ["POLYGON_API_KEY"]
 MIN_GAP_PCT = 3.0
 
 # ── Helper functions ───────────────────────────────────────────────────────────

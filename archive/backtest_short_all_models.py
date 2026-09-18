@@ -44,7 +44,7 @@ def _release_memory():
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 RESULTS_DIR   = "Algos/Results_all_v2"
 INFERENCE_DIR = "Data/Inference_v2"
 
@@ -62,7 +62,7 @@ TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
 EXIT_TIME_MIN = 780
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 BQ_ALLOWED_MODES = ('static', 'atr_sl', 'grace')
 
 # ── Model families ───────────────────────────────────────────────────────────

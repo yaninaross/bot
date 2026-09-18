@@ -40,8 +40,8 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 MODEL_TYPE = 'classification'  # 'classification' or 'regression'
 
-BUCKET_NAME = "time-series-bucket-ys"
-BQ_TABLE_ID = "ys-time-series.scoring_logs.wf_optimization_results"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE_ID = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 BINARY_EXP = '185_XSECTOR'
 MAG_EXP_CLS = '185_MAG_CLS'

@@ -19,13 +19,13 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ── Config ──────────────────────────────────────────────────────────────────
-BASE_DIR = '/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization'
+BASE_DIR = 'os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization'
 RESULTS_DIR = os.path.join(BASE_DIR, 'results')
 FEATURES_DIR = os.path.join(RESULTS_DIR, 'features')
 CSV_PATH = os.path.join(RESULTS_DIR, 'v2_features_full.csv')
 DAILY_DATA_PATH = os.path.join(RESULTS_DIR, 'v2_daily_data.json')
 MINUTE_BARS_PATH = os.path.join(RESULTS_DIR, 'v3_minute_bars.json')
-POLYGON_API_KEY = 'YOUR_POLYGON_API_KEY'
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 POLYGON_SLEEP = 0.05  # seconds between API calls
 TICKER_CACHE_PATH = os.path.join(FEATURES_DIR, 'ticker_reference_cache.json')
 

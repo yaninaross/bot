@@ -1,7 +1,7 @@
 # %% Agent 3 — Baseline Backtest
 #
 # Two LONG strategies (pension account, no shorting, no leverage):
-#   BASELINE-A6: Gap-down sustained rise — buy local low, hold T+2
+#   BASELINE-A6: Gap-down sustained rise — buy local low, hold T+1
 #   BASELINE-C1: Multi-day reversal — prior 5d decline + gap-up, hold T+3
 #   COMBINED:    A6 + C1 portfolio (uncorrelated)
 #
@@ -55,16 +55,15 @@ except: pass
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 
-BACKTEST_START = '2025-09-15'
-BACKTEST_END   = '2026-09-12'
-OOS_CUTOFF     = '2026-01-01'
+BACKTEST_START = '2026-09-12'
+BACKTEST_END   = '2026-09-18'
 
 # A6 config
 A6_GAP_MIN_PCT   = 5.0      # gap-DOWN >= 5%
 A6_PRICE_MIN     = 10.0
 A6_TOP_N         = 5         # top 5 by abs(gap_pct)
 A6_PRE_FILTER_N  = 15        # scan top 15 before filtering
-A6_HOLD_DAYS     = 2         # T+2
+A6_HOLD_DAYS     = 1         # T+1 (E1/E1b: Sharpe 0.600 vs T+2 0.458)
 
 # C1 config
 C1_GAP_MIN_PCT     = 3.0    # gap-UP >= 3%
@@ -82,7 +81,7 @@ SKIP_BOUNCE_PCT = 0.15      # skip if price up >15% from open at fallback
 FLOAT_MIN      = 10_000_000
 CAPITAL        = 100_000
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 _BASE = "https://api.polygon.io"
 _TK_RE = re.compile(r'^[A-Z]{1,5}$')
 ET = pytz.timezone('America/New_York')
@@ -413,7 +412,7 @@ def run_backtest():
 
     print(f"\n{'='*80}")
     print(f"  AGENT 3 — BASELINE BACKTEST (LONG)")
-    print(f"  {BACKTEST_START} -> {BACKTEST_END}  |  OOS cutoff: {OOS_CUTOFF}")
+    print(f"  {BACKTEST_START} -> {BACKTEST_END}")
     print(f"  Universe: _FLOAT ({len(_FLOAT_SET)} tickers with float >= 10M, from {len(_FLOAT)} total)")
     print(f"  BASELINE-A6: gap-down >= {A6_GAP_MIN_PCT}%, sustained_rise, local_low ONLY (no fallback), T+{A6_HOLD_DAYS}")
     print(f"  BASELINE-C1: 5d decline >= {C1_DECLINE_5D_MIN*100:.0f}%, gap-up {C1_GAP_MIN_PCT}%-{C1_GAP_MAX_PCT}%, open entry, T+{C1_HOLD_DAYS}")
@@ -766,38 +765,8 @@ def build_result(trades, dates, label, hold_days):
     active_days = sum(1 for ds in daily_stats if ds['n_trades'] > 0)
     tpd = len(pnls) / active_days if active_days > 0 else 0
 
-    # OOS split
-    is_pnls = [t[pnl_key] for t in trades
-               if t.get(pnl_key) is not None and t['scan_date'] < OOS_CUTOFF]
-    oos_pnls = [t[pnl_key] for t in trades
-                if t.get(pnl_key) is not None and t['scan_date'] >= OOS_CUTOFF]
-    is_m = compute_metrics(is_pnls, f'{label} IS')
-    oos_m = compute_metrics(oos_pnls, f'{label} OOS')
-
-    degradation = None
-    if is_m['avg'] != 0 and is_m['n'] > 0 and oos_m['n'] > 0:
-        degradation = (oos_m['avg'] - is_m['avg']) / abs(is_m['avg']) * 100
-
-    # Status classification
-    status = 'DEAD'
-    if m['ci_lo'] > 0:
-        if (oos_m['ci_lo'] > 0 and oos_m['avg'] >= 3.0 and oos_m['sharpe'] >= 0.15
-                and m['wr'] >= 0.58 and degradation is not None and degradation > -50):
-            status = 'PENSION READY'
-        elif (oos_m['avg'] >= 3.0 and oos_m['sharpe'] >= 0.15
-              and is_m['n'] < 50):
-            status = 'NEAR MISS'
-        elif oos_m['n'] > 0 and oos_m['avg'] < is_m['avg'] * 0.6:
-            status = 'DEGRADED'
-        elif oos_m['avg'] < 3.0 or oos_m['ci_lo'] < 0:
-            status = 'DEAD'
-        else:
-            status = 'NEAR MISS'
-
     return {
         'label': label, 'trades': trades, 'metrics': m,
-        'is_metrics': is_m, 'oos_metrics': oos_m,
-        'degradation': degradation, 'status': status,
         'equity': equity, 'eq_dates': eq_dates,
         'daily_stats': daily_stats, 'max_dd': max_dd,
         'final_capital': running_capital, 'cum_nc': cum_nc,
@@ -871,14 +840,8 @@ def build_combined_result(a6_res, c1_res, dates):
     active_days = sum(1 for ds in daily_stats if ds['n_trades'] > 0)
     tpd = len(pnls) / active_days if active_days > 0 else 0
 
-    is_pnls = [t['combo_pnl'] for t in all_trades if t['scan_date'] < OOS_CUTOFF]
-    oos_pnls = [t['combo_pnl'] for t in all_trades if t['scan_date'] >= OOS_CUTOFF]
-    is_m = compute_metrics(is_pnls, 'COMBINED IS')
-    oos_m = compute_metrics(oos_pnls, 'COMBINED OOS')
-
     return {
         'label': 'COMBINED', 'trades': all_trades, 'metrics': m,
-        'is_metrics': is_m, 'oos_metrics': oos_m,
         'equity': equity, 'eq_dates': eq_dates,
         'daily_stats': daily_stats, 'max_dd': max_dd,
         'final_capital': running_capital, 'cum_nc': cum_nc,
@@ -927,32 +890,6 @@ def print_results(a6_res, c1_res, combo_res, dates):
     ]
     print()
     print(tabulate(tbl, headers=headers, tablefmt='simple', stralign='right'))
-
-    # ── OOS Validation ──
-    print(f"\n\n{'─'*80}")
-    print(f"  OOS VALIDATION  |  IS: {BACKTEST_START} -> {OOS_CUTOFF}  |  OOS: {OOS_CUTOFF} -> {BACKTEST_END}")
-    print(f"{'─'*80}")
-
-    for res in [a6_res, c1_res]:
-        im = res['is_metrics']
-        om = res['oos_metrics']
-        deg = res.get('degradation')
-        deg_str = f"{deg:+.0f}%" if deg is not None else 'N/A'
-        status = res.get('status', '?')
-        print(f"\n  {res['label']}:")
-        print(f"    IS  ({BACKTEST_START}->{OOS_CUTOFF}): n={im['n']}, avg={im['avg']:+.2f}%, "
-              f"Sharpe={im['sharpe']:.3f}, WR={im['wr']*100:.0f}%, "
-              f"CI [{im['ci_lo']:+.2f}, {im['ci_hi']:+.2f}]")
-        print(f"    OOS ({OOS_CUTOFF}->{BACKTEST_END}): n={om['n']}, avg={om['avg']:+.2f}%, "
-              f"Sharpe={om['sharpe']:.3f}, WR={om['wr']*100:.0f}%, "
-              f"CI [{om['ci_lo']:+.2f}, {om['ci_hi']:+.2f}]")
-        print(f"    IS->OOS degradation: {deg_str}")
-        if status == 'PENSION READY':
-            print(f"    -> ★ {status}")
-        elif status == 'NEAR MISS':
-            print(f"    -> ◇ {status}")
-        else:
-            print(f"    -> ✗ {status}")
 
     # ── Overlap analysis ──
     print(f"\n\n{'─'*80}")
@@ -1063,8 +1000,6 @@ def plot_results(a6_res, c1_res, combo_res, dates):
         ax.plot(eq_d, res['equity'], color=color, linewidth=2,
                 label=f'{res["label"]} (${res["final_capital"]:,.0f})')
     ax.axhline(CAPITAL, color='#999', ls='--', lw=0.8)
-    oos_dt = datetime.strptime(OOS_CUTOFF, '%Y-%m-%d')
-    ax.axvline(oos_dt, color='red', ls=':', lw=1, alpha=0.5, label='OOS cutoff')
     ax.set_title('Equity Curves (compounding)')
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
     ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'${x:,.0f}'))
@@ -1083,7 +1018,6 @@ def plot_results(a6_res, c1_res, combo_res, dates):
         ax.fill_between(eq_d, dd, 0, alpha=0.12, color=color)
         ax.plot(eq_d, dd, color=color, linewidth=1.5,
                 label=f'{res["label"]} ({dd.min():.1f}%)')
-    ax.axvline(oos_dt, color='red', ls=':', lw=1, alpha=0.5)
     ax.set_title('Drawdown')
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
     ax.legend(fontsize=7)
@@ -1150,7 +1084,6 @@ def plot_results(a6_res, c1_res, combo_res, dates):
         ax.plot(d_dates, cum, color=color, linewidth=2,
                 label=f'{res["label"]} (${res["cum_nc"]:+,.0f})')
     ax.axhline(0, color='#333', lw=0.8, ls=':')
-    ax.axvline(oos_dt, color='red', ls=':', lw=1, alpha=0.5, label='OOS cutoff')
     ax.set_title('Cumulative P&L (non-compounding, $100K/day)', fontsize=12, fontweight='bold')
     ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'${x:,.0f}'))
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
@@ -1162,36 +1095,6 @@ def plot_results(a6_res, c1_res, combo_res, dates):
     plt.show()
     print(f"  Saved: {p2}")
 
-    # ── Figure 3: IS vs OOS comparison bars ──
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    fig.suptitle('IS vs OOS Comparison', fontsize=12, fontweight='bold')
-
-    for idx, (metric, ylabel) in enumerate([('avg', 'Avg PnL (%)'),
-                                              ('sharpe', 'Sharpe'),
-                                              ('wr', 'Win Rate')]):
-        ax = axes[idx]
-        labels_arr = ['A6', 'C1']
-        is_vals = [a6_res['is_metrics'][metric], c1_res['is_metrics'][metric]]
-        oos_vals = [a6_res['oos_metrics'][metric], c1_res['oos_metrics'][metric]]
-        if metric == 'wr':
-            is_vals = [v * 100 for v in is_vals]
-            oos_vals = [v * 100 for v in oos_vals]
-        x = np.arange(len(labels_arr))
-        ax.bar(x - 0.2, is_vals, 0.35, color='#3498db', alpha=0.8, label='IS')
-        ax.bar(x + 0.2, oos_vals, 0.35, color='#e67e22', alpha=0.8, label='OOS')
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels_arr)
-        ax.set_ylabel(ylabel)
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.2, axis='y')
-        if metric != 'wr':
-            ax.axhline(0, color='#333', lw=0.8)
-
-    plt.tight_layout(rect=[0, 0, 1, 0.92])
-    p3 = os.path.join(BASE_DIR, 'agent3_baseline_isoos.png')
-    plt.savefig(p3, dpi=150, bbox_inches='tight')
-    plt.show()
-    print(f"  Saved: {p3}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

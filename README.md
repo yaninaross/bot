@@ -54,8 +54,8 @@ OHLCV (Polygon) → Microstructure (T&Q) → Stitch (master_inference) → Score
 
 ## Infrastructure
 
-- **GCS**: `gs://time-series-bucket-ys/` (Data/Inference_v2/, Algos/RA_MoE/)
-- **BQ**: `ys-time-series.scoring_logs.wf_optimization_results`
+- **GCS**: `gs://<GCS_BUCKET>/` (Data/Inference_v2/, Algos/RA_MoE/)
+- **BQ**: `<GCP_PROJECT>.scoring_logs.wf_optimization_results`
 - **Scripts**: All run as Colab cells (no `if __name__`, config vars at top)
 - **Seeds**: 15 per experiment (seed = exp*100 + 01-15)
 

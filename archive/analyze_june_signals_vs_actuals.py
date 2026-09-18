@@ -43,8 +43,8 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BQ_LOG_TABLE   = "ys-time-series.scoring_logs.live_predictions"
-BUCKET_NAME    = "time-series-bucket-ys"
+BQ_LOG_TABLE   = f"{GCP_PROJECT}.scoring_logs.live_predictions"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 OHLCV_DIR      = "Data/Inference"
 INFERENCE_DIR  = "Data/Inference_v2"
 

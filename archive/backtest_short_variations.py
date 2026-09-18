@@ -42,7 +42,7 @@ def _release_memory():
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 RESULTS_DIR   = "Algos/Results_all_v2"
 INFERENCE_DIR = "Data/Inference_v2"
 
@@ -69,7 +69,7 @@ ALL_FOLDS = FOLDS_A2 + FOLDS_A1
 FOLD_EXPERIMENTS    = {f: f'{f}_XSECTOR' for f in ALL_FOLDS}
 FOLD_MODEL_VERSIONS = {f: f'robust_wf_v12_short_{f}' for f in ALL_FOLDS}
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 BQ_ALLOWED_MODES = ('static', 'atr_sl', 'grace')
 
 MIN_H2_TRADES = 3

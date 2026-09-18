@@ -13,8 +13,8 @@
 # the router detects transitions.
 #
 # No BQ or GPU required. Colab-ready.
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/data/fold_{1..4}_{train,val,test}.npz
-#         gs://time-series-bucket-ys/Algos/RA_MoE/data/meta.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/data/fold_{1..4}_{train,val,test}.npz
+#         gs://{GCS_BUCKET}/Algos/RA_MoE/data/meta.npz
 
 import os, time, warnings, io
 import numpy as np
@@ -74,7 +74,7 @@ OUTPUT_DIR = '/tmp/ra_moe_data'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── GCS persistence ──
-GCS_BUCKET      = 'time-series-bucket-ys'
+GCS_BUCKET      = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX = 'Algos/RA_MoE/data'
 
 def _gcs_bucket():

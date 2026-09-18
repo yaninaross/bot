@@ -14,8 +14,8 @@ BTC and ETH prices lead crypto-correlated equities by 5-15 minutes. Adding BTC/E
 - 26 regime features (+4: BTC 60-bar return, BTC rolling vol, ETH-BTC spread, crypto-equity correlation)
 - Fold: 5 (train through 2026-06-13, val Jun 16 - Jul 15, test Jul 16 - Aug 16)
 - 99 tickers
-- GCS data: `gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_xasset_data/`
-- GCS models: `gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_xasset_models/`
+- GCS data: `gs://<GCS_BUCKET>/Algos/RA_MoE/short_L5_2_xasset_data/`
+- GCS models: `gs://<GCS_BUCKET>/Algos/RA_MoE/short_L5_2_xasset_models/`
 - BQ model_version: `spike_transformer_short_L5_2_xasset_fold5`
 
 ## Results (Backtest vs Baseline)

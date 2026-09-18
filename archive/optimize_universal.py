@@ -169,8 +169,8 @@ EVAL_START_DATE = cfg['eval_start']
 EVAL_END_DATE   = cfg['eval_end']
 RESULTS_DIR     = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
 
-BUCKET_NAME = "time-series-bucket-ys"
-POLYGON_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
+POLYGON_KEY = os.environ["POLYGON_API_KEY"]
 
 # ==============================================================================
 # ⚙️ PROD OPTIMIZATION GRIDS

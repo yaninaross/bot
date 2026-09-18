@@ -23,7 +23,7 @@ Usage:
 import sys
 from google.cloud import storage
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 SRC_TICKER  = "BITF"
 DST_TICKER  = "KEEL"
 

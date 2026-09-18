@@ -27,7 +27,7 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 OHLCV_DIR = "Data/Inference"
 TQ_DIR = "Data/TradesQuotes"
 PST = pytz.timezone('America/Los_Angeles')
@@ -79,7 +79,7 @@ RECENT_6M = pd.Timestamp('2025-12-01', tz='UTC')
 W = 140
 
 # ==============================================================================
-# T&Q TICKER UNIVERSE (from gsutil ls gs://time-series-bucket-ys/Data/TradesQuotes/)
+# T&Q TICKER UNIVERSE (from gsutil ls gs://{GCS_BUCKET}/Data/TradesQuotes/)
 # ==============================================================================
 TQ_RAW = [
     'ACHR', 'ALAB', 'AMD', 'APLD', 'ASTS', 'AVAV', 'BBAI', 'BE', 'BGDE',

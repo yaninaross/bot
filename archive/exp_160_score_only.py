@@ -51,7 +51,7 @@ try:
 except (ImportError, Exception):
     pass
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
@@ -94,7 +94,7 @@ PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 SPIKE_THRESHOLD = 0.10
 
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 GCS_RESULTS_PATH = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"

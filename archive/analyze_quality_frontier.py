@@ -23,7 +23,7 @@ from google.cloud import bigquery
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 MODEL_VERSION = 'robust_wf_v8'
 TEST_START = '2026-04-01'
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 MIN_TRADES = 2
 W = 120
 

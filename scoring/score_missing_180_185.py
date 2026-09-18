@@ -63,7 +63,7 @@ try:
 except (ImportError, Exception):
     pass
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 # ==============================================================================
 # GPU SETUP
@@ -100,7 +100,7 @@ TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 SPIKE_THRESHOLD   = 0.10
 SAMPLE_WEIGHT_CAP = 5.0
 
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
 OHLCV_DIR     = "Data/Inference"
 

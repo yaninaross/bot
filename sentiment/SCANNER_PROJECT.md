@@ -164,7 +164,7 @@ GCP_LOCATION     = "us-central1"
 GEMINI_MODEL     = "gemini-2.5-flash"
 CLAUDE_MODEL     = "claude-sonnet-4-6"
 CLAUDE_REGION    = "YOUR_REGION"
-BUCKET_NAME      = "time-series-bucket-ys"
+BUCKET_NAME      = "<GCS_BUCKET>"
 OUTPUT_DIR       = "Data/Scanner"
 BQ_SCANNER_TABLE = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
 POLYGON_API_KEY  = "YOUR_POLYGON_API_KEY"
@@ -227,7 +227,7 @@ Fallback price lookup (only used if Polygon fails) and earnings date verificatio
 Summary tables (one-line per candidate) + detailed cards with catalyst, reasoning, timeline, bull/bear cases, risk factors, and source articles.
 
 ### GCS
-`gs://time-series-bucket-ys/Data/Scanner/scan_YYYY-MM-DD.json`
+`gs://<GCS_BUCKET>/Data/Scanner/scan_YYYY-MM-DD.json`
 
 Contains: `scan_date`, `scan_time_pt`, `market_context`, `scan_results` (all 68 tickers), `deep_results` (top 15), `shortlist_long` (top 5), `shortlist_short` (top 5).
 

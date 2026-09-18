@@ -20,7 +20,7 @@
 # (each row has that ticker's specific sentiment insight).
 # Articles WITHOUT sentiment insights are stored with sentiment='none'.
 #
-# Writes: gs://time-series-bucket-ys/Data/Sentiment/{ticker}_news.parquet
+# Writes: gs://{GCS_BUCKET}/Data/Sentiment/{ticker}_news.parquet
 #
 # Incremental: detects existing output, fetches only articles newer than
 # the latest stored published_utc per ticker.
@@ -67,8 +67,8 @@ import matplotlib.pyplot as plt
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_OUT_DIR     = "Data/Sentiment"
 
 DATA_START = '2024-01-01'

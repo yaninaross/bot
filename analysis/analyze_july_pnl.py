@@ -12,7 +12,7 @@ import io
 from datetime import datetime
 from google.cloud import bigquery, storage as gcs_storage
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 EXIT_TIME_MIN = 780
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE', 'KEEL': 'KEEL'}
 W = 90
@@ -45,7 +45,7 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        dip_pct, max_wait_minutes, vol_filter_pct,
        val_a_avg_pnl, val_a_win_rate, val_a_count, val_a_freq,
        val_b_avg_pnl, opt_avg_pnl, is_ensemble
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE model_version IN ('robust_wf_v12', 'robust_wf_v12_stitched')
   AND survived_a = TRUE
   AND val_a_count >= 3
@@ -148,7 +148,7 @@ SELECT score_date, Ticker, experiment,
        ANY_VALUE(close) as close_price,
        ANY_VALUE(entry_minute) as entry_minute,
        COUNT(*) as n_seeds
-FROM `ys-time-series.scoring_logs.live_predictions`
+FROM `{GCP_PROJECT}.scoring_logs.live_predictions`
 WHERE score_date >= '2026-07-01' AND score_date <= '2026-07-16'
   AND strategy = 'S3'
   AND Signal = 'GO'

@@ -26,7 +26,7 @@ try:
 except (ImportError, Exception):
     pass
 
-BUCKET_NAME     = "time-series-bucket-ys"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_MICRO_DIR   = f"gs://{BUCKET_NAME}/Data/Inference/Microstructure"
 GCS_RAW_DIR     = f"gs://{BUCKET_NAME}/Data/TradesQuotes"
 GCS_OHLCV_DIR   = f"gs://{BUCKET_NAME}/Data/Inference"

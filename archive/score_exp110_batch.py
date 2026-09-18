@@ -71,7 +71,7 @@ HAS_SMH_RSI    = True
 TICKER_START_DATES = {'CORZ': '2024-01-25'}
 DATA_START_DATE    = "2022-01-01"
 
-BUCKET_NAME      = "time-series-bucket-ys"
+BUCKET_NAME      = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR    = "Data/Inference"
 GCS_MODEL_PATH   = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 GCS_RESULTS_PATH = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"

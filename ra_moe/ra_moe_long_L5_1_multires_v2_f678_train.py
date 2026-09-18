@@ -8,8 +8,8 @@
 #
 # ASL parameters copied from SHORT (gamma_neg=6.0, gamma_pos=0.1, clip=0.08).
 #
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/long_L5_1_multires_v2_data/fold_{6,7,8}_*.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/long_L5_1_multires_v2_models/fold_{6,7,8}/
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/long_L5_1_multires_v2_data/fold_{6,7,8}_*.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/long_L5_1_multires_v2_models/fold_{6,7,8}/
 #
 # Set FOLDS_TO_TRAIN to run one fold at a time if memory-constrained.
 #
@@ -44,7 +44,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DATA_DIR = '/tmp/ra_moe_long_L5_1_multires_v2_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/long_L5_1_multires_v2_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/long_L5_1_multires_v2_models'
 

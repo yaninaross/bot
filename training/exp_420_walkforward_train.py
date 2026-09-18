@@ -77,7 +77,7 @@ try:
 except (ImportError, Exception):
     pass
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 # ==============================================================================
 # GPU + MULTI-GPU SETUP
@@ -422,7 +422,7 @@ SAMPLE_WEIGHT_CAP = 5.0
 TARGET_POS_RATIO  = 0.25
 PREC_TOP_K        = 0.02
 
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
 OHLCV_DIR     = "Data/Inference"
 

@@ -54,9 +54,9 @@ except Exception:
 # ==============================================================================
 # CONSTANTS
 # ==============================================================================
-BUCKET_NAME      = "time-series-bucket-ys"
-BQ_TABLE         = "ys-time-series.scoring_logs.live_predictions"
-WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
+BUCKET_NAME      = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE         = f"{GCP_PROJECT}.scoring_logs.live_predictions"
+WF_BQ_TABLE      = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 INFERENCE_DIR    = "Data/Inference_v2"
 TAIL_DAYS        = 25
 PST              = pytz.timezone('America/Los_Angeles')

@@ -16,7 +16,7 @@ import io
 import pandas as pd
 from google.cloud import storage
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference"
 TEST_TICKERS = ['RIOT', 'CLSK', 'IREN']
 

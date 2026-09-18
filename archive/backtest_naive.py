@@ -47,7 +47,7 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
 TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}

@@ -48,7 +48,7 @@ import gc
 import numpy as np
 import pandas as pd
 
-BUCKET_NAME        = 'time-series-bucket-ys'
+BUCKET_NAME        = os.environ.get("GCS_BUCKET", "")
 GCS_MOIRAI_WEIGHTS = 'Algos/MOIRAI/weights'
 GCS_MOIRAI_PATHS   = 'Algos/MOIRAI/paths_v2'
 LOCAL_WEIGHTS_DIR   = '/tmp/moirai_weights'

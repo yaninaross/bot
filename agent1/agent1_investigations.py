@@ -64,7 +64,7 @@ if ENABLE_LLM_SECTORS:
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 
-GCP_PROJECT  = "yanina-everything"
+GCP_PROJECT  = os.environ.get("GCP_PROJECT", "")
 GCP_LOCATION = "us-central1"
 GEMINI_MODEL = "gemini-2.5-flash"
 SECTOR_BATCH_SIZE = 30
@@ -85,7 +85,7 @@ FALLBACK_BAR = 15
 
 INITIAL_CAPITAL = 100_000
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 _BASE = "https://api.polygon.io"
 _TK_RE = re.compile(r'^[A-Z]{1,5}$')
 ET = pytz.timezone('America/New_York')

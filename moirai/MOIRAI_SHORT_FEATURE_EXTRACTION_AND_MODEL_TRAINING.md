@@ -514,10 +514,10 @@ After running the full investigation, report these three numbers:
 | What | Path |
 |------|------|
 | Raw .npy paths | Same files as LONG pipeline |
-| Per-ticker feature CSVs | `gs://time-series-bucket-ys/Algos/MOIRAI/short_features/` |
+| Per-ticker feature CSVs | `gs://<GCS_BUCKET>/Algos/MOIRAI/short_features/` |
 | Master training CSV | `/tmp/moirai_short_features_master.csv` |
 | Frozen LightGBM model | `/tmp/moirai_lgbm_short_model.pkl` |
 | Scored OPT data (May-Jun) | `/tmp/moirai_short_opt_scored.csv` |
 | Scored TEST data (Jul) | `/tmp/moirai_short_test_scored.csv` |
-| Market data | `gs://time-series-bucket-ys/Data/Inference_v2/{TICKER}_master_inference.parquet` |
+| Market data | `gs://<GCS_BUCKET>/Data/Inference_v2/{TICKER}_master_inference.parquet` |
 | Diagnostics chart | `/tmp/moirai_lgbm_short_diagnostics.png` |

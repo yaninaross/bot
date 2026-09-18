@@ -27,7 +27,7 @@ ALL_ASSETS = list(set(TARGET_TICKERS + CONTEXT_ASSETS))
 
 HISTORY_START = "2022-01-01"
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 
 # GCS URI paths (gs://) — used for pandas read/write via gcsfs (FUSE-independent)
 GCS_OHLCV_DIR = f"gs://{BUCKET_NAME}/Data/Inference"
@@ -35,7 +35,7 @@ GCS_MICRO_DIR = f"gs://{BUCKET_NAME}/Data/Inference/Microstructure"
 GCS_RAW_DIR   = f"gs://{BUCKET_NAME}/Data/TradesQuotes"
 
 # FUSE paths — kept only for os.makedirs of local temp dirs (not for GCS reads/writes)
-BASE_PATH = "/gcs/time-series-bucket-ys"
+BASE_PATH = "/gcs/{GCS_BUCKET}"
 OHLCV_DIR = f"{BASE_PATH}/Data/Inference"
 MICRO_DIR = f"{BASE_PATH}/Data/Inference/Microstructure"
 RAW_DIR   = f"{BASE_PATH}/Data/TradesQuotes"
@@ -60,7 +60,7 @@ SKIP_TICKERS = set()
 for d in [OHLCV_DIR, MICRO_DIR, RAW_DIR]:
     os.makedirs(d, exist_ok=True)
 
-poly_client = RESTClient("2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
+poly_client = RESTClient(os.environ["POLYGON_API_KEY"])
 gcs_client  = gcs_storage.Client()
 
 

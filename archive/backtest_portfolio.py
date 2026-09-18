@@ -46,7 +46,7 @@ except (ImportError, Exception):
 # ==============================================================================
 VAL_START = '2026-01-02'
 VAL_END   = '2026-04-29'
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 EXIT_TIME_MIN = 780
 SLIPPAGE_PCT = 0.0015
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}

@@ -11,3 +11,16 @@ __pycache__/
 *.db-shm
 float_cache.json
 *.pkl
+
+# Large data files
+sentiment/scanner_optimization/results/a1_minute_bars.json
+sentiment/scanner_optimization/results/a1_grouped_daily.json
+sentiment/scanner_optimization/results/v3_minute_bars.json
+
+# Credentials
+*.pem
+*.key
+*.p12
+credentials.json
+service_account*.json
+sentiment/scanner_optimization/results/features/ticker_reference_cache.json

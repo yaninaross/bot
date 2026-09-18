@@ -49,7 +49,7 @@ SELECT ticker, experiment, seed, tpsl_mode, entry_minute,
        survived_a, survived_b, is_ensemble,
        grace_minutes, dip_pct, max_wait_minutes,
        vol_filter_pct, vix_threshold, tlt_crash, spy_ignore
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE model_version = 'robust_wf_v12'
   AND survived_a = TRUE AND val_a_count >= 3 AND val_a_avg_pnl > 0
   AND opt_avg_pnl > 0

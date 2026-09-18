@@ -52,9 +52,9 @@ except (ImportError, Exception):
 # CONFIG
 # ==============================================================================
 EVAL_DATE = '2026-09-10'
-POLYGON_API_KEY = "YOUR_POLYGON_API_KEY"
-BQ_PREMARKET = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
-BQ_DISCOVERY = "YOUR_GCP_PROJECT.scoring_logs.discovery_scanner"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BQ_PREMARKET = f"{GCP_PROJECT}.scoring_logs.premarket_scanner"
+BQ_DISCOVERY = f"{GCP_PROJECT}.scoring_logs.discovery_scanner"
 STOP_LOSS_PCT = 2.5
 ENTRY_TIME_ET = "09:30"
 FP_THRESHOLD = -1.0

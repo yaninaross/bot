@@ -52,7 +52,7 @@ from google.cloud import storage as gcs_storage, bigquery
 # ==============================================================================
 # 1. CONFIG
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 GCS_MODEL_DIR = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 INFERENCE_DIR = "Data/Inference_v2"
 
@@ -73,7 +73,7 @@ SEEDS_PER_FOLD = 15
 PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 BQ_ALLOWED_MODES = ('static', 'atr_sl', 'grace')
 
 MICRO_COLS = ['Spread', 'OBI', 'Volume_Delta', 'Trade_Count', 'Delta_Pct',

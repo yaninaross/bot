@@ -36,7 +36,7 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 INFERENCE_V2   = "Data/Inference_v2"
 INFERENCE_V1   = "Data/Inference"
 

@@ -2,7 +2,7 @@
 import pandas as pd
 from polygon import RESTClient
 
-poly = RESTClient("2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
+poly = RESTClient(os.environ["POLYGON_API_KEY"])
 
 end = pd.Timestamp.now(tz='UTC')
 start = end - pd.Timedelta(days=14)

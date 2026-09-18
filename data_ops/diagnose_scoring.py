@@ -64,7 +64,7 @@ from tensorflow.keras.regularizers import l2
 TEST_START = '2026-04-01'
 TEST_END   = '2026-05-24'
 
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR  = "Data/Inference"
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 STATS_DIR      = "Data/Inference"

@@ -66,8 +66,8 @@ CONTEXT_POLYGON_MAP = {
 
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
 
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR   = "Data/Inference"
 MICRO_DIR       = "Data/Inference/Microstructure"
 

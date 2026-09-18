@@ -108,7 +108,7 @@ CONTEXT_COLS.append('Time_Pos')
 
 ALL_COLS = ASSET_COLS + CONTEXT_COLS
 
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference"
 STATS_FILE_NAME = f"scaling_stats_experiment_{MODEL_ID}.json"
 

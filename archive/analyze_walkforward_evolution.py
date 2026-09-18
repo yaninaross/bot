@@ -45,7 +45,7 @@ from google.cloud import bigquery
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BQ_TABLE       = 'ys-time-series.scoring_logs.wf_optimization_results'
+BQ_TABLE       = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 MODEL_VERSION  = 'robust_wf_v12'
 DEPLOY_THRESHOLD = 0.018
 MIN_TRADES     = 3
@@ -617,7 +617,7 @@ if RUN_BACKTEST:
         from google.cloud import storage as gcs_storage
         from numba import jit
 
-        BUCKET_NAME = "time-series-bucket-ys"
+        BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
         INFERENCE_DIR = "Data/Inference_v2"
         TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
         EXIT_TIME_MIN = 780

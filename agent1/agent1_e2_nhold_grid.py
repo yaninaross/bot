@@ -1,8 +1,9 @@
-# %% Agent 1 — E2: N×Hold Grid + Capital Efficiency + Intraday Exit (CS+SD)
+# %% Agent 1 — E2: N×Hold Grid + Capital Efficiency + Intraday Exit + Gap Impact (CS+SD)
 #
 # Part 1: 5×4 grid — N = {1,2,3,4,5} × T = {T+2,T+3,T+4,T+5}
 # Part 2: Capital efficiency — N × {EOD,T+1,...,T+5} with pool-adjusted $
 # Part 3: Intraday exit timing — N × {10:00..20:00} hourly (RTH + after-hours)
+# Part 4: E3b Gap size impact — 6 buckets, deployed config (N=1, exit@17:00)
 #
 # Applied to CS+SD (forward benchmark from E1)
 # Capital model: fixed pool split by hold period
@@ -81,7 +82,16 @@ MAX_HOLD       = max(HOLD_DAYS)
 INTRADAY_EXITS = ['10:00', '11:00', '12:00', '13:00', '14:00', '15:00',
                   '16:00', '17:00', '18:00', '19:00', '20:00']
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+GAP_BUCKETS = [
+    ('5-8%',   0.05, 0.08),
+    ('8-12%',  0.08, 0.12),
+    ('12-20%', 0.12, 0.20),
+    ('20-30%', 0.20, 0.30),
+    ('30-50%', 0.30, 0.50),
+    ('50%+',   0.50, 999.0),
+]
+
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 _BASE = "https://api.polygon.io"
 _TK_RE = re.compile(r'^[A-Z]{1,5}$')
 ET = pytz.timezone('America/New_York')
@@ -1523,6 +1533,383 @@ def plot_intraday_exit(intra_grid, dates):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# E3b: GAP SIZE IMPACT ON PnL (Part 4)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Deployed config: N=1, exit@17:00. Question: does "biggest gap = best SHORT"
+# hold, or is there a sweet spot gap range that should change ranking?
+
+def gap_impact_analysis(cssd_daily, dates):
+    pk = 'pnl_1700'
+
+    print(f"\n\n{'='*100}")
+    print(f"  E3b: GAP SIZE IMPACT ON PnL")
+    print(f"  Config: N=1, exit@17:00 (deployed strategy)")
+    print(f"  Buckets: {', '.join(b[0] for b in GAP_BUCKETS)}")
+    print(f"  Pool: ${TOTAL_POOL:,.0f}")
+    print(f"{'='*100}")
+
+    all_trades = []
+    for dt in dates:
+        for t in cssd_daily.get(dt, [])[:1]:
+            p = t.get(pk)
+            if p is not None:
+                all_trades.append(t)
+
+    print(f"\n  Total N=1 trades with 17:00 exit data: {len(all_trades)}")
+
+    bucket_results = {}
+    for label, lo, hi in GAP_BUCKETS:
+        trades = [t for t in all_trades if lo <= t['gap_pct'] < hi]
+        pnls = [t[pk] for t in trades]
+        m = compute_metrics(pnls, label)
+
+        worst = min(trades, key=lambda t: t[pk]) if trades else None
+        best = max(trades, key=lambda t: t[pk]) if trades else None
+
+        cum = 0.0
+        daily_pnl = defaultdict(list)
+        for t in trades:
+            daily_pnl[t['scan_date']].append(t[pk])
+        for dt in dates:
+            dp = daily_pnl.get(dt, [])
+            if dp:
+                pos_size = TOTAL_POOL / len(dp)
+                cum += sum(pos_size * (r / 100) for r in dp)
+
+        bucket_results[label] = {
+            'metrics': m, 'trades': trades, 'cum_pool': cum,
+            'worst': worst, 'best': best,
+            'gap_lo': lo, 'gap_hi': hi,
+            'active_days': len(daily_pnl),
+        }
+
+    # ── Summary table ──
+    print(f"\n  ── METRICS BY GAP BUCKET ──")
+    headers = ['Bucket', 'n', 'Avg PnL', 'Median', 'Trim Mean', 'Sharpe',
+               'WR', 'PF', 'CI lo', 'CI hi', 'CI?', 'Pool $']
+    rows = []
+    for label, _, _ in GAP_BUCKETS:
+        r = bucket_results[label]
+        m = r['metrics']
+        rows.append([
+            label, m['n'], f"{m['avg']:+.2f}%", f"{m['med']:+.2f}%",
+            f"{m['trimmed_mean']:+.2f}%", f"{m['sharpe']:.3f}",
+            f"{m['wr']*100:.0f}%", f"{m['pf']:.2f}",
+            f"{m['ci_lo']:+.2f}", f"{m['ci_hi']:+.2f}",
+            '✓' if m['ci_lo'] > 0 else '✗',
+            f"${r['cum_pool']:+,.0f}",
+        ])
+    print(tabulate(rows, headers=headers, tablefmt='simple', stralign='right'))
+
+    # ── Worst/best per bucket ──
+    print(f"\n  ── WORST & BEST TRADE PER BUCKET ──")
+    for label, _, _ in GAP_BUCKETS:
+        r = bucket_results[label]
+        if r['worst']:
+            w = r['worst']
+            b = r['best']
+            print(f"    {label:>8s}:  worst = {w['ticker']:>6s} {w['scan_date']} "
+                  f"gap={w['gap_pct']*100:>6.1f}% pnl={w[pk]:>+8.2f}%  |  "
+                  f"best = {b['ticker']:>6s} {b['scan_date']} "
+                  f"gap={b['gap_pct']*100:>6.1f}% pnl={b[pk]:>+8.2f}%")
+        else:
+            print(f"    {label:>8s}:  no trades")
+
+    # ── Monotonicity test ──
+    print(f"\n  ── MONOTONICITY TEST ──")
+    print(f"  Question: does bigger gap → better SHORT PnL?")
+    avgs = []
+    sharpes = []
+    for label, _, _ in GAP_BUCKETS:
+        m = bucket_results[label]['metrics']
+        avgs.append(m['avg'])
+        sharpes.append(m['sharpe'])
+    avg_diffs = [avgs[i+1] - avgs[i] for i in range(len(avgs)-1)]
+    sharpe_diffs = [sharpes[i+1] - sharpes[i] for i in range(len(sharpes)-1)]
+    avg_mono = all(d > 0 for d in avg_diffs)
+    avg_anti = all(d < 0 for d in avg_diffs)
+    sharpe_mono = all(d > 0 for d in sharpe_diffs)
+    sharpe_anti = all(d < 0 for d in sharpe_diffs)
+
+    labels = [b[0] for b in GAP_BUCKETS]
+    print(f"    Avg PnL trend:  {'→'.join(f'{a:+.1f}' for a in avgs)}")
+    if avg_mono:
+        print(f"    → MONOTONIC INCREASING: bigger gap = better fade ✓")
+    elif avg_anti:
+        print(f"    → MONOTONIC DECREASING: bigger gap = worse fade ✗")
+    else:
+        best_bucket_idx = int(np.argmax(avgs))
+        print(f"    → NON-MONOTONIC: sweet spot at {labels[best_bucket_idx]} "
+              f"({avgs[best_bucket_idx]:+.2f}%)")
+
+    print(f"    Sharpe trend:   {'→'.join(f'{s:.3f}' for s in sharpes)}")
+    if sharpe_mono:
+        print(f"    → MONOTONIC INCREASING: bigger gap = more reliable ✓")
+    elif sharpe_anti:
+        print(f"    → MONOTONIC DECREASING: bigger gap = less reliable ✗")
+    else:
+        best_sharpe_idx = int(np.argmax(sharpes))
+        print(f"    → NON-MONOTONIC: Sharpe peak at {labels[best_sharpe_idx]} "
+              f"({sharpes[best_sharpe_idx]:.3f})")
+
+    # ── Correlation: gap_pct vs PnL ──
+    gap_vals = np.array([t['gap_pct'] * 100 for t in all_trades])
+    pnl_vals = np.array([t[pk] for t in all_trades])
+    if len(gap_vals) > 2:
+        corr = np.corrcoef(gap_vals, pnl_vals)[0, 1]
+        print(f"\n    Correlation (gap% vs PnL): r = {corr:+.3f}")
+        if abs(corr) < 0.1:
+            print(f"    → WEAK: gap size has little linear effect on PnL")
+        elif corr > 0.1:
+            print(f"    → POSITIVE: bigger gaps fade MORE (supports current ranking)")
+        else:
+            print(f"    → NEGATIVE: bigger gaps fade LESS (ranking may be wrong)")
+
+    # ── What-if: filter to optimal bucket only ──
+    print(f"\n  ── WHAT-IF: TRADE ONLY OPTIMAL BUCKET ──")
+    best_sharpe_bucket = max(bucket_results.items(),
+                             key=lambda x: x[1]['metrics']['sharpe'] if x[1]['metrics']['n'] >= 10 else -999)
+    best_dollar_bucket = max(bucket_results.items(),
+                             key=lambda x: x[1]['cum_pool'] if x[1]['metrics']['n'] >= 10 else -999)
+
+    for lbl_type, (blabel, br) in [('Best Sharpe bucket', best_sharpe_bucket),
+                                    ('Best Pool$ bucket', best_dollar_bucket)]:
+        m = br['metrics']
+        print(f"\n    {lbl_type}: {blabel}")
+        print(f"      n={m['n']}  avg={m['avg']:+.2f}%  Sharpe={m['sharpe']:.3f}  "
+              f"WR={m['wr']*100:.0f}%  PF={m['pf']:.2f}")
+        print(f"      Pool $: ${br['cum_pool']:+,.0f}  |  "
+              f"CI [{m['ci_lo']:+.2f}, {m['ci_hi']:+.2f}] "
+              f"{'✓' if m['ci_lo'] > 0 else '✗'}")
+        print(f"      Active days: {br['active_days']} / {len(dates)} "
+              f"({br['active_days']/len(dates)*100:.0f}%)")
+
+    # ── All trades (no bucket restriction) baseline ──
+    m_all = compute_metrics([t[pk] for t in all_trades], 'All')
+    cum_all = 0.0
+    daily_all = defaultdict(list)
+    for t in all_trades:
+        daily_all[t['scan_date']].append(t[pk])
+    for dt in dates:
+        dp = daily_all.get(dt, [])
+        if dp:
+            cum_all += sum((TOTAL_POOL / len(dp)) * (r / 100) for r in dp)
+
+    print(f"\n    Baseline (all gaps, N=1 @17:00):")
+    print(f"      n={m_all['n']}  avg={m_all['avg']:+.2f}%  "
+          f"Sharpe={m_all['sharpe']:.3f}  WR={m_all['wr']*100:.0f}%  "
+          f"Pool $: ${cum_all:+,.0f}")
+
+    # ── Should ranking change? ──
+    print(f"\n  {'═'*80}")
+    print(f"  VERDICT: SHOULD RANKING CHANGE?")
+    print(f"  {'═'*80}")
+
+    best_avg_idx = int(np.argmax(avgs))
+    best_sharpe_idx = int(np.argmax(sharpes))
+    biggest_is_best_avg = best_avg_idx == len(avgs) - 1
+    biggest_is_best_sharpe = best_sharpe_idx == len(sharpes) - 1
+
+    if biggest_is_best_avg and biggest_is_best_sharpe:
+        print(f"  → KEEP CURRENT RANKING: biggest gap wins on BOTH avg PnL and Sharpe")
+    elif biggest_is_best_avg or biggest_is_best_sharpe:
+        winner = 'avg PnL' if biggest_is_best_avg else 'Sharpe'
+        other = 'Sharpe' if biggest_is_best_avg else 'avg PnL'
+        other_best = labels[best_sharpe_idx] if biggest_is_best_avg else labels[best_avg_idx]
+        print(f"  → MIXED: biggest gap wins on {winner}, "
+              f"but {other_best} wins on {other}")
+        print(f"    Consider: keep biggest-gap ranking but ADD a gap filter "
+              f"to exclude weaker buckets")
+    else:
+        print(f"  → CONSIDER RE-RANKING: biggest gap is NOT best on either metric")
+        print(f"    Best avg PnL: {labels[best_avg_idx]} ({avgs[best_avg_idx]:+.2f}%)")
+        print(f"    Best Sharpe:  {labels[best_sharpe_idx]} ({sharpes[best_sharpe_idx]:.3f})")
+        print(f"    BUT: restricting to one bucket reduces trade frequency drastically")
+
+    # ── Dollar contribution: which buckets make/lose money? ──
+    print(f"\n  ── DOLLAR CONTRIBUTION BY BUCKET ──")
+    total_pool = sum(r['cum_pool'] for r in bucket_results.values())
+    for label, _, _ in GAP_BUCKETS:
+        r = bucket_results[label]
+        pct = r['cum_pool'] / total_pool * 100 if total_pool != 0 else 0
+        bar = '█' * max(1, int(abs(pct) / 3))
+        sign = '+' if r['cum_pool'] >= 0 else '-'
+        print(f"    {label:>8s}:  ${r['cum_pool']:>+10,.0f}  "
+              f"({pct:>+5.1f}%)  {bar}")
+
+    print()
+    return bucket_results
+
+
+def plot_gap_impact(bucket_results, all_trades_data, dates):
+    try:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        BASE_DIR = os.getcwd()
+
+    pk = 'pnl_1700'
+    labels = [b[0] for b in GAP_BUCKETS]
+    x = np.arange(len(labels))
+
+    # ── Figure 1: 3-panel — Avg PnL, Sharpe, Pool $ by bucket ──
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+    fig.suptitle(f'E3b: Gap Size Impact — CS+SD, N=1, exit@17:00\n'
+                 f'{dates[0]} → {dates[-1]}',
+                 fontsize=12, fontweight='bold')
+
+    avgs = [bucket_results[l]['metrics']['avg'] for l in labels]
+    ci_los = [bucket_results[l]['metrics']['ci_lo'] for l in labels]
+    ci_his = [bucket_results[l]['metrics']['ci_hi'] for l in labels]
+    errs_lo = [a - c for a, c in zip(avgs, ci_los)]
+    errs_hi = [c - a for a, c in zip(avgs, ci_his)]
+
+    ax = axes[0]
+    colors_bar = ['#e74c3c' if a < 0 else '#27ae60' for a in avgs]
+    ax.bar(x, avgs, color=colors_bar, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax.errorbar(x, avgs, yerr=[errs_lo, errs_hi], fmt='none', ecolor='black',
+                capsize=4, linewidth=1.5)
+    ax.axhline(0, color='#333', lw=0.8, ls=':')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9, rotation=30)
+    ax.set_ylabel('Avg PnL (%)')
+    ax.set_title('Avg PnL by Gap Bucket', fontweight='bold')
+    for i, v in enumerate(avgs):
+        n = bucket_results[labels[i]]['metrics']['n']
+        ax.text(i, v + (max(avgs) * 0.05 if v >= 0 else min(avgs) * 0.05),
+                f'n={n}', ha='center', va='bottom' if v >= 0 else 'top', fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    sharpes = [bucket_results[l]['metrics']['sharpe'] for l in labels]
+    ax = axes[1]
+    colors_sh = ['#e74c3c' if s < 0.2 else '#f39c12' if s < 0.5 else '#27ae60'
+                 for s in sharpes]
+    ax.bar(x, sharpes, color=colors_sh, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax.axhline(0, color='#333', lw=0.8, ls=':')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9, rotation=30)
+    ax.set_ylabel('Sharpe Ratio')
+    ax.set_title('Sharpe by Gap Bucket', fontweight='bold')
+    best_sh_idx = int(np.argmax(sharpes))
+    ax.bar(best_sh_idx, sharpes[best_sh_idx], color='gold', alpha=0.9,
+           edgecolor='black', linewidth=1.5)
+    for i, v in enumerate(sharpes):
+        ax.text(i, v + 0.02, f'{v:.3f}', ha='center', va='bottom', fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    pools = [bucket_results[l]['cum_pool'] / 1000 for l in labels]
+    ax = axes[2]
+    colors_p = ['#e74c3c' if p < 0 else '#27ae60' for p in pools]
+    ax.bar(x, pools, color=colors_p, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax.axhline(0, color='#333', lw=0.8, ls=':')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9, rotation=30)
+    ax.set_ylabel('Pool PnL ($K)')
+    ax.set_title(f'Pool $ by Gap Bucket (${TOTAL_POOL/1000:.0f}K)', fontweight='bold')
+    for i, v in enumerate(pools):
+        ax.text(i, v + (max(pools) * 0.03), f'${v:+.0f}K', ha='center',
+                va='bottom', fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.90])
+    p1 = os.path.join(BASE_DIR, 'agent1_e3b_gap_buckets.png')
+    plt.savefig(p1, dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f"\n  Saved: {p1}")
+
+    # ── Figure 2: Scatter — gap_pct vs PnL with trend line ──
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig.suptitle('Gap Size vs PnL — Individual Trades', fontsize=12, fontweight='bold')
+
+    gap_vals = np.array([t['gap_pct'] * 100 for t in all_trades_data])
+    pnl_vals = np.array([t[pk] for t in all_trades_data])
+
+    ax = axes[0]
+    scatter_colors = ['#27ae60' if p > 0 else '#e74c3c' for p in pnl_vals]
+    ax.scatter(gap_vals, pnl_vals, c=scatter_colors, alpha=0.5, s=25, edgecolors='none')
+    if len(gap_vals) > 2:
+        z = np.polyfit(gap_vals, pnl_vals, 1)
+        p_line = np.poly1d(z)
+        x_line = np.linspace(gap_vals.min(), gap_vals.max(), 100)
+        ax.plot(x_line, p_line(x_line), 'k--', lw=2, alpha=0.7,
+                label=f'Trend: slope={z[0]:+.3f}')
+        corr = np.corrcoef(gap_vals, pnl_vals)[0, 1]
+        ax.text(0.05, 0.95, f'r = {corr:+.3f}\nn = {len(gap_vals)}',
+                transform=ax.transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+    ax.axhline(0, color='#333', lw=0.8, ls=':')
+    ax.set_xlabel('Gap %')
+    ax.set_ylabel('PnL @ 17:00 (%)')
+    ax.set_title('All Trades', fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1]
+    gap_capped = gap_vals[gap_vals <= 30]
+    pnl_capped = pnl_vals[gap_vals <= 30]
+    scatter_colors2 = ['#27ae60' if p > 0 else '#e74c3c' for p in pnl_capped]
+    ax.scatter(gap_capped, pnl_capped, c=scatter_colors2, alpha=0.5, s=25, edgecolors='none')
+    if len(gap_capped) > 2:
+        z2 = np.polyfit(gap_capped, pnl_capped, 1)
+        p_line2 = np.poly1d(z2)
+        x_line2 = np.linspace(gap_capped.min(), gap_capped.max(), 100)
+        ax.plot(x_line2, p_line2(x_line2), 'k--', lw=2, alpha=0.7,
+                label=f'Trend: slope={z2[0]:+.3f}')
+        corr2 = np.corrcoef(gap_capped, pnl_capped)[0, 1]
+        ax.text(0.05, 0.95, f'r = {corr2:+.3f}\nn = {len(gap_capped)}',
+                transform=ax.transAxes, fontsize=10, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+    ax.axhline(0, color='#333', lw=0.8, ls=':')
+    ax.set_xlabel('Gap %')
+    ax.set_ylabel('PnL @ 17:00 (%)')
+    ax.set_title('Zoomed: Gap <= 30% (excludes outliers)', fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+    p2 = os.path.join(BASE_DIR, 'agent1_e3b_gap_scatter.png')
+    plt.savefig(p2, dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f"  Saved: {p2}")
+
+    # ── Figure 3: Win rate + trade count distribution ──
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle('Gap Bucket Profile', fontsize=12, fontweight='bold')
+
+    wrs = [bucket_results[l]['metrics']['wr'] * 100 for l in labels]
+    ax = axes[0]
+    ax.bar(x, wrs, color='#3498db', alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax.axhline(50, color='#e74c3c', ls='--', lw=1, alpha=0.6, label='50% baseline')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9, rotation=30)
+    ax.set_ylabel('Win Rate (%)')
+    ax.set_ylim(0, 100)
+    ax.set_title('Win Rate by Bucket', fontweight='bold')
+    for i, v in enumerate(wrs):
+        ax.text(i, v + 1.5, f'{v:.0f}%', ha='center', fontsize=9)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    ns = [bucket_results[l]['metrics']['n'] for l in labels]
+    ax = axes[1]
+    ax.bar(x, ns, color='#9b59b6', alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=9, rotation=30)
+    ax.set_ylabel('Trade Count')
+    ax.set_title('Trade Distribution by Gap Size', fontweight='bold')
+    total_n = sum(ns)
+    for i, v in enumerate(ns):
+        ax.text(i, v + 0.5, f'{v}\n({v/total_n*100:.0f}%)', ha='center', fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
+    p3 = os.path.join(BASE_DIR, 'agent1_e3b_gap_profile.png')
+    plt.savefig(p3, dpi=150, bbox_inches='tight')
+    plt.show()
+    print(f"  Saved: {p3}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # RUN
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1539,3 +1926,9 @@ plot_capital_efficiency(cap_grid, dates)
 # Part 3: Intraday exit timing (N × 10:00..20:00 hourly, including after-hours)
 intra_grid = intraday_exit_analysis(cssd_daily, dates)
 plot_intraday_exit(intra_grid, dates)
+
+# Part 4: E3b Gap size impact (N=1, exit@17:00 — deployed config)
+bucket_results = gap_impact_analysis(cssd_daily, dates)
+all_n1_trades = [t for dt in dates for t in cssd_daily.get(dt, [])[:1]
+                 if t.get('pnl_1700') is not None]
+plot_gap_impact(bucket_results, all_n1_trades, dates)

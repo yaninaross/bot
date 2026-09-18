@@ -45,7 +45,7 @@ TEST_START_DATE = "2026-01-01"
 TEST_END_DATE   = "2026-04-18"
 
 RESULTS_DIR = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 
 # ==============================================================================
 # OPTIMIZATION GRIDS

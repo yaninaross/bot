@@ -5,7 +5,7 @@ Checks GCS for models, stats JSON, and result CSVs for each seed × ticker.
 
 from google.cloud import storage
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 MODEL_PATH  = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 STATS_DIR   = "Data/Inference"
 

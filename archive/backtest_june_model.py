@@ -80,8 +80,8 @@ MIN_TRADES       = 3
 DEPLOY_THRESHOLD = 0.018
 MIN_SEEDS        = 3
 
-BUCKET_NAME    = "time-series-bucket-ys"
-BQ_TABLE       = "ys-time-series.scoring_logs.wf_optimization_results"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE       = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 INFERENCE_DIR  = "Data/Inference_v2"
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 

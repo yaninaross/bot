@@ -25,8 +25,8 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 DRY_RUN = False
 
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_RAW_DIR     = f"gs://{BUCKET_NAME}/Data/TradesQuotes"
 
 SCORED_TICKERS = {

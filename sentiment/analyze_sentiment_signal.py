@@ -34,8 +34,8 @@
 #   - max upside / max downside in each window
 #   - EOD return
 #
-# Reads:  gs://time-series-bucket-ys/Data/Sentiment/{ticker}_news.parquet
-#         gs://time-series-bucket-ys/Data/Inference_v2/{ticker}_master_inference.parquet
+# Reads:  gs://{GCS_BUCKET}/Data/Sentiment/{ticker}_news.parquet
+#         gs://{GCS_BUCKET}/Data/Inference_v2/{ticker}_master_inference.parquet
 #
 # Colab-ready, config vars at top.
 
@@ -77,7 +77,7 @@ import matplotlib.dates as mdates
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 SENTIMENT_DIR = "Data/Sentiment"
 INFERENCE_DIR = "Data/Inference_v2"
 

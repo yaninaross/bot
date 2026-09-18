@@ -11,8 +11,8 @@
 # LONG families:  long_spike_prob_2/3/4/5pct, long_direction_pct
 # SHORT families: short_dump_prob_2/3/4/5pct, short_direction_pct
 #
-# Input:  gs://time-series-bucket-ys/Algos/MOIRAI/paths_v2/path_validation_v2_summary.parquet
-# Output: gs://time-series-bucket-ys/Algos/MOIRAI/optimizer_v2/
+# Input:  gs://{GCS_BUCKET}/Algos/MOIRAI/paths_v2/path_validation_v2_summary.parquet
+# Output: gs://{GCS_BUCKET}/Algos/MOIRAI/optimizer_v2/
 # ==============================================================================
 
 import os, time, gc
@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-BUCKET_NAME = 'time-series-bucket-ys'
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 GCS_SUMMARY = 'Algos/MOIRAI/paths_v2/path_validation_v2_summary.parquet'
 GCS_INFER   = 'Data/Inference_v2/{ticker}_master_inference.parquet'
 GCS_OUTPUT  = 'Algos/MOIRAI/optimizer_v2'

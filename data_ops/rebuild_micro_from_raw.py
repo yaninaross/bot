@@ -45,7 +45,7 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 GCS_RAW_DIR = "Data/TradesQuotes"
 GCS_MICRO_DIR  = "Data/Inference/Microstructure"
 GCS_OHLCV_DIR  = "Data/Inference"

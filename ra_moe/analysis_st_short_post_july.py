@@ -47,7 +47,7 @@ from google.cloud import storage as gcs_storage
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
 
 TEST_START = '2026-04-01'

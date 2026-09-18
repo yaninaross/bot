@@ -23,7 +23,7 @@ from scipy import stats
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE = Path("/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization")
+BASE = Path("os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization")
 DATA = BASE / "results" / "v2_features_full.csv"
 OUT_JSON = BASE / "results" / "v3_e3_e6_e10_results.json"
 

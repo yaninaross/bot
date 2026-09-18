@@ -97,7 +97,7 @@ Same as Exp 180-185:
 - COIN — may exist, need to check
 - HOOD — may exist, need to check
 
-**Check:** `gs://time-series-bucket-ys/Data/Inference_v2/{ticker}/` for each candidate.
+**Check:** `gs://<GCS_BUCKET>/Data/Inference_v2/{ticker}/` for each candidate.
 
 ## Implementation Steps
 
@@ -125,13 +125,13 @@ Output: `exp_220_walkforward_train.py`
 
 ### Step 4: Train (user runs)
 6 folds × 15 seeds = 90 model instances.
-Models saved to: `gs://time-series-bucket-ys/Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction/`
+Models saved to: `gs://<GCS_BUCKET>/Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction/`
 Named: `UNIVERSAL_S{seed}_M{exp_id}.h5`
 
 ### Step 5: Score
 Add Exp 220-225 to `score_all_experiments.py`.
 Score the full universe (72+ tickers) with the new models.
-Results to: `gs://time-series-bucket-ys/Algos/Results_scored_20260703/` (or new dated folder).
+Results to: `gs://<GCS_BUCKET>/Algos/Results_scored_20260703/` (or new dated folder).
 
 ### Step 6: WF optimize
 Create `optimize_wf_v12_220.py` through `_225.py` (copy from existing per-fold scripts).

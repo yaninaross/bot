@@ -29,7 +29,7 @@ except (ImportError, Exception):
 warnings.filterwarnings('ignore')
 
 PST = pytz.timezone('America/Los_Angeles')
-BUCKET = "time-series-bucket-ys"
+BUCKET = os.environ.get("GCS_BUCKET", "")
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
 SPIKE_THRESHOLDS = [0.05, 0.08, 0.10]

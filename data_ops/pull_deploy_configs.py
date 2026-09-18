@@ -47,7 +47,7 @@ WITH base AS (
       + val_b_count / GREATEST(TIMESTAMP_DIFF(
         PARSE_TIMESTAMP('%Y-%m-%d', val_b_end), PARSE_TIMESTAMP('%Y-%m-%d', val_b_start), DAY) / 30.44, 0.5)
       ) / 2.0 - 3.0) / 2.5, 2)) AS nq3
-  FROM `ys-time-series.scoring_logs.wf_optimization_results`
+  FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
   WHERE model_version = '{MODEL_VERSION}'
     AND survived_a = TRUE
     AND ((val_a_avg_pnl >= {ASYM_HIGH} AND val_b_avg_pnl >= {ASYM_LOW})

@@ -38,7 +38,7 @@ except (ImportError, Exception):
 
 gcs_client = storage.Client()
 bq_client  = bigquery.Client()
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 PST = pytz.timezone('America/Los_Angeles')
 
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
@@ -49,7 +49,7 @@ CLEAN_EXP_BASES = ('105_DEFENSE', '106_DEFENSE', '152_XSECTOR', '160_XSECTOR',
                    '170_XSECTOR', '171_XSECTOR', '172_XSECTOR',
                    '173_XSECTOR', '174_XSECTOR', '175_XSECTOR')
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 DEPLOY_PNL_THRESHOLD = 0.018
 MIN_TRADES = 3
 

@@ -20,7 +20,7 @@ except (ImportError, Exception):
 
 from google.cloud import bigquery
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 V2_EXPERIMENTS = ['105_DEFENSE', '106_DEFENSE', '152_XSECTOR']
 
 MIN_VAL_PNL    = 0.018    # 1.8%

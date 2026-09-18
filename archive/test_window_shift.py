@@ -43,7 +43,7 @@ from google.cloud import storage
 # ==============================================================================
 # CONSTANTS
 # ==============================================================================
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR  = "Data/Inference"
 GCS_MODEL_PATH = "Algos/to_deploy/Saved_models_v2/UNIVERSAL/Direction"
 TIME_STEPS     = 240

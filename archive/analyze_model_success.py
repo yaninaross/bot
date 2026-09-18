@@ -25,7 +25,7 @@ except (ImportError, Exception):
 
 from google.cloud import bigquery
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 DEPLOY_PNL_THRESHOLD = 0.018
 W = 110
 

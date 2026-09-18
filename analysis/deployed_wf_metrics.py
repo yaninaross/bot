@@ -40,7 +40,7 @@ except (ImportError, Exception):
 # CONFIG
 # ==============================================================================
 MODEL_VERSION = 'robust_wf_v12'
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 DEPLOY_THRESHOLD = 0.018
 MIN_TRADES = 3
 W = 120

@@ -32,7 +32,7 @@ SELECT
   close,
   bar_timestamp,
   run_timestamp
-FROM `ys-time-series.scoring_logs.live_predictions`
+FROM `{GCP_PROJECT}.scoring_logs.live_predictions`
 WHERE CAST(score_date AS STRING) IN ('2026-04-27', '2026-04-28')
 ORDER BY score_date, run_timestamp, experiment, ticker
 """
@@ -44,7 +44,7 @@ if len(df) == 0:
     print("Sampling table to see score_date values:")
     sample = client.query("""
         SELECT DISTINCT score_date, TYPEOF(score_date) as dtype
-        FROM `ys-time-series.scoring_logs.live_predictions`
+        FROM `{GCP_PROJECT}.scoring_logs.live_predictions`
         ORDER BY score_date DESC LIMIT 10
     """).to_dataframe()
     print(sample)

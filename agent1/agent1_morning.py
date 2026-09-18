@@ -35,7 +35,7 @@ TOP_N = 5                     # select top N per day
 
 LOG_FILE = 'agent1_picks.csv' # append picks here each day
 
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 _BASE = "https://api.polygon.io"
 _TK_RE = re.compile(r'^[A-Z]{1,5}$')
 

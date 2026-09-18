@@ -36,8 +36,8 @@ from google.cloud import storage as gcs_storage
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_RAW_DIR     = "Data/TradesQuotes"
 GCS_MICRO_DIR   = "Data/Inference/Microstructure"
 GCS_OHLCV_DIR   = "Data/Inference"

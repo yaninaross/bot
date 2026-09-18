@@ -38,8 +38,8 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_OHLCV_DIR   = f"gs://{BUCKET_NAME}/Data/Inference"
 
 # All tickers from daily_ohlcv_1 + daily_ohlcv_2

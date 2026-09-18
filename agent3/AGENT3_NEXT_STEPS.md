@@ -39,17 +39,20 @@ ENTRY:          First local low detection
                 SKIP:     if price at bar 15 is UP more than 15%
                           from open — bounce already happened
 
-HOLD:           T+2 close
+HOLD:           T+1 close  [UPDATED from T+2 per E1/E1b analysis]
                 (regular session closing price
-                 2 trading days after entry date,
+                 1 trading day after entry date,
                  skip weekends and holidays)
+                E1 result: T+1 Sharpe 0.600 vs T+2 0.458 (+31%)
+                E1b result: pre-market 08:00 peak Sharpe 0.703, WR 79%
+                            but 16:00 close used for execution safety
 
 STOP LOSS:      None
 
 SELECTION:      Top 5 by abs(gap_pct) descending
                 (largest gap-down candidates first)
 
-PNL FORMULA:    (t2_close - entry_price) / entry_price * 100
+PNL FORMULA:    (t1_close - entry_price) / entry_price * 100
 
 CAPITAL MODEL:  $100,000 per day, equal split across active trades,
                 non-compounding
@@ -95,6 +98,109 @@ PNL FORMULA:    (t3_close - entry_price) / entry_price * 100
 CAPITAL MODEL:  $100,000 per day, equal split across active trades,
                 non-compounding
 ```
+
+---
+
+## EXPERIMENT RESULTS: E1 Hold Period + E1b Exit Hour (2026-09-15)
+
+### E1: Hold Period Grid
+
+A6 N×Hold (5×6 = 30 cells):
+- T+1 dominates ALL N values (Sharpe peak at T+1 for every row)
+- Best cell: N=2 T+1 — Sharpe 0.600, +5.29%, WR 67%, n=57, IS/OOS stable (+4.88/+5.44%)
+- Baseline T+2 was suboptimal (Sharpe 0.458) → UPDATED to T+1
+- Sharpe degrades monotonically past T+1: 0.600 → 0.540 → 0.399 → 0.326 → 0.331
+- Pool-adjusted $: EOD best ($150K, 1 pool) but lower Sharpe (0.508). T+1 = $130K, 2 pools.
+
+C1 Hold (6 cells):
+- T+3 baseline CONFIRMED optimal (Sharpe 0.394, +5.56%, WR 62%, n=173)
+- Clean inverted-U: EOD(0.227) → T+1(0.342) → T+2(0.384) → T+3(0.394) → T+4(0.326) → T+5(0.227)
+- Pool $ best at T+2 ($73K vs $69K T+3) — marginal, keep T+3 for Sharpe
+
+### E1b: T+1 Exit Hour (A6 only)
+
+N × 18 exit hours (04:00-20:00, pre-market + RTH + after-hours):
+- Pre-market peak: N=4 @08:00 — Sharpe 0.703, +4.29%, WR 79%, n=62
+  IS Sharpe 0.743 → OOS 0.676 (stable)
+- All N values best at 06:00-08:00 pre-market
+- WR 75-79% in pre-market vs 58-67% in RTH — overnight bounce very reliable
+- RTH open dip at 09:30 (~-0.10 Sharpe) — T+1 open volatility hurts
+- Second peak at 16:00 close: Sharpe 0.56-0.60, higher avg PnL (+4.7-5.3%), better Pool $
+- After-hours 17:00-20:00 flat vs 16:00 — no incremental edge
+
+Decision: Use 16:00 close for execution safety. Pre-market 08:00 is informational upside
+(+0.10 Sharpe, +14% WR) but requires pre-market execution capability.
+
+Scripts: `agent3_e1_hold_grid.py`, `agent3_e1b_exit_hour.py`
+
+---
+
+## EXPERIMENT RESULTS: E2 Universe Comparison (2026-09-15)
+
+8 universes tested with A6 T+1 and C1 T+3. _FLOAT is baseline (194 tickers).
+U1: Full CS (hard float), U2: Large cap ≥$1B, U3: Mid cap $300M-$10B,
+U4: Russell 1000 ≥$3B, U5: High ADV ≥$10M/day, U6: CS ex biotech, U7: _FLOAT+guarded.
+
+A6 results (Sharpe): _FLOAT 0.542, U3 0.332, U7 0.306, U2 0.222, U4 0.197, U1 0.176, U6 0.176, U5 0.100.
+C1 results (Sharpe): _FLOAT 0.391, U4 0.388, U7 0.385, U2 0.361, U3 0.289, U1 0.168, U6 0.168, U5 0.013.
+
+Conclusion: _FLOAT optimal for A6. U4 nearly matches for C1 (350 trades vs 176, CI_lo 3.74 vs 3.41).
+Expanding beyond 194-ticker _FLOAT consistently dilutes quality.
+
+Script: `agent3_e2_universe.py`
+
+---
+
+## EXPERIMENT RESULTS: E3 Strategy × Universe Grid (2026-09-16)
+
+Tested ALL Phase 1 strategies (24 variants: A1-A7, B1-B3, C1-C2) across 7 universes:
+  _FLOAT (194 hardcoded), M1_200 (top 200 by avg opening vol), M1_500 (top 500),
+  M2_15 (gap freq ≥15%), M3_60 (mean-reversion rate ≥60%), M5_200 (top 200 composite),
+  M5_500 (top 500 composite).
+
+Universe construction: 93-day lookback (2025-05-01 → 2025-09-12), 4,301 CS tickers scored.
+M1/M2/M3/M5 scores computed from grouped daily data. M5 composite = 0.35×M1 + 0.25×M2 + 0.25×M3 + 0.15×ADV.
+
+Universe overlap with _FLOAT:
+  M1_200: 5/194 (3%), M1_500: 19/194 (10%), M2_15: 44/194 (23%),
+  M3_60: 43/194 (22%), M5_200: 40/194 (21%), M5_500: 67/194 (35%).
+  Union: 1,510 tickers. Total: A=3,004 B=3,257 C=1,125 candidates.
+
+### KEY FINDING: _FLOAT wins EVERY strategy. No M-universe beats _FLOAT on any metric.
+
+Sharpe grid (top strategies):
+  A6sr T+1: _FLOAT 0.439★ | M1_200 0.252 | M1_500 0.164 | M2_15 0.157 | M3_60 0.209 | M5_200 0.177 | M5_500 0.209
+  A6sr T+2: _FLOAT 0.364~ | M1_200 0.179 | M1_500 0.098 | M2_15 0.099 | M3_60 0.122 | M5_200 0.135 | M5_500 0.071
+  C1 T+3:   _FLOAT 0.373~ | M1_200 -0.244 | M1_500 -0.251 | M2_15 -0.245 | M3_60 -0.208 | M5_200 0.027 | M5_500 0.079
+  C1 T+5:   _FLOAT 0.216  | all others negative
+
+Only 3 cells out of 168 pass CI>0 AND Sharpe≥0.30 — ALL are _FLOAT:
+  A6sr T+1 _FLOAT: Sharpe 0.439, +4.22%, n=116, CI [+2.47, +5.97] — PENSION
+  C1 T+3 _FLOAT:   Sharpe 0.373, +5.61%, n=207, CI [+3.56, +7.65] — NEAR MISS
+  A6sr T+2 _FLOAT:  Sharpe 0.364, +4.16%, n=116, CI [+2.08, +6.25] — NEAR MISS
+
+Avg PnL destruction in expanded universes:
+  A1 T+5: _FLOAT +0.97% vs M2_15 -11.41% — expanded universe actively harmful
+  C1 T+3: _FLOAT +5.61% vs M1_200 -9.91% — gap-magnitude selection picks losers
+
+Why M-universes fail:
+  M1/M2 top tickers (CWD 25%, HCTI 13%, SBET 10%) are ultra-small-cap with huge gaps but no reversion.
+  M3 selects on 3-7 events — massive sampling noise (100% reversion on 3 trades is meaningless).
+  M5 composite inherits M1/M2 contamination.
+  Hypothesis B (ORB momentum) stays DEAD across all universes.
+
+OOS validation (top 3):
+  A6sr T+1 _FLOAT: IS 0.587 → OOS 0.402, +4.37%/+4.17% — ★ PENSION READY
+  A6sr T+2 _FLOAT: IS 0.374 → OOS 0.365, +3.18%/+4.54% — ★ PENSION READY
+  C1 T+3 _FLOAT:   IS 0.174 → OOS 0.448, +2.71%/+6.60% — ✗ (IS CI fails)
+
+### CONCLUSION: UNIVERSE INVESTIGATION CLOSED.
+_FLOAT is the correct universe. Systematic reconstruction (opening vol, gap frequency,
+mean-reversion rate, composite) cannot replicate what _FLOAT captured. The 194-ticker set
+has implicit quality characteristics beyond raw volatility metrics. All future experiments
+should use _FLOAT only. No further universe experiments planned.
+
+Script: `agent3_e3_strategy_universe.py`
 
 ---
 

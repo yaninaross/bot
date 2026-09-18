@@ -28,9 +28,9 @@ except: pass
 ALL_DATES = ['2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11']
 FOLD_A = ['2026-09-08', '2026-09-09']
 FOLD_B = ['2026-09-10', '2026-09-11']
-POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "YOUR_POLYGON_API_KEY")
-BQ_PREMARKET_TABLE = "YOUR_GCP_PROJECT.scoring_logs.premarket_scanner"
-BQ_DISCOVERY_TABLE = "YOUR_GCP_PROJECT.scoring_logs.discovery_scanner"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BQ_PREMARKET_TABLE = f"{GCP_PROJECT}.scoring_logs.premarket_scanner"
+BQ_DISCOVERY_TABLE = f"{GCP_PROJECT}.scoring_logs.discovery_scanner"
 INTRADAY_MINUTES = 390
 MARKET_OPEN_ET = "09:30"
 MARKET_CLOSE_ET = "16:00"

@@ -24,7 +24,7 @@ except (ImportError, Exception):
     pass
 
 client = storage.Client()
-bucket = client.bucket("time-series-bucket-ys")
+bucket = client.bucket(os.environ.get("GCS_BUCKET", ""))
 
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 CONTEXT_SKIP = {'SPY', 'VIX', 'TLT', 'IWM', 'SMH', 'BTCUSD', 'ITA', 'XLE'}
@@ -82,7 +82,7 @@ for ticker in all_tickers:
         micro_updated = micro_blob.updated
 
     # --- Current micro quality in master ---
-    uri = f"gs://time-series-bucket-ys/{MASTER_DIR}/{file_ticker}_master_inference.parquet"
+    uri = f"gs://{GCS_BUCKET}/{MASTER_DIR}/{file_ticker}_master_inference.parquet"
     try:
         df = pd.read_parquet(uri, columns=[MICRO_CHECK_COL])
         vd_pct = (df[MICRO_CHECK_COL] != 0).sum() / len(df) * 100 if len(df) > 0 else 0

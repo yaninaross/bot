@@ -11,7 +11,7 @@
 #   nohup bash bulk_backfill_sectors.sh > /tmp/sectors_backfill.log 2>&1 &
 
 export PYTHONUNBUFFERED=1
-cd /home/admin_yaninaso_altostrat_com/bot-RAG
+cd $(dirname "$(readlink -f "$0")")
 
 # 62 missing tickers across 4 sectors
 # Note: MOG.A uses Polygon ticker MOG-A (will try both)

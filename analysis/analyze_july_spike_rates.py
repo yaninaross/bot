@@ -13,7 +13,7 @@ import io
 import pytz
 from google.cloud import storage as gcs_storage
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 PST = pytz.timezone('America/Los_Angeles')
 W = 100
 

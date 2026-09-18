@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 from google.cloud import bigquery
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 FOLD_400 = [400, 401, 402, 403, 404, 405]
 FOLD_410 = [410, 411, 412, 413, 414, 415]

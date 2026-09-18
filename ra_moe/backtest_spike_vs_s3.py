@@ -59,13 +59,13 @@ SLIPPAGE_RT    = 2 * SLIPPAGE_PCT
 STARTING_CAPITAL = 200_000
 DEPLOY_THRESHOLD = 0.018
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_INFER_DIR    = 'Data/Inference_v2'
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/real_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/real_models'
 RESULTS_DIR      = 'Algos/Results_scored_20260703'
 RESULTS_FALLBACK = 'Algos/Results_all_v2'
-BQ_TABLE_ID      = 'ys-time-series.scoring_logs.wf_optimization_results'
+BQ_TABLE_ID      = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 DATA_DIR  = '/tmp/ra_moe_real_data'
 MODEL_DIR = '/tmp/ra_moe_models'

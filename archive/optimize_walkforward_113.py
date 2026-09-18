@@ -33,7 +33,7 @@ from google.cloud import bigquery as bq
 # ==============================================================================
 # BIGQUERY — incremental save (one row per seed completion)
 # ==============================================================================
-BQ_TABLE_ID = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE_ID = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 def _ensure_wf_table(bq_client, table_id):
     from google.cloud.bigquery import SchemaField, Table
@@ -149,7 +149,7 @@ SCORING_POOL   = [
     'SMH', 'IWM',
 ]
 RESULTS_DIR    = f"Algos/Results_all_v2/Universal_Exp{MODEL_ID}"
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
 

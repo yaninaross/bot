@@ -50,8 +50,8 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_RAW_DIR     = "Data/TradesQuotes"
 GCS_MICRO_DIR   = "Data/Inference/Microstructure"
 GCS_OHLCV_DIR   = "Data/Inference"
@@ -138,7 +138,7 @@ def _init_gcs_client():
     if USE_SERVICE_ACCOUNT:
         from google.auth import compute_engine
         creds = compute_engine.Credentials()
-        client = gcs_storage.Client(credentials=creds, project='yanina-everything')
+        client = gcs_storage.Client(credentials=creds, project=os.environ.get("GCP_PROJECT", ""))
         tprint("  Auth: VM compute service account (never expires)")
     else:
         client = gcs_storage.Client()

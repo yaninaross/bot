@@ -79,7 +79,7 @@ _test_weeks = _test_days / 7.0
 MIN_TRADES_PRORATED = max(1, round(MIN_TRADES_PER_MONTH * _test_weeks / 4.33))
 MIN_TRADES_ABSOLUTE  = 2
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_L5_1_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_1_models'
 GCS_INFER_DIR    = 'Data/Inference_v2'
@@ -403,7 +403,7 @@ def asymmetric_focal_loss(y_true, y_pred, sample_weight=None):
 # ==============================================================================
 # BIGQUERY
 # ==============================================================================
-BQ_TABLE_ID = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE_ID = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 def _ensure_wf_table(bq_client, table_id):
     from google.cloud.bigquery import SchemaField, Table

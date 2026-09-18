@@ -22,8 +22,8 @@ except (ImportError, Exception):
 # ── CONFIG ──
 START_DATE = '2026-06-22'
 END_DATE   = '2026-06-29'
-BQ_TABLE   = 'ys-time-series.scoring_logs.live_predictions'
-BUCKET     = 'time-series-bucket-ys'
+BQ_TABLE   = f"{GCP_PROJECT}.scoring_logs.live_predictions"
+BUCKET     = os.environ.get("GCS_BUCKET", "")
 INF_DIR    = 'Data/Inference_v2'
 SLIPPAGE   = 0.0015
 EXIT_TIME  = 780  # 1pm PT

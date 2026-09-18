@@ -76,7 +76,7 @@ SLIPPAGE_PCT   = 0.0015
 
 DEPLOY_PNL_THRESHOLD = 0.01
 
-GCS_BUCKET    = 'time-series-bucket-ys'
+GCS_BUCKET    = os.environ.get("GCS_BUCKET", "")
 GCS_INFER_DIR = 'Data/Inference_v2'
 
 # Architecture (shared between L5-1 and L5-2)
@@ -92,7 +92,7 @@ TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 EXCLUDE_TICKERS = {'SPY', 'VIX', 'TLT', 'IWM', 'XLE', 'ITA', 'BITF', 'MIGI', 'SMLR'}
 PST = pytz.timezone('America/Los_Angeles')
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 bq_client = bigquery.Client()
 
 SEED = 42

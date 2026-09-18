@@ -53,7 +53,7 @@ ENTRY_TIME     = '06:25'
 EXIT_TIME_MIN  = 780
 SLIPPAGE_PCT   = 0.0015
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_models'
 GCS_INFER_DIR    = 'Data/Inference_v2'

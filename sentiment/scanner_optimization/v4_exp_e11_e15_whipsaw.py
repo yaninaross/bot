@@ -22,7 +22,7 @@ from scipy.stats import pearsonr, spearmanr, trim_mean
 warnings.filterwarnings('ignore')
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-BASE = '/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization'
+BASE = 'os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../') + '/sentiment/scanner_optimization'
 RESULTS = f'{BASE}/results'
 CSV_PATH = f'{RESULTS}/v2_features_full.csv'
 BARS_PATH = f'{RESULTS}/v3_minute_bars.json'

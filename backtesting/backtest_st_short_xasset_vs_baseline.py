@@ -55,7 +55,7 @@ from sklearn.metrics import (roc_auc_score, precision_recall_curve,
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-GCS_BUCKET = 'time-series-bucket-ys'
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 GCS_INFER_DIR = 'Data/Inference_v2'
 
 MODELS = {

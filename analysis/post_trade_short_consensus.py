@@ -47,9 +47,9 @@ import matplotlib.dates as mdates
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME      = "time-series-bucket-ys"
-WF_BQ_TABLE      = "ys-time-series.scoring_logs.wf_optimization_results"
-BQ_PREDICTIONS   = "ys-time-series.scoring_logs.live_predictions"
+BUCKET_NAME      = os.environ.get("GCS_BUCKET", "")
+WF_BQ_TABLE      = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
+BQ_PREDICTIONS   = f"{GCP_PROJECT}.scoring_logs.live_predictions"
 INFERENCE_DIR    = "Data/Inference_v2"
 PST              = pytz.timezone('America/Los_Angeles')
 

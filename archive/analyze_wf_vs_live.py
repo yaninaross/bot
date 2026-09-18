@@ -5,9 +5,9 @@ Compares walkforward optimization predictions against actual live outcomes.
 Identifies config mismatches, performance deltas, and overfitting signals.
 
 BQ tables:
-  - WF results: ys-time-series.scoring_logs.wf_optimization_results
+  - WF results: {GCP_PROJECT}.scoring_logs.wf_optimization_results
     (model_version = 'robust_wf_v9')
-  - Live predictions: ys-time-series.scoring_logs.live_predictions
+  - Live predictions: {GCP_PROJECT}.scoring_logs.live_predictions
 
 Run in Colab or on the VM after daily_score_combined.py has been logging to BQ.
 """
@@ -21,7 +21,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('display.width', 300)
 pd.set_option('display.max_rows', 200)
 
-client = bigquery.Client(project='ys-time-series')
+client = bigquery.Client(project=os.environ.get("GCP_PROJECT", ""))
 
 # =====================================================
 # CONFIG: Deployed tickers and their configs
@@ -117,7 +117,7 @@ SELECT ticker, seed, entry_time, entry_minute, prob_thresh, tpsl_mode,
        opt_start, opt_end, experiment, model_version,
        is_ensemble, n_seeds_avg,
        vix_threshold, tlt_crash, spy_ignore, vol_filter_pct
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
 WHERE model_version = 'robust_wf_v9'
   AND survived_a = TRUE
   AND val_b_start = '2026-04-01'
@@ -246,7 +246,7 @@ SELECT score_date, ticker, experiment, seed, prob, threshold,
        filter_status, tpsl_mode, atr_pct_entry,
        vix_value, tlt_gap_pct, spy_gap_pct,
        run_timestamp
-FROM `ys-time-series.scoring_logs.live_predictions`
+FROM `{GCP_PROJECT}.scoring_logs.live_predictions`
 WHERE ticker IN ({tickers_str})
   AND score_date >= '2026-04-01'
 ORDER BY score_date, ticker
@@ -295,7 +295,7 @@ print("  STEP 4: LIVE OUTCOME COMPUTATION (from GCS OHLCV)")
 print("=" * W)
 print()
 
-BUCKET = "time-series-bucket-ys"
+BUCKET = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 

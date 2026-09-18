@@ -55,7 +55,7 @@ def _release_memory():
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME    = "time-series-bucket-ys"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
 RESULTS_DIR    = "Algos/Results_all_v2"
 INFERENCE_DIR  = "Data/Inference_v2"
 
@@ -72,7 +72,7 @@ STARTING_CAPITAL = 200_000
 PST = pytz.timezone('America/Los_Angeles')
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 BQ_MODEL_VERSIONS = ('robust_wf_v12_short', 'robust_wf_v12_short_a1')
 
 CURRENT_TICKERS = ['VOYG', 'NTLA', 'CLF', 'SMR']

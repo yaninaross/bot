@@ -38,8 +38,8 @@ TEST_START = '2026-04-01'
 TEST_END = '2026-05-29'
 STARTING_CAPITAL = 200_000
 
-BUCKET_NAME = "time-series-bucket-ys"
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 INFERENCE_DIR = "Data/Inference_v2"
 MAG_CLS_PATH = "Algos/Results_all_v2/Universal_Exp185_MAG_CLS"
 MAG_REG_PATH = "Algos/Results_all_v2/Universal_Exp185_MAG_REG"

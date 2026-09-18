@@ -33,7 +33,7 @@ pd.set_option('display.width', 200)
 
 PST = pytz.timezone('America/Los_Angeles')
 W = 120
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 OHLCV_DIR = "Data/Inference"
 FOCUS_TICKERS = ['FCEL', 'LUNR', 'SMCI', 'RKLB', 'PL']
 PNL_BARS = 30  # 30-min window for PnL computation
@@ -58,7 +58,7 @@ bq_client = bigquery.Client()
 query = """
 SELECT score_date, ticker, experiment, prob, Threshold as threshold, Signal as signal,
        Filter_Status as filter_status, close, tpsl_mode, seed
-FROM `ys-time-series.scoring_logs.live_predictions`
+FROM `{GCP_PROJECT}.scoring_logs.live_predictions`
 WHERE score_date >= '2026-05-01'
 ORDER BY score_date, ticker
 """

@@ -17,12 +17,12 @@ from scipy import stats as scipy_stats
 warnings.filterwarnings('ignore')
 
 # ── Config ──────────────────────────────────────────────────────────────────
-BASE_DIR   = '/home/admin_yaninaso_altostrat_com/bot-RAG/sentiment/scanner_optimization/results'
+BASE_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
 OUT_DIR    = os.path.join(BASE_DIR, 'features')
 CSV_PATH   = os.path.join(BASE_DIR, 'v2_features_full.csv')
 BARS_PATH  = os.path.join(BASE_DIR, 'v3_minute_bars.json')
 DAILY_PATH = os.path.join(BASE_DIR, 'v2_daily_data.json')
-POLYGON_KEY = 'YOUR_POLYGON_API_KEY'
+POLYGON_KEY = os.environ["POLYGON_API_KEY"]
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # ── Load data ───────────────────────────────────────────────────────────────

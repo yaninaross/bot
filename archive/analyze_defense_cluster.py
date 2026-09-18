@@ -81,7 +81,7 @@ ALL_CANDIDATES = [
 CONTEXT_ASSETS = ['ITA', 'VIX', 'TLT', 'IWM']
 
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference"
 
 SPIKE_THRESHOLD = 0.10

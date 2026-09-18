@@ -34,7 +34,7 @@ FOLD_ID = 7
 V1_MODEL_VERSION  = f'spike_transformer_long_L5_1_fold{FOLD_ID}'
 V14_MODEL_VERSION = f'spike_transformer_long_L5_1_v14_fold{FOLD_ID}'
 
-BQ_TABLE_ID = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE_ID = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 DEPLOY_PNL_THRESHOLD = 0.018
 
 CHART_DIR = '/tmp/ra_moe_long_L5_1_models'

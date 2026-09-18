@@ -6,7 +6,7 @@
 # Usage:
 #   nohup bash bulk_backfill_new50.sh > /tmp/new50_backfill.log 2>&1 &
 
-cd /home/admin_yaninaso_altostrat_com/bot-RAG
+cd $(dirname "$(readlink -f "$0")")
 
 TICKERS="BNY MGRT RXT SIF CRNG ROMA SNDK AXTI BUUU BLZE DELL ZTG INTC WDC SCKT IRDM CJMB NCEW FLEX CIEN DFNS MRVL BW APP ATEX FIX STX DD DOV SWK CENX VLO SBLK SHOP META AAOI NUA LITE ORCL ANET SPOT NFLX NRG KGS CVNA CAVA ANF STRL EME COHR"
 

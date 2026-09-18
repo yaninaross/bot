@@ -4,7 +4,7 @@
   2025-09-15 → 2026-09-12  |  OOS cutoff: 2026-01-01
 ================================================================================
 
-  Loading Phase 1 cache from /home/admin_yaninaso_altostrat_com/bot-RAG/agent3/phase1_cache.pkl...
+  Loading Phase 1 cache from agent3/phase1_cache.pkl...
   → Loaded: A=367, B=247, C=176 trades, 250 dates, 280 daily cache entries
 
   Phase 2 enrichment...
@@ -960,7 +960,7 @@ N6b_managed                176   0.7   +5.16%   52%      0.36   [+3.04,+7.28] �
       Trades per month: 21.0
 
   Generating charts...
-  Chart saved: /home/admin_yaninaso_altostrat_com/bot-RAG/agent3/agent3_phase2_summary.png
+  Chart saved: agent3/agent3_phase2_summary.png
 
 
 ================================================================================

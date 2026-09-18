@@ -62,7 +62,7 @@ if _IN_COLAB:
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 CACHE_DIR = '/tmp/spike_screener_1m'
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -125,7 +125,7 @@ for sector, cfg in CANDIDATE_SECTORS.items():
 # ==============================================================================
 # 1-MIN DATA LOADING — GCS first, Polygon fallback, local cache
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
 
 from google.cloud import storage as gcs_storage

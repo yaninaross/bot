@@ -53,7 +53,7 @@ EXPERIMENT_OUT     = 's3_regime_filter_v13'
 DEPLOY_PNL_THRESHOLD = 0.018
 MIN_TRADES_ABSOLUTE  = 3
 
-GCS_BUCKET     = 'time-series-bucket-ys'
+GCS_BUCKET     = os.environ.get("GCS_BUCKET", "")
 GCS_INFER_DIR  = 'Data/Inference_v2'
 
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
@@ -95,7 +95,7 @@ W = 100
 def _gcs_bucket():
     return storage.Client().bucket(GCS_BUCKET)
 
-BQ_TABLE_ID = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE_ID = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 def _ensure_wf_table(bq_client, table_id):
     from google.cloud.bigquery import SchemaField, Table

@@ -13,8 +13,8 @@
 #   - Everything else identical (architecture, loss, hyperparameters)
 #
 # GPU recommended. Colab-ready.
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_xasset_data/fold_5_*.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_xasset_models/fold_5/
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_xasset_data/fold_5_*.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_xasset_models/fold_5/
 
 import os, time, warnings, gc
 import numpy as np
@@ -45,7 +45,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DATA_DIR = '/tmp/ra_moe_short_L5_2_xasset_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_L5_2_xasset_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_2_xasset_models'
 

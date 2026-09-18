@@ -30,12 +30,12 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME     = "time-series-bucket-ys"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
 TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SPY', 'IWM', 'SMLR', 'SPIR'}
 
-BQ_TABLE_ID     = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE_ID     = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 MODEL_VERSION   = 'robust_wf_v5'
 DEPLOY_THRESHOLD = 0.018
 MIN_TRADES      = 3

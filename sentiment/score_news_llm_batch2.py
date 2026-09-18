@@ -17,8 +17,8 @@
 #  11. overreaction_risk  — [0-10] headline more sensational than substance?
 #  12. premarket_driver   — [0-10] will this drive pre-market/early session volume?
 #
-# Reads:  gs://time-series-bucket-ys/Data/Sentiment/{ticker}_news.parquet
-# Writes: gs://time-series-bucket-ys/Data/Sentiment/{ticker}_llm_scores.parquet
+# Reads:  gs://{GCS_BUCKET}/Data/Sentiment/{ticker}_news.parquet
+# Writes: gs://{GCS_BUCKET}/Data/Sentiment/{ticker}_llm_scores.parquet
 #
 # Incremental: skips articles already scored.
 # Colab-ready, config vars at top.
@@ -68,7 +68,7 @@ import matplotlib.pyplot as plt
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-GCP_PROJECT     = "YOUR_GCP_PROJECT"
+GCP_PROJECT     = os.environ.get("GCP_PROJECT", "")
 GCP_LOCATION    = "us-central1"
 GEMINI_MODEL    = "gemini-2.5-flash"
 
@@ -77,7 +77,7 @@ GEMINI_MODEL    = "gemini-2.5-flash"
 # Option B: Google AI Studio API key (free, get at aistudio.google.com/apikey)
 GOOGLE_AI_API_KEY = ""   # <-- paste API key here for Option B; leave empty for Vertex
 
-BUCKET_NAME     = "time-series-bucket-ys"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 SENTIMENT_DIR   = "Data/Sentiment"
 
 ANALYSIS_TICKERS = [

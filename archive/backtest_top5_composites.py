@@ -76,8 +76,8 @@ DEPLOY_EXPERIMENTS = {'152_XSECTOR', '160_XSECTOR', '170_XSECTOR',
                       '175_XSECTOR', '180_XSECTOR', '185_XSECTOR'}
 EXCLUDE_TICKERS = set()
 
-BUCKET_NAME    = "time-series-bucket-ys"
-BQ_TABLE       = "ys-time-series.scoring_logs.wf_optimization_results"
+BUCKET_NAME    = os.environ.get("GCS_BUCKET", "")
+BQ_TABLE       = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 INFERENCE_DIR  = "Data/Inference_v2"
 
 EXIT_TIME_MIN = 780

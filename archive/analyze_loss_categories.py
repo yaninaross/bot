@@ -29,7 +29,7 @@ except (ImportError, Exception):
 warnings.filterwarnings('ignore')
 
 PST = pytz.timezone('America/Los_Angeles')
-BUCKET = "time-series-bucket-ys"
+BUCKET = os.environ.get("GCS_BUCKET", "")
 TICKER_FILE_MAP = {'BITF': 'KEEL', 'MIGI': 'BGDE'}
 
 bq_client = bigquery.Client()
@@ -43,7 +43,7 @@ q = """
 SELECT score_date, ticker, experiment, seed, prob, threshold, signal,
        tp_pct, sl_pct, entry_minute, close, filter_status,
        tpsl_mode, vix_value, tlt_gap_pct, spy_gap_pct
-FROM `ys-time-series.scoring_logs.live_predictions`
+FROM `{GCP_PROJECT}.scoring_logs.live_predictions`
 WHERE signal = 'GO'
   AND score_date >= '2026-04-01'
 ORDER BY score_date, ticker

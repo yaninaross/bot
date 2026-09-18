@@ -5,7 +5,7 @@ None of these are part of the daily scoring pipeline (see `pipeline/` and `scori
 
 ## Data Architecture
 
-All data lives on GCS: `gs://time-series-bucket-ys/`
+All data lives on GCS: `gs://<GCS_BUCKET>/`
 
 ```
 Data/Inference/          ← raw 1-min OHLCV parquets ({TICKER}_1m_full_historical_data.parquet)

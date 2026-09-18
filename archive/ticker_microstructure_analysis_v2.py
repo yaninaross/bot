@@ -18,7 +18,7 @@ SECONDARY_TICKERS = ['WULF', 'SMCI']
 ALL_TICKERS = PRIMARY_TICKERS + SECONDARY_TICKERS
 
 def load_ticker(ticker):
-    uri = f"gs://time-series-bucket-ys/Data/Inference_v2/{ticker}_master_inference.parquet"
+    uri = f"gs://{GCS_BUCKET}/Data/Inference_v2/{ticker}_master_inference.parquet"
     df = pd.read_parquet(uri).reset_index()
     dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
     if dt_cols:

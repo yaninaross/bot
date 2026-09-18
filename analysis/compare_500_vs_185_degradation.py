@@ -20,7 +20,7 @@ except (ImportError, Exception):
 bq = bigquery.Client()
 
 W = 120
-BQ_TABLE = 'ys-time-series.scoring_logs.wf_optimization_results'
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 SWING_MV = 'robust_wf_v12_swing'
 SPIKE_MV = 'robust_wf_v12'
 TICKER_RENAME = {'MIGI': 'BGDE', 'BITF': 'KEEL'}

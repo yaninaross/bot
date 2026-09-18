@@ -12,7 +12,7 @@ import numpy as np
 from google.cloud import bigquery as bq
 import math
 
-BQ_TABLE = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 client = bq.Client()
 

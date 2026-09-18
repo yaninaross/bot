@@ -16,8 +16,8 @@
 # Everything else identical: same loss (ASL), same hyperparameters, same regime
 # features (22), same training loop.
 #
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_data/fold_5_*.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_multires_models/fold_5/weights.*
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_data/fold_5_*.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_multires_models/fold_5/weights.*
 #
 # GPU recommended. Colab-ready.
 
@@ -50,7 +50,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DATA_DIR = '/tmp/ra_moe_short_L5_2_multires_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/short_L5_2_multires_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/short_L5_2_multires_models'
 

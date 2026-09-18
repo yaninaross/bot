@@ -17,7 +17,7 @@ This is a **crypto/equity spike prediction system**. A Transformer model predict
 - **Stitched walkforward**: For fold families (170-175 or 180-185), seed scores from all 6 folds are concatenated into one continuous series before optimization. Results are labeled with the first experiment (e.g., `170_XSECTOR`).
 - **Single-fold optimization**: Each fold optimized independently. Results labeled per fold (e.g., `184_XSECTOR`).
 - **Family agreement gate (S3)**: A ticker qualifies for live trading only if it has positive WF results across >= 2 experiment families (152, 160, 170, 180, 185). This is the deployed strategy.
-- **BQ table**: `ys-time-series.scoring_logs.wf_optimization_results`, tag `model_version = 'robust_wf_v12'`.
+- **BQ table**: `<GCP_PROJECT>.scoring_logs.wf_optimization_results`, tag `model_version = 'robust_wf_v12'`.
 
 ### The pipeline
 
@@ -172,7 +172,7 @@ client = bigquery.Client()
 q = """
 SELECT experiment, COUNT(*) as cnt, COUNT(DISTINCT ticker) as tickers,
        COUNT(DISTINCT tpsl_mode) as modes, MAX(run_timestamp) as last_update
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `<GCP_PROJECT>.scoring_logs.wf_optimization_results`
 WHERE model_version = 'robust_wf_v12'
   AND (experiment LIKE '170%' OR experiment LIKE '180%')
 GROUP BY experiment ORDER BY experiment
@@ -187,7 +187,7 @@ q = """
 SELECT SPLIT(experiment, '_')[OFFSET(0)] as fold,
        COUNT(*) as total_rows, COUNT(DISTINCT ticker) as tickers,
        COUNT(DISTINCT tpsl_mode) as modes
-FROM `ys-time-series.scoring_logs.wf_optimization_results`
+FROM `<GCP_PROJECT>.scoring_logs.wf_optimization_results`
 WHERE model_version = 'robust_wf_v12'
   AND experiment LIKE '18%'
 GROUP BY fold ORDER BY fold

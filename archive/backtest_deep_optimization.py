@@ -53,7 +53,7 @@ except (ImportError, Exception):
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 RESULTS_DIR = "Algos/Results_scored_20260703"
 RESULTS_FALLBACK = "Algos/Results_all_v2"
 OHLCV_DIR = "Data/Inference"
@@ -397,7 +397,7 @@ if not _cache_hit:
         PARTITION BY experiment, ticker
         ORDER BY run_timestamp DESC
       ) as rn
-      FROM `ys-time-series.scoring_logs.wf_optimization_results`
+      FROM `{GCP_PROJECT}.scoring_logs.wf_optimization_results`
       WHERE model_version = 'robust_wf_v12'
         AND is_ensemble = TRUE
         AND tpsl_mode = 'static'

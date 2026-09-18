@@ -68,7 +68,7 @@ if _IN_COLAB:
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
 CACHE_FILE = '/tmp/sector_spike_daily.pkl'
 
 DATA_START = '2024-07-01'

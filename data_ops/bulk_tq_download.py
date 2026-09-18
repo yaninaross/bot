@@ -31,9 +31,9 @@ warnings.filterwarnings('ignore')
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-API_KEY = '2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs'
+API_KEY = os.environ["POLYGON_API_KEY"]
 
-BUCKET_NAME = "time-series-bucket-ys"
+BUCKET_NAME = os.environ.get("GCS_BUCKET", "")
 
 # Full history from 2022-01-01 needed for training
 START_DATE = '2022-01-01'

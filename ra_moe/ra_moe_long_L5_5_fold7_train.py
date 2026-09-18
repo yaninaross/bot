@@ -15,8 +15,8 @@
 # Loss: ASL with gamma_neg=5.0, gamma_pos=2.0, clip=0.10
 #
 # GPU recommended. Colab-ready. All artifacts persisted to GCS.
-# Input:  gs://time-series-bucket-ys/Algos/RA_MoE/long_L5_5_data/fold_7_{train,val,test}.npz
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/long_L5_5_models/fold_7/weights.*
+# Input:  gs://{GCS_BUCKET}/Algos/RA_MoE/long_L5_5_data/fold_7_{train,val,test}.npz
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/long_L5_5_models/fold_7/weights.*
 
 import os, time, warnings, gc
 import numpy as np
@@ -47,7 +47,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 DATA_DIR = '/tmp/ra_moe_long_L5_5_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET       = 'time-series-bucket-ys'
+GCS_BUCKET       = os.environ.get("GCS_BUCKET", "")
 GCS_DATA_PREFIX  = 'Algos/RA_MoE/long_L5_5_data'
 GCS_MODEL_PREFIX = 'Algos/RA_MoE/long_L5_5_models'
 

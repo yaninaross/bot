@@ -66,9 +66,9 @@ except ImportError:
 # ==============================================================================
 # CONFIG
 # ==============================================================================
-BUCKET_NAME   = "time-series-bucket-ys"
+BUCKET_NAME   = os.environ.get("GCS_BUCKET", "")
 INFERENCE_DIR = "Data/Inference_v2"
-WF_BQ_TABLE   = "ys-time-series.scoring_logs.wf_optimization_results"
+WF_BQ_TABLE   = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 PST           = pytz.timezone('America/Los_Angeles')
 TAIL_DAYS     = 60
 

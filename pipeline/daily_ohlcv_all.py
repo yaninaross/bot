@@ -42,8 +42,8 @@ TARGET_TICKERS = [
 
 CONTEXT_ASSETS = ['ITA', 'I:VIX', 'TLT', 'IWM', 'SPY']
 
-POLYGON_API_KEY = "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs"
-BUCKET_NAME     = "time-series-bucket-ys"
+POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 
 GCS_OHLCV_DIR   = f"gs://{BUCKET_NAME}/Data/Inference"
 GCS_MICRO_DIR   = f"gs://{BUCKET_NAME}/Data/Inference/Microstructure"

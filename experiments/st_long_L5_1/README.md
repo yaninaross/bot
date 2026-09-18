@@ -15,8 +15,8 @@ Non-stationary Transformer with FiLM regime conditioning can predict 6%+ upside 
 - ASL loss: gamma_neg=5.0, gamma_pos=0.1, clip=0.10
 - Folds: F5/F6/F7 (walkforward, newest-first priority)
 - 6 models total: L5-1 F5/F6/F7 + ASL6 F5/F6/F7
-- GCS data: `gs://time-series-bucket-ys/Algos/RA_MoE/long_L5_1_data/`
-- GCS models: `gs://time-series-bucket-ys/Algos/RA_MoE/long_L5_1_models/`
+- GCS data: `gs://<GCS_BUCKET>/Algos/RA_MoE/long_L5_1_data/`
+- GCS models: `gs://<GCS_BUCKET>/Algos/RA_MoE/long_L5_1_models/`
 - BQ model_versions: `spike_transformer_long_L5_1_fold{5,6,7}` + `spike_transformer_long_L5_2_asl6_fold{5,6,7}`
 
 ## Results

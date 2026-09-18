@@ -52,7 +52,7 @@ TARGET_TICKERS = [
 
 CONTEXT_ASSETS = ['ITA', 'SMH', 'MOD', 'I:VIX', 'TLT', 'IWM', 'X:BTCUSD', 'SPY', 'XLE']
 
-BUCKET_NAME     = "time-series-bucket-ys"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 GCS_OHLCV_DIR   = f"gs://{BUCKET_NAME}/Data/Inference"
 GCS_MICRO_DIR   = f"gs://{BUCKET_NAME}/Data/Inference/Microstructure"
 GCS_OUTPUT_DIR  = f"gs://{BUCKET_NAME}/Data/Inference_v2"

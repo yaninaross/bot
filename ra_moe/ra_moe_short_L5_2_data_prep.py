@@ -20,9 +20,9 @@
 # Self-contained Colab cell. No local imports needed.
 # GPU NOT required. Colab-ready.
 #
-# Input:  gs://time-series-bucket-ys/Data/Inference_v2/*_master_inference.parquet
-# Output: gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_data/fold_5_{train,val,test}.npz
-#         gs://time-series-bucket-ys/Algos/RA_MoE/short_L5_2_data/meta.npz
+# Input:  gs://{GCS_BUCKET}/Data/Inference_v2/*_master_inference.parquet
+# Output: gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_data/fold_5_{train,val,test}.npz
+#         gs://{GCS_BUCKET}/Algos/RA_MoE/short_L5_2_data/meta.npz
 
 import os, sys, time, gc, ctypes, warnings
 from collections import defaultdict
@@ -64,7 +64,7 @@ import matplotlib.pyplot as plt
 DATA_DIR  = '/tmp/ra_moe_short_L5_2_data'
 os.makedirs(DATA_DIR, exist_ok=True)
 
-GCS_BUCKET      = 'time-series-bucket-ys'
+GCS_BUCKET      = os.environ.get("GCS_BUCKET", "")
 GCS_INFER_DIR   = 'Data/Inference_v2'
 GCS_DATA_PREFIX = 'Algos/RA_MoE/short_L5_2_data'
 

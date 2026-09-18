@@ -45,7 +45,7 @@ TPSL_MODE = ALL_MODES[0]
 # ==============================================================================
 # BIGQUERY
 # ==============================================================================
-BQ_TABLE_ID = "ys-time-series.scoring_logs.wf_optimization_results"
+BQ_TABLE_ID = f"{GCP_PROJECT}.scoring_logs.wf_optimization_results"
 
 def _ensure_wf_table(bq_client, table_id):
     from google.cloud.bigquery import SchemaField, Table
@@ -180,7 +180,7 @@ def save_row_to_bq(row_dict, run_id, experiment,
 # ==============================================================================
 # CONFIG — Exp 400 SHORT/Dump Model
 # ==============================================================================
-BUCKET_NAME     = "time-series-bucket-ys"
+BUCKET_NAME     = os.environ.get("GCS_BUCKET", "")
 TICKER_FILE_MAP = {'BITF': 'KEEL'}
 TICKER_RENAME   = {'MIGI': 'BGDE', 'BITF': 'KEEL'}
 EXCLUDE_TICKERS = {'TLT', 'VIX', 'SMLR', 'SPIR'}
