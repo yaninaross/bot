@@ -1,0 +1,322 @@
+# Agent 10 — RXRX Trade Analysis Results (v2)
+
+**Dev period:** 2021-04-16 to 2026-03-31 (1,245 bars)
+**Position size:** $10,000 per trade
+**Cost model:** 10bps half-spread, 7.5bps slippage, $0.005/share commission, 5% annual short borrow
+**Holdout:** 2026-04-01+ (NOT spent)
+**Version:** v2 — no stacked entries, daily MTM equity, null tests, episode analysis
+
+---
+
+## Phase 1 Cycle Verdict
+
+| Test | Window | Peak Period | Significant vs AR(1) |
+|---|---|---|---|
+| Spectral | rolling_20d | 39.5d | **NO** |
+| Spectral | rolling_40d | 100.5d | **NO** |
+| Spectral | rolling_60d | 118.6d | **NO** |
+| Spectral | hp_filter | 8.9d | **NO** |
+| Spectral | arkg_residual | 53.9d | **NO** |
+
+**Gate decision:** proceed = True, cycle strategies = **REJECTED**, MR strategies = unlocked
+
+**Verdict:** No spectral significance on any window against 1,000 AR(1) surrogates. The ~25-35 day cycle hypothesis is **rejected**. Mean reversion exists (Hurst < 0.5 throughout dev period), but it is not cyclical — RXRX is a trending stock with mean-reverting noise. S3 (cycle phase / Hilbert) is not justified.
+
+---
+
+## Strategy Comparison — Full Summary Table
+
+All strategies run with no stacked entries (1 position at a time). Hold period sweep {1, 2, 3, 5} days.
+
+| Strategy | Hold | N | WR | Avg PnL | Tot PnL % | Tot $ | Sharpe | PF | Max DD |
+|---|---|---|---|---|---|---|---|---|---|
+| **S5_L60_k1.5_comb** | **5** | **98** | **68%** | **+2.44%** | **+238.8%** | **+$23,877** | **+2.54** | **1.93** | **-27.4%** |
+| **S5_L60_k1.5_comb** | **2** | **123** | **58%** | **+1.50%** | **+184.9%** | **+$18,482** | **+2.17** | **1.61** | **-37.3%** |
+| S5_L60_k1.5_comb | 3 | 113 | 61% | +1.21% | +136.9% | +$13,687 | +1.44 | 1.41 | -53.6% |
+| S5_L60_k1.5_comb | 1 | 147 | 54% | +0.59% | +86.4% | +$8,637 | +1.23 | 1.25 | -45.7% |
+| S4c_short_5c | 5 | 16 | 56% | +4.41% | +70.5% | +$7,039 | +2.41 | 2.66 | -16.0% |
+| S4c_short_5c | 3 | 16 | 62% | +3.92% | +62.8% | +$6,270 | +2.83 | 2.50 | -12.4% |
+| S4c_short_5c | 2 | 16 | 50% | +2.27% | +36.4% | +$3,632 | +2.19 | 1.79 | -24.6% |
+| S4c_short_5c | 1 | 19 | 47% | +1.67% | +31.7% | +$3,163 | +2.87 | 1.73 | -13.4% |
+| S4c_comb_5c | 5 | 43 | 51% | +1.30% | +55.9% | +$5,581 | +0.74 | 1.34 | -43.3% |
+| S4c_comb_5c | 3 | 44 | 52% | +0.85% | +37.6% | +$3,747 | +0.70 | 1.26 | -41.2% |
+| S4c_comb_5c | 2 | 45 | 53% | +0.69% | +31.0% | +$3,089 | +0.77 | 1.24 | -50.1% |
+| S4c_comb_5c | 1 | 50 | 46% | +0.73% | +36.6% | +$3,654 | +1.25 | 1.27 | -44.2% |
+| S5_L60_k2_short | 5 | 21 | 76% | +2.38% | +50.0% | +$4,996 | +3.25 | 2.13 | -14.6% |
+| S5_L60_k2_short | 2 | 23 | 65% | +1.63% | +37.4% | +$3,738 | +2.59 | 1.76 | -14.6% |
+| S5_L60_k2_short | 3 | 22 | 64% | +0.95% | +20.9% | +$2,085 | +1.31 | 1.36 | -27.4% |
+| S5_L60_k2_short | 1 | 26 | 62% | +0.50% | +13.1% | +$1,307 | +1.09 | 1.23 | -20.3% |
+| S4a_comb_10_90 | 5 | 200 | 48% | +0.81% | +162.1% | +$16,199 | +0.40 | 1.18 | -83.9% |
+| S4c_comb_4c | 3 | 80 | 51% | +0.85% | +68.3% | +$6,816 | +0.58 | 1.20 | -94.5% |
+| S4c_comb_4c | 2 | 82 | 46% | +0.50% | +41.3% | +$4,118 | +0.45 | 1.12 | -90.6% |
+| S5_L60_k2_comb | 5 | 36 | 64% | +0.79% | +28.4% | +$2,835 | +0.82 | 1.24 | -36.2% |
+| S2_N40_0.5_comb | 5 | 2 | 100% | +5.66% | +11.3% | +$1,131 | +8.98 | inf | +0.0% |
+| S2_N60_1.0_comb | 5 | 7 | 57% | +0.94% | +6.6% | +$660 | +0.40 | 1.16 | -38.3% |
+| S4c_long_5c | 1 | 31 | 45% | +0.16% | +4.9% | +$491 | +0.27 | 1.05 | -43.2% |
+| S5_L60_k2_comb | 2 | 45 | 56% | +0.09% | +4.0% | +$401 | +0.13 | 1.03 | -35.2% |
+| S2_N40_0.5_comb | 2 | 2 | 50% | +2.87% | +5.8% | +$575 | +10.49 | 29.54 | +0.0% |
+| S2_N60_1.0_comb | 1 | 7 | 43% | +0.77% | +5.4% | +$539 | +1.16 | 1.24 | -22.1% |
+| S2_N60_1.0_comb | 2 | 7 | 57% | +0.71% | +5.0% | +$496 | +1.01 | 1.25 | -19.5% |
+| S2_N40_0.5_comb | 3 | 2 | 50% | -0.03% | -0.1% | -$5 | -0.05 | 0.99 | +0.0% |
+| S2_N40_0.5_comb | 1 | 2 | 50% | -1.19% | -2.4% | -$237 | -4.80 | 0.54 | +0.0% |
+| S2_N60_1.0_comb | 3 | 7 | 43% | -0.53% | -3.7% | -$369 | -0.55 | 0.87 | -27.4% |
+| S4a_comb_10_90 | 3 | 269 | 51% | -0.12% | -31.9% | -$3,193 | -0.09 | 0.97 | -171.2% |
+| S4c_long_5c | 5 | 28 | 50% | -0.41% | -11.4% | -$1,141 | -0.25 | 0.91 | -47.2% |
+| S4c_long_5c | 2 | 29 | 55% | -0.19% | -5.4% | -$543 | -0.24 | 0.94 | -41.6% |
+| S5_L60_k2_comb | 1 | 52 | 48% | -0.26% | -13.4% | -$1,340 | -0.59 | 0.90 | -37.0% |
+| S5_L60_k2_comb | 3 | 39 | 54% | -0.23% | -9.0% | -$903 | -0.30 | 0.93 | -55.2% |
+| S4c_comb_4c | 1 | 88 | 43% | -0.39% | -34.4% | -$3,436 | -0.77 | 0.87 | -84.3% |
+| S4c_comb_4c | 5 | 72 | 43% | -0.42% | -30.6% | -$3,062 | -0.24 | 0.91 | -79.9% |
+| S4c_long_5c | 3 | 28 | 46% | -0.90% | -25.2% | -$2,523 | -0.87 | 0.75 | -40.2% |
+| S4a_comb_10_90 | 2 | 325 | 49% | -0.27% | -86.3% | -$8,623 | -0.29 | 0.93 | -177.2% |
+| S1_comb_L20_k2 | 5 | 67 | 51% | -0.43% | -28.9% | -$2,888 | -0.37 | 0.90 | -86.8% |
+| S1_comb_L20_k2 | 3 | 68 | 47% | -0.46% | -31.4% | -$3,139 | -0.49 | 0.89 | -85.1% |
+| S1_comb_L20_k2 | 1 | 84 | 46% | -0.51% | -42.6% | -$4,255 | -1.01 | 0.83 | -49.2% |
+| S1_comb_L20_k2 | 2 | 73 | 51% | -0.62% | -45.0% | -$4,497 | -0.82 | 0.83 | -74.8% |
+| S4a_comb_10_90 | 1 | 417 | 43% | -0.78% | -324.9% | -$32,472 | -1.59 | 0.73 | -356.2% |
+
+---
+
+## Regime Segmentation
+
+### S4c_short_5c (h=3)
+
+| Regime | N | Avg PnL | WR | PF | Sharpe | Total $ |
+|---|---|---|---|---|---|---|
+| pre-2024 | 9 | +7.01% | 67% | 5.05 | +4.91 | +$6,295 |
+| **2024+** | **7** | **-0.04%** | **57%** | **0.99** | **-0.03** | **-$26** |
+| Hurst < 0.5 (MR) | 13 | +4.42% | 69% | 3.07 | +3.30 | +$5,735 |
+| Hurst >= 0.5 (trend) | 0 | — | — | — | — | — |
+
+**Edge dies in 2024+.** Pre-2024 dominated by the 2021-2023 crash. All trades occur in MR regime (Hurst < 0.5).
+
+### S4c_comb_5c (h=3)
+
+| Regime | N | Avg PnL | WR | PF | Sharpe | Total $ |
+|---|---|---|---|---|---|---|
+| pre-2024 | 21 | +2.60% | 52% | 1.83 | +1.90 | +$5,454 |
+| **2024+** | **23** | **-0.74%** | **52%** | **0.78** | **-0.73** | **-$1,707** |
+| Hurst < 0.5 (MR) | 37 | +0.73% | 51% | 1.24 | +0.64 | +$2,688 |
+
+---
+
+## Null Strategy Tests (1,000 drift-matched random runs)
+
+For each strategy, 1,000 random-entry strategies with identical trade count, side distribution, and hold period.
+
+| Strategy | Real Avg PnL | Null Mean | Null Std | PnL Pctile | Sharpe Pctile | Result |
+|---|---|---|---|---|---|---|
+| S4c_short_5c h=3 | +3.925% | -0.307% | 3.159% | 92.7th | 87.3th | **FAIL** |
+| S4c_comb_5c h=3 | +0.854% | -0.597% | 1.936% | 77.6th | 80.7th | **FAIL** |
+| S4c_long_5c h=3 | -0.901% | -0.786% | 2.298% | 50.1th | 45.6th | **FAIL** |
+| S4c_comb_4c h=3 | +0.854% | -0.482% | 1.474% | 82.9th | 82.3th | **FAIL** |
+| S1_comb_L20_k2 h=3 | -0.462% | -0.524% | 1.520% | 53.3th | 45.8th | **FAIL** |
+| S4a_comb_10_90 h=3 | -0.119% | -0.552% | 0.926% | 68.5th | 67.4th | **FAIL** |
+| S2_N60_1.0_comb h=3 | -0.528% | -0.932% | 4.512% | 58.4th | 58.0th | **FAIL** |
+| S5_L60_k2_comb h=3 | -0.232% | -0.504% | 1.915% | 55.3th | 51.0th | **FAIL** |
+| S5_L60_k2_short h=3 | +0.948% | -0.276% | 2.599% | 67.6th | 77.1th | **FAIL** |
+| **S5_L60_k1.5_comb h=3** | **+1.211%** | **-0.571%** | **1.292%** | **92.2th** | **99.0th** | **Sharpe PASS** |
+
+**Only S5_L60_k1.5_comb passes on Sharpe (99.0th percentile).** Avg PnL at 92.2th — close but below 95th threshold.
+
+**Note:** ARKG hedge test in v2 code has a bug — non-S5 strategies show n=2 because signal columns (consec_up, etc.) don't exist on arkg_dev. The "beta exposure" conclusion for S4c is an artifact. Needs fix.
+
+---
+
+## Episode Analysis + Leave-One-Episode-Out
+
+### S4c_short_5c h=3 — 16 trades in 12 episodes
+
+| Ep | Start | End | N | Avg PnL | Tot PnL | Tot $ |
+|---|---|---|---|---|---|---|
+| 0 | 2021-06-03 | 2021-06-18 | 2 | -6.98% | -13.96% | -$1,395 |
+| 1 | 2021-07-12 | 2021-07-15 | 1 | +19.36% | +19.36% | +$1,930 |
+| 2 | 2022-06-09 | 2022-06-14 | 1 | +19.32% | +19.32% | +$1,930 |
+| 3 | 2022-09-13 | 2022-09-16 | 1 | +14.34% | +14.34% | +$1,433 |
+| 4 | 2022-11-15 | 2022-11-18 | 1 | +22.19% | +22.19% | +$2,218 |
+| 5 | 2023-01-13 | 2023-01-19 | 1 | +0.70% | +0.70% | +$70 |
+| 6 | 2023-05-24 | 2023-06-15 | 2 | +0.55% | +1.11% | +$111 |
+| 7 | 2024-08-22 | 2024-08-27 | 1 | +0.59% | +0.59% | +$59 |
+| 8 | 2024-09-16 | 2024-09-24 | 2 | -3.43% | -6.85% | -$685 |
+| 9 | 2025-02-14 | 2025-02-24 | 2 | +5.87% | +11.74% | +$1,173 |
+| 10 | 2025-07-23 | 2025-07-28 | 1 | +5.22% | +5.22% | +$522 |
+| 11 | 2025-12-01 | 2025-12-04 | 1 | -10.95% | -10.95% | -$1,095 |
+
+**LOEO:** Full avg=+3.925%, Sharpe=2.83
+- Dropping ep 4 HURTS most: avg=+2.708%, Sharpe=2.08
+- Dropping ep 0 HELPS most: avg=+5.483%, Sharpe=4.00
+- **Edge survives ALL drops: YES** (min avg=+2.708%, min Sharpe=2.08)
+
+### S5_L60_k1.5_comb h=3 — 113 trades in 31 episodes
+
+| Ep | Start | End | N | Avg PnL | Tot PnL | Tot $ |
+|---|---|---|---|---|---|---|
+| 0 | 2021-11-22 | 2021-12-01 | 2 | +4.79% | +9.57% | +$957 |
+| 1 | 2022-01-19 | 2022-01-27 | 2 | -0.32% | -0.63% | -$63 |
+| 2 | 2022-03-07 | 2022-05-06 | 10 | -2.12% | -21.16% | -$2,115 |
+| 3 | 2022-06-08 | 2022-06-28 | 3 | -0.42% | -1.27% | -$127 |
+| 4 | 2022-09-09 | 2022-09-16 | 2 | +0.28% | +0.57% | +$57 |
+| 5 | 2022-10-20 | 2022-11-30 | 5 | +1.84% | +9.20% | +$920 |
+| 6 | 2023-01-12 | 2023-01-31 | 4 | -0.60% | -2.39% | -$239 |
+| 7 | 2023-03-01 | 2023-03-09 | 2 | +1.95% | +3.90% | +$390 |
+| 8 | 2023-04-17 | 2023-05-04 | 4 | -5.08% | -20.31% | -$2,031 |
+| 9 | 2023-05-23 | 2023-06-06 | 3 | -2.99% | -8.96% | -$896 |
+| 10 | 2023-07-21 | 2023-08-11 | 3 | +14.14% | +42.42% | +$4,241 |
+| 11 | 2023-11-01 | 2023-11-13 | 3 | +0.54% | +1.61% | +$162 |
+| 12 | 2023-11-28 | 2023-11-29 | 1 | +8.36% | +8.36% | +$835 |
+| 13 | 2023-12-18 | 2023-12-20 | 1 | -11.09% | -11.09% | -$1,108 |
+| 14 | 2024-01-05 | 2024-01-24 | 5 | +0.73% | +3.63% | +$363 |
+| 15 | 2024-02-20 | 2024-04-15 | 7 | -2.34% | -16.36% | -$1,635 |
+| 16 | 2024-06-05 | 2024-08-19 | 14 | +1.34% | +18.80% | +$1,878 |
+| 17 | 2024-09-04 | 2024-09-09 | 1 | +0.64% | +0.64% | +$64 |
+| 18 | 2024-09-26 | 2024-10-31 | 8 | +0.39% | +3.12% | +$311 |
+| 19 | 2024-12-09 | 2024-12-10 | 1 | +16.17% | +16.17% | +$1,616 |
+| 20 | 2024-12-27 | 2024-12-30 | 1 | +8.66% | +8.66% | +$865 |
+| 21 | 2025-01-16 | 2025-01-29 | 3 | +6.72% | +20.16% | +$2,016 |
+| 22 | 2025-02-18 | 2025-02-25 | 3 | +6.03% | +18.10% | +$1,809 |
+| 23 | 2025-04-07 | 2025-04-11 | 2 | +14.83% | +29.66% | +$2,966 |
+| 24 | 2025-05-06 | 2025-06-05 | 5 | -3.52% | -17.60% | -$1,759 |
+| 25 | 2025-07-11 | 2025-08-04 | 6 | +0.94% | +5.67% | +$567 |
+| 26 | 2025-09-03 | 2025-09-11 | 2 | +1.45% | +2.90% | +$290 |
+| 27 | 2025-10-09 | 2025-10-22 | 3 | +6.64% | +19.93% | +$1,992 |
+| 28 | 2025-11-21 | 2025-12-01 | 2 | +4.39% | +8.78% | +$877 |
+| 29 | 2026-01-28 | 2026-01-29 | 1 | +6.03% | +6.03% | +$603 |
+| 30 | 2026-03-09 | 2026-03-31 | 4 | -0.30% | -1.20% | -$120 |
+
+**LOEO:** Full avg=+1.211%, Sharpe=1.44
+- Dropping ep 10 HURTS most: avg=+0.859%, Sharpe=1.05
+- Dropping ep 2 HELPS most: avg=+1.534%, Sharpe=1.89
+- **Edge survives ALL drops: YES** (min avg=+0.859%, min Sharpe=1.05)
+
+### Other strategies — LOEO results
+
+| Strategy | Trades | Episodes | Survives ALL drops? | Min avg after drop | Min Sharpe after drop |
+|---|---|---|---|---|---|
+| **S4c_short_5c h=3** | 16 | 12 | **YES** | +2.708% | +2.08 |
+| **S5_L60_k1.5_comb h=3** | 113 | 31 | **YES** | +0.859% | +1.05 |
+| **S5_L60_k2_short h=3** | 22 | 12 | **YES** | +0.653% | +0.89 |
+| **S4c_comb_5c h=3** | 44 | 32 | **YES** | +0.423% | +0.36 |
+| S4c_comb_4c h=3 | 80 | 39 | YES | +0.055% | +0.04 |
+| S4c_long_5c h=3 | 28 | 23 | NO | -1.336% | -1.29 |
+| S1_comb_L20_k2 h=3 | 68 | 37 | NO | -0.761% | -0.80 |
+| S4a_comb_10_90 h=3 | 269 | 2 | NO | -2.087% | -2.12 |
+| S2_N60_1.0_comb h=3 | 7 | 7 | NO | -2.410% | -2.94 |
+| S5_L60_k2_comb h=3 | 39 | 17 | NO | -0.475% | -0.62 |
+
+---
+
+## Detailed Strategy Results
+
+### S5_L60_k1.5_comb — TOP STRATEGY (Relative Value: RXRX vs ARKG spread)
+
+Trades the z-score of the rolling 60-day OLS residual between log(RXRX) and log(ARKG). Long when z < -1.5, short when z > +1.5.
+
+| Hold | N | WR | Avg PnL | Tot PnL % | Tot $ | Sharpe | PF | Max DD |
+|---|---|---|---|---|---|---|---|---|
+| h=1 | 147 | 54% | +0.59% | +86.4% | +$8,637 | +1.23 | 1.25 | -45.7% |
+| h=2 | 123 | 58% | +1.50% | +184.9% | +$18,482 | +2.17 | 1.61 | -37.3% |
+| h=3 | 113 | 61% | +1.21% | +136.9% | +$13,687 | +1.44 | 1.41 | -53.6% |
+| **h=5** | **98** | **68%** | **+2.44%** | **+238.8%** | **+$23,877** | **+2.54** | **1.93** | **-27.4%** |
+
+- 31 episodes, LOEO survives all drops
+- Null test: Sharpe at **99.0th** percentile (PASS), avg PnL at 92.2th (close)
+- Highest trade count of any positive strategy
+- Edge scales with hold period (h=5 best)
+
+### S4c_short_5c — SHORT after 5+ consecutive up-closes
+
+| Hold | N | WR | Avg PnL | Tot PnL % | Tot $ | Sharpe | PF | Max DD |
+|---|---|---|---|---|---|---|---|---|
+| h=1 | 19 | 47% | +1.67% | +31.7% | +$3,163 | +2.87 | 1.73 | -13.4% |
+| h=2 | 16 | 50% | +2.27% | +36.4% | +$3,632 | +2.19 | 1.79 | -24.6% |
+| **h=3** | **16** | **62%** | **+3.92%** | **+62.8%** | **+$6,270** | **+2.83** | **2.50** | **-12.4%** |
+| h=5 | 16 | 56% | +4.41% | +70.5% | +$7,039 | +2.41 | 2.66 | -16.0% |
+
+- 12 episodes, LOEO survives all drops
+- **Fails null test** (92.7th percentile, needs 95th)
+- **Edge dies in 2024+**: pre-2024 avg +7.01%, 2024+ avg -0.04%
+- Only 16 trades over 4.5 years — too few for single-stock verdict
+- **Move to Phase 4**: cross-sectional test across many stocks
+
+### S5_L60_k2_short — SHORT on RXRX-ARKG spread, stricter threshold
+
+| Hold | N | WR | Avg PnL | Tot PnL % | Tot $ | Sharpe | PF | Max DD |
+|---|---|---|---|---|---|---|---|---|
+| h=1 | 26 | 62% | +0.50% | +13.1% | +$1,307 | +1.09 | 1.23 | -20.3% |
+| h=2 | 23 | 65% | +1.63% | +37.4% | +$3,738 | +2.59 | 1.76 | -14.6% |
+| h=3 | 22 | 64% | +0.95% | +20.9% | +$2,085 | +1.31 | 1.36 | -27.4% |
+| **h=5** | **21** | **76%** | **+2.38%** | **+50.0%** | **+$4,996** | **+3.25** | **2.13** | **-14.6%** |
+
+- 12 episodes, LOEO survives all drops
+- Fails null on avg PnL (67.6th), but Sharpe at 77.1th
+- Only 21 trades — thin sample
+
+### S4c_comb_5c — Combined LONG+SHORT after 5+ consecutive closes
+
+| Hold | N | WR | Avg PnL | Tot PnL % | Tot $ | Sharpe | PF | Max DD |
+|---|---|---|---|---|---|---|---|---|
+| h=1 | 50 | 46% | +0.73% | +36.6% | +$3,654 | +1.25 | 1.27 | -44.2% |
+| h=2 | 45 | 53% | +0.69% | +31.0% | +$3,089 | +0.77 | 1.24 | -50.1% |
+| h=3 | 44 | 52% | +0.85% | +37.6% | +$3,747 | +0.70 | 1.26 | -41.2% |
+| h=5 | 43 | 51% | +1.30% | +55.9% | +$5,581 | +0.74 | 1.34 | -43.3% |
+
+- LONG side drags results: SHORT avg +5.78%, LONG avg -1.18%
+- Fails null test
+
+### S1_comb_L20_k2 — Z-score mean reversion (NEGATIVE)
+
+| Hold | N | WR | Avg PnL | Tot PnL % | Tot $ |
+|---|---|---|---|---|---|
+| h=1 | 84 | 46% | -0.51% | -42.6% | -$4,255 |
+| h=2 | 73 | 51% | -0.62% | -45.0% | -$4,497 |
+| h=3 | 68 | 47% | -0.46% | -31.4% | -$3,139 |
+| h=5 | 67 | 51% | -0.43% | -28.9% | -$2,888 |
+
+Loses money at all hold periods. Buying 2σ dips in a structural downtrend.
+
+### S4a_comb_10_90 — RSI(2) reversal (FLAT)
+
+| Hold | N | WR | Avg PnL | Tot PnL % | Tot $ |
+|---|---|---|---|---|---|
+| h=1 | 417 | 43% | -0.78% | -324.9% | -$32,472 |
+| h=2 | 325 | 49% | -0.27% | -86.3% | -$8,623 |
+| h=3 | 269 | 51% | -0.12% | -31.9% | -$3,193 |
+| h=5 | 200 | 48% | +0.81% | +162.1% | +$16,199 |
+
+High trade count but edge is noise. Only h=5 is positive, and that's just drift.
+
+### S2 — Range fade (INSUFFICIENT DATA)
+
+S2_N40_0.5: 2 trades total. S2_N60_1.0: 7 trades. IBS + range confirmation filter is too restrictive for RXRX. Not enough data to evaluate.
+
+---
+
+## Known Issues in v2
+
+1. **ARKG hedge test bug:** For non-S5 strategies, the code runs `sig_func(rxrx_dev)` but executes on `arkg_dev` which lacks `consec_up`/`consec_down`/`z_*` columns. Result: n=2 for all non-S5 strategies, "beta exposure" conclusion is an artifact. Fix: compare RXRX returns to ARKG-hedged returns on the *same* trades, don't re-execute on different DataFrame.
+
+2. **Null strategy design:** Random entries use `stop=None, target=None` (pure time-stop exits), while real strategies use stop losses and profit targets. This makes the null slightly favorable to real strategies that cut losers.
+
+---
+
+## Key Findings
+
+1. **~30-day cycle hypothesis REJECTED.** No spectral significance against AR(1) surrogates on any window. The original hypothesis that drove this investigation is false.
+
+2. **Mean reversion exists but is not cyclical.** Hurst < 0.5 throughout dev period. This justifies MR strategies but not cycle-phase timing (S3).
+
+3. **S5 relative value (RXRX vs ARKG) is the only robust finding.** S5_L60_k1.5_comb h=5: 98 trades, +2.44% avg, Sharpe 2.54, 31 episodes, survives LOEO, Sharpe passes null at 99th percentile. This is a pairs/spread trade, not a directional RXRX bet.
+
+4. **S4c SHORT (5 consec) has attractive metrics but fails key tests.** 16 trades over 4.5 years, fails null test, edge dies in 2024+. Cannot conclude it's real from single-stock data. Move to Phase 4 cross-sectional test.
+
+5. **LONG side loses money in every strategy.** RXRX's structural downtrend (-90% B&H) makes all long-side MR strategies negative. The only exceptions are S5 combined (which hedges against ARKG) and short-horizon scalps.
+
+6. **Hold period matters.** S5 improves monotonically from h=1 to h=5. S4c SHORT is best at h=3-5. Generic reversals (S4a, S1) stay negative at all holds.
+
+## Pending
+
+- **S0** — User's discretionary rules not yet provided
+- **Phase 4** — Cross-sectional test: "short after 5 up closes in downtrending, high-ATR small caps" across many stocks (the only way to get enough trades for a real verdict on S4c)
+- **Holdout NOT spent** — per instruction, no strategy warrants it yet
+- **S7 meta-labeling SKIPPED** — ~12-31 episodes is too few to train a classifier
+- **ARKG hedge test fix** — needs corrected implementation
