@@ -1,0 +1,38 @@
+{
+  "id": "H038",
+  "desc": "SHORT gap_up gap>=1% 17:00",
+  "direction": "SHORT",
+  "catalyst": "gap_up",
+  "entry": "local_high",
+  "exit": "17:00",
+  "filters": {
+    "pattern": "sustained_drop",
+    "fire_type": "LH_only",
+    "gap_min": 0.01
+  },
+  "passed": true,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H038",
+    "n": 53,
+    "avg": 2.182,
+    "med": 1.533,
+    "std": 3.48,
+    "wr": 0.8302,
+    "sharpe": 0.6268,
+    "pf": 6.825,
+    "ci_lo": 1.292,
+    "ci_hi": 3.192,
+    "trimmed_mean": 1.999,
+    "max_loss": -6.259,
+    "max_gain": 13.509,
+    "max_dd_pct": -0.33
+  },
+  "trades_per_week": 5.76,
+  "avg_hold_hrs": 7.3,
+  "reasons": [
+    "ALL PASS"
+  ],
+  "n_trades": 53,
+  "run_date": "2026-10-07 00:14"
+}

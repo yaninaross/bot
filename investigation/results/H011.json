@@ -1,0 +1,38 @@
+{
+  "id": "H011",
+  "desc": "SHORT transport/retail gap-up>=5% open T+1",
+  "direction": "SHORT",
+  "catalyst": "gap_up",
+  "entry": "open_9:30",
+  "exit": "T+1_close",
+  "filters": {
+    "gap_min": 0.05,
+    "sector_incl": "transport_retail"
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H011",
+    "n": 97,
+    "avg": 1.698,
+    "med": 1.794,
+    "std": 8.636,
+    "wr": 0.6082,
+    "sharpe": 0.1967,
+    "pf": 1.677,
+    "ci_lo": 0.062,
+    "ci_hi": 3.344,
+    "trimmed_mean": 1.489,
+    "max_loss": -15.5,
+    "max_gain": 32.632,
+    "max_dd_pct": -3.7
+  },
+  "trades_per_week": 10.54,
+  "avg_hold_hrs": 8.8,
+  "reasons": [
+    "avg=1.70% <= 2.0%",
+    "Sharpe=0.197 <= 0.2"
+  ],
+  "n_trades": 97,
+  "run_date": "2026-10-07 00:14"
+}

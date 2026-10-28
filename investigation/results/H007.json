@@ -1,0 +1,39 @@
+{
+  "id": "H007",
+  "desc": "E2-A SHORT LH+SPY_down+vol_top_quartile",
+  "direction": "SHORT",
+  "catalyst": "gap_up",
+  "entry": "local_high",
+  "exit": "17:00",
+  "filters": {
+    "fire_type": "LH_only",
+    "spy_gate": "down_30m",
+    "vol_gate": "top_quartile",
+    "gap_fresh": 0.7
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H007",
+    "n": 0,
+    "avg": 0,
+    "med": 0,
+    "std": 0,
+    "wr": 0,
+    "sharpe": 0,
+    "pf": 0,
+    "ci_lo": 0,
+    "ci_hi": 0,
+    "trimmed_mean": 0,
+    "max_loss": 0,
+    "max_gain": 0,
+    "max_dd_pct": 0
+  },
+  "trades_per_week": 0.0,
+  "avg_hold_hrs": 0,
+  "reasons": [
+    "INVALID: n < 5"
+  ],
+  "n_trades": 0,
+  "run_date": "2026-10-07 00:14"
+}

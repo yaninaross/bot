@@ -1,0 +1,706 @@
+{
+  "analysis": "gap_tier_period",
+  "backtest_start": "2026-01-02",
+  "backtest_end": "2026-09-11",
+  "total_trades": 166,
+  "baseline": {
+    "n": 166,
+    "avg_pnl": 13.515451807228915,
+    "sharpe": 0.5422871098330342,
+    "wr": 0.7710843373493976,
+    "med_pnl": 10.971
+  },
+  "period_tier_matrix": {
+    "Q1_T4": {
+      "n": 0,
+      "avg_pnl": 0,
+      "med_pnl": 0,
+      "wr": 0,
+      "sharpe": 0,
+      "total_dol": 0,
+      "max_gain": 0,
+      "max_loss": 0,
+      "pf": 0
+    },
+    "Q1_T5": {
+      "n": 4,
+      "avg_pnl": -2.237750000000001,
+      "med_pnl": -3.8225000000000002,
+      "wr": 0.5,
+      "sharpe": -0.18884001147890558,
+      "total_dol": -8951.0,
+      "max_gain": 11.219,
+      "max_loss": -12.525,
+      "pf": 0.6329902825044076
+    },
+    "Q1_T6": {
+      "n": 14,
+      "avg_pnl": 6.577642857142856,
+      "med_pnl": 2.9525,
+      "wr": 0.6428571428571429,
+      "sharpe": 0.5623649553033722,
+      "total_dol": 92087.00000000001,
+      "max_gain": 34.13,
+      "max_loss": -7.103,
+      "pf": 6.392457691632021
+    },
+    "Q1_T7": {
+      "n": 43,
+      "avg_pnl": 18.255046511627903,
+      "med_pnl": 16.718,
+      "wr": 0.8604651162790697,
+      "sharpe": 0.8269499792274088,
+      "total_dol": 784967.0,
+      "max_gain": 73.12,
+      "max_loss": -40.413,
+      "pf": 7.937462991276989
+    },
+    "Q2_T4": {
+      "n": 0,
+      "avg_pnl": 0,
+      "med_pnl": 0,
+      "wr": 0,
+      "sharpe": 0,
+      "total_dol": 0,
+      "max_gain": 0,
+      "max_loss": 0,
+      "pf": 0
+    },
+    "Q2_T5": {
+      "n": 2,
+      "avg_pnl": 3.2894999999999994,
+      "med_pnl": 3.2894999999999994,
+      "wr": 0.5,
+      "sharpe": 0.43530041297148836,
+      "total_dol": 6578.999999999998,
+      "max_gain": 8.633,
+      "max_loss": -2.054,
+      "pf": 4.203018500486855
+    },
+    "Q2_T6": {
+      "n": 11,
+      "avg_pnl": 8.781818181818183,
+      "med_pnl": 7.066,
+      "wr": 0.9090909090909091,
+      "sharpe": 0.9305090391494901,
+      "total_dol": 96600.0,
+      "max_gain": 26.396,
+      "max_loss": -3.056,
+      "pf": 32.60994764397906
+    },
+    "Q2_T7": {
+      "n": 46,
+      "avg_pnl": 18.74143478260869,
+      "med_pnl": 17.669,
+      "wr": 0.8043478260869565,
+      "sharpe": 0.5448187238279947,
+      "total_dol": 862106.0,
+      "max_gain": 89.574,
+      "max_loss": -132.588,
+      "pf": 4.808426986146451
+    },
+    "Q3_T4": {
+      "n": 3,
+      "avg_pnl": 2.840666666666667,
+      "med_pnl": 1.239,
+      "wr": 0.6666666666666666,
+      "sharpe": 0.7289868247312377,
+      "total_dol": 8522.0,
+      "max_gain": 7.283,
+      "max_loss": 0.0,
+      "pf": Infinity
+    },
+    "Q3_T5": {
+      "n": 7,
+      "avg_pnl": 0.5528571428571428,
+      "med_pnl": -0.304,
+      "wr": 0.42857142857142855,
+      "sharpe": 0.2045950625633805,
+      "total_dol": 3870.0,
+      "max_gain": 6.027,
+      "max_loss": -2.374,
+      "pf": 1.958632648005945
+    },
+    "Q3_T6": {
+      "n": 17,
+      "avg_pnl": 5.244176470588235,
+      "med_pnl": 5.251,
+      "wr": 0.8235294117647058,
+      "sharpe": 0.30056609010680424,
+      "total_dol": 89151.0,
+      "max_gain": 37.508,
+      "max_loss": -50.68,
+      "pf": 2.6040122346167682
+    },
+    "Q3_T7": {
+      "n": 19,
+      "avg_pnl": 16.243894736842105,
+      "med_pnl": 8.459,
+      "wr": 0.6842105263157895,
+      "sharpe": 0.5928058853295022,
+      "total_dol": 308634.0,
+      "max_gain": 81.072,
+      "max_loss": -23.239,
+      "pf": 6.08139879482367
+    }
+  },
+  "gap_distribution": {
+    "Q1": {
+      "avg_gap_pct": 151.7,
+      "med_gap_pct": 7.12,
+      "avg_gapups_per_day": 81.8,
+      "total_gapups": 4992,
+      "trading_days": 61,
+      "n_trades": 61,
+      "trades_per_week": 5.0
+    },
+    "Q2": {
+      "avg_gap_pct": 103.41,
+      "med_gap_pct": 7.09,
+      "avg_gapups_per_day": 107.0,
+      "total_gapups": 6635,
+      "trading_days": 62,
+      "n_trades": 59,
+      "trades_per_week": 4.76
+    },
+    "Q3": {
+      "avg_gap_pct": 10.02,
+      "med_gap_pct": 7.27,
+      "avg_gapups_per_day": 107.0,
+      "total_gapups": 5458,
+      "trading_days": 51,
+      "n_trades": 46,
+      "trades_per_week": 4.51
+    }
+  },
+  "opportunity_set_tiers": {
+    "Q1": {
+      "T7": 169,
+      "T6": 383,
+      "T5": 1413,
+      "T4": 3027
+    },
+    "Q2": {
+      "T7": 176,
+      "T6": 457,
+      "T5": 1944,
+      "T4": 4058
+    },
+    "Q3": {
+      "T7": 117,
+      "T6": 455,
+      "T5": 1655,
+      "T4": 3231
+    }
+  },
+  "tier_deterioration": {
+    "T4": {
+      "q12_avg": 0,
+      "q12_n": 0,
+      "q3_avg": 2.840666666666667,
+      "q3_n": 3,
+      "delta": 0,
+      "q3_dol": 8522.0,
+      "verdict": "STABLE"
+    },
+    "T5": {
+      "q12_avg": -0.3953333333333342,
+      "q12_n": 6,
+      "q3_avg": 0.5528571428571428,
+      "q3_n": 7,
+      "delta": 0.948190476190477,
+      "q3_dol": 3870.0,
+      "verdict": "STABLE"
+    },
+    "T6": {
+      "q12_avg": 7.547479999999999,
+      "q12_n": 25,
+      "q3_avg": 5.244176470588235,
+      "q3_n": 17,
+      "delta": -2.303303529411764,
+      "q3_dol": 89151.0,
+      "verdict": "WEAKENED"
+    },
+    "T7": {
+      "q12_avg": 18.50643820224719,
+      "q12_n": 89,
+      "q3_avg": 16.243894736842105,
+      "q3_n": 19,
+      "delta": -2.262543465405084,
+      "q3_dol": 308634.0,
+      "verdict": "WEAKENED"
+    }
+  },
+  "worst_tier": "T6",
+  "monthly_data": {
+    "2026-01": {
+      "n_gapups": 1522,
+      "per_day": 76.1,
+      "n_trades": 20,
+      "avg_gap": 474.09118391082455,
+      "med_gap": 7.080096450954482,
+      "T4": 935,
+      "T5": 401,
+      "T6": 120,
+      "T7": 66
+    },
+    "2026-02": {
+      "n_gapups": 1731,
+      "per_day": 91.10526315789474,
+      "n_trades": 19,
+      "avg_gap": 10.799851054509142,
+      "med_gap": 7.417916497770564,
+      "T4": 976,
+      "T5": 554,
+      "T6": 142,
+      "T7": 59
+    },
+    "2026-03": {
+      "n_gapups": 1739,
+      "per_day": 79.04545454545455,
+      "n_trades": 22,
+      "avg_gap": 9.801914470686322,
+      "med_gap": 6.896551724137932,
+      "T4": 1116,
+      "T5": 458,
+      "T6": 121,
+      "T7": 44
+    },
+    "2026-04": {
+      "n_gapups": 2576,
+      "per_day": 122.66666666666667,
+      "n_trades": 19,
+      "avg_gap": 249.26140336301992,
+      "med_gap": 6.800335080985126,
+      "T4": 1701,
+      "T5": 676,
+      "T6": 151,
+      "T7": 48
+    },
+    "2026-05": {
+      "n_gapups": 1762,
+      "per_day": 88.1,
+      "n_trades": 20,
+      "avg_gap": 11.110917497232203,
+      "med_gap": 7.387786873444363,
+      "T4": 1011,
+      "T5": 521,
+      "T6": 168,
+      "T7": 62
+    },
+    "2026-06": {
+      "n_gapups": 2297,
+      "per_day": 109.38095238095238,
+      "n_trades": 20,
+      "avg_gap": 10.649803950077692,
+      "med_gap": 7.279829817191216,
+      "T4": 1346,
+      "T5": 747,
+      "T6": 138,
+      "T7": 66
+    },
+    "2026-07": {
+      "n_gapups": 2530,
+      "per_day": 115.0,
+      "n_trades": 21,
+      "avg_gap": 10.021965605900435,
+      "med_gap": 7.21810614439978,
+      "T4": 1508,
+      "T5": 745,
+      "T6": 223,
+      "T7": 54
+    },
+    "2026-08": {
+      "n_gapups": 2385,
+      "per_day": 113.57142857142857,
+      "n_trades": 18,
+      "avg_gap": 10.346811920880821,
+      "med_gap": 7.428571428571422,
+      "T4": 1361,
+      "T5": 759,
+      "T6": 208,
+      "T7": 57
+    },
+    "2026-09": {
+      "n_gapups": 543,
+      "per_day": 67.875,
+      "n_trades": 7,
+      "avg_gap": 8.619564327399349,
+      "med_gap": 6.910039113428941,
+      "T4": 362,
+      "T5": 151,
+      "T6": 24,
+      "T7": 6
+    }
+  },
+  "q3_trades": [
+    {
+      "date": "2026-07-27",
+      "ticker": "GOSS",
+      "gap_pct": 27.54,
+      "tier": "T6",
+      "pnl_eod": -50.68,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-23",
+      "ticker": "LGCL",
+      "gap_pct": 67.1,
+      "tier": "T7",
+      "pnl_eod": -23.239,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-17",
+      "ticker": "SDOT",
+      "gap_pct": 53.96,
+      "tier": "T7",
+      "pnl_eod": -15.982,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-09-09",
+      "ticker": "ODD",
+      "gap_pct": 34.36,
+      "tier": "T7",
+      "pnl_eod": -10.928,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-15",
+      "ticker": "ELVA",
+      "gap_pct": 54.63,
+      "tier": "T7",
+      "pnl_eod": -6.092,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-14",
+      "ticker": "IMXI",
+      "gap_pct": 21.71,
+      "tier": "T6",
+      "pnl_eod": -3.258,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-09-03",
+      "ticker": "BIAF",
+      "gap_pct": 35.38,
+      "tier": "T7",
+      "pnl_eod": -3.183,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-17",
+      "ticker": "DUOT",
+      "gap_pct": 13.61,
+      "tier": "T5",
+      "pnl_eod": -2.374,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-09",
+      "ticker": "SMPL",
+      "gap_pct": 17.06,
+      "tier": "T6",
+      "pnl_eod": -1.642,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-31",
+      "ticker": "AXTI",
+      "gap_pct": 42.11,
+      "tier": "T7",
+      "pnl_eod": -1.314,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-22",
+      "ticker": "SPKL",
+      "gap_pct": 8.52,
+      "tier": "T5",
+      "pnl_eod": -0.826,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-10",
+      "ticker": "CAMT",
+      "gap_pct": 9.39,
+      "tier": "T5",
+      "pnl_eod": -0.533,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-29",
+      "ticker": "ANIK",
+      "gap_pct": 13.73,
+      "tier": "T5",
+      "pnl_eod": -0.304,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-09-10",
+      "ticker": "ALMS",
+      "gap_pct": 7.65,
+      "tier": "T4",
+      "pnl_eod": 0.0,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-25",
+      "ticker": "FLNC",
+      "gap_pct": 8.38,
+      "tier": "T5",
+      "pnl_eod": 0.177,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-30",
+      "ticker": "PN",
+      "gap_pct": 90.02,
+      "tier": "T7",
+      "pnl_eod": 0.366,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-08-06",
+      "ticker": "CLRO",
+      "gap_pct": 217.53,
+      "tier": "T7",
+      "pnl_eod": 0.858,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-08-12",
+      "ticker": "VELO",
+      "gap_pct": 24.54,
+      "tier": "T6",
+      "pnl_eod": 0.984,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-14",
+      "ticker": "CLSK",
+      "gap_pct": 18.81,
+      "tier": "T6",
+      "pnl_eod": 1.133,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-09-01",
+      "ticker": "ELMD",
+      "gap_pct": 6.9,
+      "tier": "T4",
+      "pnl_eod": 1.239,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-16",
+      "ticker": "PESI",
+      "gap_pct": 8.77,
+      "tier": "T5",
+      "pnl_eod": 1.703,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-09-02",
+      "ticker": "GTLB",
+      "gap_pct": 22.42,
+      "tier": "T6",
+      "pnl_eod": 2.629,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-05",
+      "ticker": "QLYS",
+      "gap_pct": 23.2,
+      "tier": "T6",
+      "pnl_eod": 3.296,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-26",
+      "ticker": "PLAB",
+      "gap_pct": 27.08,
+      "tier": "T6",
+      "pnl_eod": 4.251,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-08-28",
+      "ticker": "ESTC",
+      "gap_pct": 24.06,
+      "tier": "T6",
+      "pnl_eod": 5.251,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-09-04",
+      "ticker": "IOT",
+      "gap_pct": 15.87,
+      "tier": "T6",
+      "pnl_eod": 5.317,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-03",
+      "ticker": "SUPN",
+      "gap_pct": 13.04,
+      "tier": "T5",
+      "pnl_eod": 6.027,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-13",
+      "ticker": "CODI",
+      "gap_pct": 6.36,
+      "tier": "T4",
+      "pnl_eod": 7.283,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-31",
+      "ticker": "MOVE",
+      "gap_pct": 31.33,
+      "tier": "T7",
+      "pnl_eod": 8.295,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-04",
+      "ticker": "MOVE",
+      "gap_pct": 74.54,
+      "tier": "T7",
+      "pnl_eod": 8.459,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-13",
+      "ticker": "HLIT",
+      "gap_pct": 20.67,
+      "tier": "T6",
+      "pnl_eod": 8.577,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-24",
+      "ticker": "ADVB",
+      "gap_pct": 37.6,
+      "tier": "T7",
+      "pnl_eod": 11.002,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-20",
+      "ticker": "SCSC",
+      "gap_pct": 26.1,
+      "tier": "T6",
+      "pnl_eod": 11.64,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-19",
+      "ticker": "TCGX",
+      "gap_pct": 28.07,
+      "tier": "T6",
+      "pnl_eod": 12.903,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-28",
+      "ticker": "GOSS",
+      "gap_pct": 34.45,
+      "tier": "T7",
+      "pnl_eod": 14.206,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-24",
+      "ticker": "NSSC",
+      "gap_pct": 21.19,
+      "tier": "T6",
+      "pnl_eod": 15.845,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-06",
+      "ticker": "SDOT",
+      "gap_pct": 20.71,
+      "tier": "T6",
+      "pnl_eod": 16.555,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-09-11",
+      "ticker": "TANH",
+      "gap_pct": 19.71,
+      "tier": "T6",
+      "pnl_eod": 18.842,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-21",
+      "ticker": "KIDZ",
+      "gap_pct": 137.08,
+      "tier": "T7",
+      "pnl_eod": 26.355,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-07",
+      "ticker": "CPOP",
+      "gap_pct": 39.44,
+      "tier": "T7",
+      "pnl_eod": 34.401,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-07-02",
+      "ticker": "SDOT",
+      "gap_pct": 23.6,
+      "tier": "T6",
+      "pnl_eod": 37.508,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-01",
+      "ticker": "JEM",
+      "gap_pct": 116.5,
+      "tier": "T7",
+      "pnl_eod": 38.114,
+      "entry_type": "fallback"
+    },
+    {
+      "date": "2026-08-11",
+      "ticker": "WXM",
+      "gap_pct": 168.01,
+      "tier": "T7",
+      "pnl_eod": 44.786,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-08-07",
+      "ticker": "MB",
+      "gap_pct": 281.33,
+      "tier": "T7",
+      "pnl_eod": 45.995,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-08",
+      "ticker": "ONFO",
+      "gap_pct": 36.27,
+      "tier": "T7",
+      "pnl_eod": 55.463,
+      "entry_type": "local_high"
+    },
+    {
+      "date": "2026-07-10",
+      "ticker": "HAO",
+      "gap_pct": 52.34,
+      "tier": "T7",
+      "pnl_eod": 81.072,
+      "entry_type": "local_high"
+    }
+  ]
+}

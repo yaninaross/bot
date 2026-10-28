@@ -1,0 +1,2172 @@
+[
+  {
+    "ticker": "UPC",
+    "composite_score": 0.7,
+    "avg_gap_magnitude": 480.07,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 563338,
+    "in_original_float": false
+  },
+  {
+    "ticker": "IVF",
+    "composite_score": 0.5589,
+    "avg_gap_magnitude": 311.74,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 2506969,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MB",
+    "composite_score": 0.5334,
+    "avg_gap_magnitude": 281.33,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 17000000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "DKI",
+    "composite_score": 0.5107,
+    "avg_gap_magnitude": 254.35,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 1647570,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SLBT",
+    "composite_score": 0.4959,
+    "avg_gap_magnitude": 236.64,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RCON",
+    "composite_score": 0.477,
+    "avg_gap_magnitude": 6.44,
+    "gap_frequency": 0.2356,
+    "mean_reversion_rate": 0.78,
+    "n_gap_days": 41,
+    "float_shares": 963224,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PLSM",
+    "composite_score": 0.4706,
+    "avg_gap_magnitude": 206.45,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AXTI",
+    "composite_score": 0.462,
+    "avg_gap_magnitude": 6.73,
+    "gap_frequency": 0.2931,
+    "mean_reversion_rate": 0.529,
+    "n_gap_days": 51,
+    "float_shares": 65573212,
+    "in_original_float": true
+  },
+  {
+    "ticker": "STI",
+    "composite_score": 0.4444,
+    "avg_gap_magnitude": 160.92,
+    "gap_frequency": 0.0172,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 3,
+    "float_shares": 8512771,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AFJK",
+    "composite_score": 0.4396,
+    "avg_gap_magnitude": 7.07,
+    "gap_frequency": 0.1954,
+    "mean_reversion_rate": 0.794,
+    "n_gap_days": 34,
+    "float_shares": 3166332,
+    "in_original_float": false
+  },
+  {
+    "ticker": "WXM",
+    "composite_score": 0.4384,
+    "avg_gap_magnitude": 168.01,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 3026256,
+    "in_original_float": false
+  },
+  {
+    "ticker": "JEM",
+    "composite_score": 0.4358,
+    "avg_gap_magnitude": 22.66,
+    "gap_frequency": 0.1897,
+    "mean_reversion_rate": 0.758,
+    "n_gap_days": 33,
+    "float_shares": 671984,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LITE",
+    "composite_score": 0.4304,
+    "avg_gap_magnitude": 5.28,
+    "gap_frequency": 0.2529,
+    "mean_reversion_rate": 0.568,
+    "n_gap_days": 44,
+    "float_shares": 89700000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SNDK",
+    "composite_score": 0.4219,
+    "avg_gap_magnitude": 5.9,
+    "gap_frequency": 0.2471,
+    "mean_reversion_rate": 0.558,
+    "n_gap_days": 43,
+    "float_shares": 146419001,
+    "in_original_float": true
+  },
+  {
+    "ticker": "WETO",
+    "composite_score": 0.4201,
+    "avg_gap_magnitude": 25.02,
+    "gap_frequency": 0.1839,
+    "mean_reversion_rate": 0.719,
+    "n_gap_days": 32,
+    "float_shares": 1077801,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HYMC",
+    "composite_score": 0.4196,
+    "avg_gap_magnitude": 5.62,
+    "gap_frequency": 0.2414,
+    "mean_reversion_rate": 0.571,
+    "n_gap_days": 42,
+    "float_shares": 93181681,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PHOE",
+    "composite_score": 0.4165,
+    "avg_gap_magnitude": 9.04,
+    "gap_frequency": 0.2184,
+    "mean_reversion_rate": 0.632,
+    "n_gap_days": 38,
+    "float_shares": 21600000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SBFM",
+    "composite_score": 0.4162,
+    "avg_gap_magnitude": 112.97,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 3877337,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SMTK",
+    "composite_score": 0.4149,
+    "avg_gap_magnitude": 9.11,
+    "gap_frequency": 0.1954,
+    "mean_reversion_rate": 0.706,
+    "n_gap_days": 34,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CPOP",
+    "composite_score": 0.4139,
+    "avg_gap_magnitude": 9.47,
+    "gap_frequency": 0.1609,
+    "mean_reversion_rate": 0.821,
+    "n_gap_days": 28,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "DRCT",
+    "composite_score": 0.4111,
+    "avg_gap_magnitude": 135.5,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 760567,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CAST",
+    "composite_score": 0.4075,
+    "avg_gap_magnitude": 131.26,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 33655422,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SPRC",
+    "composite_score": 0.4062,
+    "avg_gap_magnitude": 122.53,
+    "gap_frequency": 0.0115,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 2,
+    "float_shares": 565516,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SFWL",
+    "composite_score": 0.4055,
+    "avg_gap_magnitude": 6.5,
+    "gap_frequency": 0.1782,
+    "mean_reversion_rate": 0.742,
+    "n_gap_days": 31,
+    "float_shares": 2707834,
+    "in_original_float": false
+  },
+  {
+    "ticker": "KIDZ",
+    "composite_score": 0.4049,
+    "avg_gap_magnitude": 23.13,
+    "gap_frequency": 0.1379,
+    "mean_reversion_rate": 0.833,
+    "n_gap_days": 24,
+    "float_shares": 859805,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RYM",
+    "composite_score": 0.4044,
+    "avg_gap_magnitude": 6.31,
+    "gap_frequency": 0.2069,
+    "mean_reversion_rate": 0.639,
+    "n_gap_days": 36,
+    "float_shares": 2179128,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LIVE",
+    "composite_score": 0.4018,
+    "avg_gap_magnitude": 6.62,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.909,
+    "n_gap_days": 22,
+    "float_shares": 3071656,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AAOI",
+    "composite_score": 0.3968,
+    "avg_gap_magnitude": 6.73,
+    "gap_frequency": 0.2356,
+    "mean_reversion_rate": 0.512,
+    "n_gap_days": 41,
+    "float_shares": 84569237,
+    "in_original_float": false
+  },
+  {
+    "ticker": "STX",
+    "composite_score": 0.3946,
+    "avg_gap_magnitude": 5.83,
+    "gap_frequency": 0.1839,
+    "mean_reversion_rate": 0.688,
+    "n_gap_days": 32,
+    "float_shares": 226644518,
+    "in_original_float": true
+  },
+  {
+    "ticker": "CCHH",
+    "composite_score": 0.3944,
+    "avg_gap_magnitude": 108.44,
+    "gap_frequency": 0.0115,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 2,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AGCC",
+    "composite_score": 0.3917,
+    "avg_gap_magnitude": 5.86,
+    "gap_frequency": 0.1552,
+    "mean_reversion_rate": 0.778,
+    "n_gap_days": 27,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HUBC",
+    "composite_score": 0.3917,
+    "avg_gap_magnitude": 30.09,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.85,
+    "n_gap_days": 20,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MU",
+    "composite_score": 0.3908,
+    "avg_gap_magnitude": 5.34,
+    "gap_frequency": 0.2414,
+    "mean_reversion_rate": 0.476,
+    "n_gap_days": 42,
+    "float_shares": 1129393151,
+    "in_original_float": true
+  },
+  {
+    "ticker": "FCUV",
+    "composite_score": 0.3897,
+    "avg_gap_magnitude": 30.34,
+    "gap_frequency": 0.1322,
+    "mean_reversion_rate": 0.783,
+    "n_gap_days": 23,
+    "float_shares": 702745,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NBIS",
+    "composite_score": 0.3889,
+    "avg_gap_magnitude": 6.11,
+    "gap_frequency": 0.2356,
+    "mean_reversion_rate": 0.488,
+    "n_gap_days": 41,
+    "float_shares": 219465088,
+    "in_original_float": true
+  },
+  {
+    "ticker": "GAUZ",
+    "composite_score": 0.3864,
+    "avg_gap_magnitude": 5.84,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.8,
+    "n_gap_days": 25,
+    "float_shares": 1143135,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CCG",
+    "composite_score": 0.3854,
+    "avg_gap_magnitude": 4.62,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.8,
+    "n_gap_days": 25,
+    "float_shares": 1974098,
+    "in_original_float": false
+  },
+  {
+    "ticker": "GDC",
+    "composite_score": 0.3852,
+    "avg_gap_magnitude": 12.64,
+    "gap_frequency": 0.1207,
+    "mean_reversion_rate": 0.857,
+    "n_gap_days": 21,
+    "float_shares": 4162500,
+    "in_original_float": false
+  },
+  {
+    "ticker": "GDEV",
+    "composite_score": 0.385,
+    "avg_gap_magnitude": 5.49,
+    "gap_frequency": 0.1897,
+    "mean_reversion_rate": 0.636,
+    "n_gap_days": 33,
+    "float_shares": 18150489,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LRHC",
+    "composite_score": 0.3849,
+    "avg_gap_magnitude": 13.11,
+    "gap_frequency": 0.1092,
+    "mean_reversion_rate": 0.895,
+    "n_gap_days": 19,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VHUB",
+    "composite_score": 0.3834,
+    "avg_gap_magnitude": 102.49,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ATGL",
+    "composite_score": 0.3833,
+    "avg_gap_magnitude": 7.16,
+    "gap_frequency": 0.1322,
+    "mean_reversion_rate": 0.826,
+    "n_gap_days": 23,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NCT",
+    "composite_score": 0.3814,
+    "avg_gap_magnitude": 10.02,
+    "gap_frequency": 0.1379,
+    "mean_reversion_rate": 0.792,
+    "n_gap_days": 24,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "DCOY",
+    "composite_score": 0.3803,
+    "avg_gap_magnitude": 91.56,
+    "gap_frequency": 0.0115,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 2,
+    "float_shares": 655185,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LGCL",
+    "composite_score": 0.3794,
+    "avg_gap_magnitude": 11.87,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.76,
+    "n_gap_days": 25,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FLNC",
+    "composite_score": 0.3789,
+    "avg_gap_magnitude": 7.11,
+    "gap_frequency": 0.2011,
+    "mean_reversion_rate": 0.571,
+    "n_gap_days": 35,
+    "float_shares": 143163588,
+    "in_original_float": true
+  },
+  {
+    "ticker": "EUDA",
+    "composite_score": 0.3785,
+    "avg_gap_magnitude": 5.63,
+    "gap_frequency": 0.1609,
+    "mean_reversion_rate": 0.714,
+    "n_gap_days": 28,
+    "float_shares": 2994325,
+    "in_original_float": false
+  },
+  {
+    "ticker": "OMH",
+    "composite_score": 0.3747,
+    "avg_gap_magnitude": 6.91,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.818,
+    "n_gap_days": 22,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BE",
+    "composite_score": 0.3746,
+    "avg_gap_magnitude": 6.46,
+    "gap_frequency": 0.2356,
+    "mean_reversion_rate": 0.439,
+    "n_gap_days": 41,
+    "float_shares": 294527346,
+    "in_original_float": true
+  },
+  {
+    "ticker": "NRSN",
+    "composite_score": 0.3739,
+    "avg_gap_magnitude": 5.24,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.76,
+    "n_gap_days": 25,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NXTT",
+    "composite_score": 0.3734,
+    "avg_gap_magnitude": 4.71,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.76,
+    "n_gap_days": 25,
+    "float_shares": 1472962,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PMN",
+    "composite_score": 0.3732,
+    "avg_gap_magnitude": 8.43,
+    "gap_frequency": 0.1034,
+    "mean_reversion_rate": 0.889,
+    "n_gap_days": 18,
+    "float_shares": 8967693,
+    "in_original_float": false
+  },
+  {
+    "ticker": "UTZ",
+    "composite_score": 0.3721,
+    "avg_gap_magnitude": 88.99,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 88613213,
+    "in_original_float": false
+  },
+  {
+    "ticker": "JAGX",
+    "composite_score": 0.3697,
+    "avg_gap_magnitude": 6.11,
+    "gap_frequency": 0.1552,
+    "mean_reversion_rate": 0.704,
+    "n_gap_days": 27,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BYAH",
+    "composite_score": 0.3693,
+    "avg_gap_magnitude": 27.27,
+    "gap_frequency": 0.0747,
+    "mean_reversion_rate": 0.923,
+    "n_gap_days": 13,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "APLD",
+    "composite_score": 0.3687,
+    "avg_gap_magnitude": 5.2,
+    "gap_frequency": 0.2011,
+    "mean_reversion_rate": 0.543,
+    "n_gap_days": 35,
+    "float_shares": 291469112,
+    "in_original_float": true
+  },
+  {
+    "ticker": "MOVE",
+    "composite_score": 0.3687,
+    "avg_gap_magnitude": 22.31,
+    "gap_frequency": 0.092,
+    "mean_reversion_rate": 0.875,
+    "n_gap_days": 16,
+    "float_shares": 31552275,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CIIT",
+    "composite_score": 0.3687,
+    "avg_gap_magnitude": 22.28,
+    "gap_frequency": 0.092,
+    "mean_reversion_rate": 0.875,
+    "n_gap_days": 16,
+    "float_shares": 967391,
+    "in_original_float": false
+  },
+  {
+    "ticker": "UCTT",
+    "composite_score": 0.3685,
+    "avg_gap_magnitude": 5.48,
+    "gap_frequency": 0.2241,
+    "mean_reversion_rate": 0.462,
+    "n_gap_days": 39,
+    "float_shares": 44828352,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NVTS",
+    "composite_score": 0.3664,
+    "avg_gap_magnitude": 5.68,
+    "gap_frequency": 0.1839,
+    "mean_reversion_rate": 0.594,
+    "n_gap_days": 32,
+    "float_shares": 261093488,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AG",
+    "composite_score": 0.3658,
+    "avg_gap_magnitude": 4.95,
+    "gap_frequency": 0.1839,
+    "mean_reversion_rate": 0.594,
+    "n_gap_days": 32,
+    "float_shares": 492909883,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CLRO",
+    "composite_score": 0.3653,
+    "avg_gap_magnitude": 59.45,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 2675412,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FORM",
+    "composite_score": 0.364,
+    "avg_gap_magnitude": 5.41,
+    "gap_frequency": 0.2126,
+    "mean_reversion_rate": 0.486,
+    "n_gap_days": 37,
+    "float_shares": 77954772,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RUBI",
+    "composite_score": 0.3638,
+    "avg_gap_magnitude": 30.22,
+    "gap_frequency": 0.069,
+    "mean_reversion_rate": 0.917,
+    "n_gap_days": 12,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MRVL",
+    "composite_score": 0.3625,
+    "avg_gap_magnitude": 6.02,
+    "gap_frequency": 0.2069,
+    "mean_reversion_rate": 0.5,
+    "n_gap_days": 36,
+    "float_shares": 876900000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RACC",
+    "composite_score": 0.3618,
+    "avg_gap_magnitude": 5.14,
+    "gap_frequency": 0.0632,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 11,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "TFPM",
+    "composite_score": 0.3618,
+    "avg_gap_magnitude": 4.28,
+    "gap_frequency": 0.0977,
+    "mean_reversion_rate": 0.882,
+    "n_gap_days": 17,
+    "float_shares": 206003031,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PTN",
+    "composite_score": 0.3618,
+    "avg_gap_magnitude": 5.1,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.72,
+    "n_gap_days": 25,
+    "float_shares": 1779275,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MI",
+    "composite_score": 0.3611,
+    "avg_gap_magnitude": 6.97,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.773,
+    "n_gap_days": 22,
+    "float_shares": 231129,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HERZ",
+    "composite_score": 0.3611,
+    "avg_gap_magnitude": 4.3,
+    "gap_frequency": 0.0632,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 11,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RDAC",
+    "composite_score": 0.3593,
+    "avg_gap_magnitude": 66.57,
+    "gap_frequency": 0.0115,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 2,
+    "float_shares": 3435357,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FCHL",
+    "composite_score": 0.3588,
+    "avg_gap_magnitude": 11.16,
+    "gap_frequency": 0.1034,
+    "mean_reversion_rate": 0.833,
+    "n_gap_days": 18,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PBM",
+    "composite_score": 0.3583,
+    "avg_gap_magnitude": 72.57,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 3814328,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CRWV",
+    "composite_score": 0.3576,
+    "avg_gap_magnitude": 5.29,
+    "gap_frequency": 0.1897,
+    "mean_reversion_rate": 0.545,
+    "n_gap_days": 33,
+    "float_shares": 458871690,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AUUD",
+    "composite_score": 0.3573,
+    "avg_gap_magnitude": 71.3,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 5803182,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CISS",
+    "composite_score": 0.3567,
+    "avg_gap_magnitude": 12.65,
+    "gap_frequency": 0.1207,
+    "mean_reversion_rate": 0.762,
+    "n_gap_days": 21,
+    "float_shares": 1487970,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MODD",
+    "composite_score": 0.3563,
+    "avg_gap_magnitude": 5.72,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.8,
+    "n_gap_days": 20,
+    "float_shares": 8150823,
+    "in_original_float": false
+  },
+  {
+    "ticker": "GTBP",
+    "composite_score": 0.3557,
+    "avg_gap_magnitude": 5.0,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.8,
+    "n_gap_days": 20,
+    "float_shares": 1804379,
+    "in_original_float": false
+  },
+  {
+    "ticker": "DB",
+    "composite_score": 0.3553,
+    "avg_gap_magnitude": 4.55,
+    "gap_frequency": 0.0575,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 10,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VCX",
+    "composite_score": 0.3551,
+    "avg_gap_magnitude": 9.36,
+    "gap_frequency": 0.2011,
+    "mean_reversion_rate": 0.486,
+    "n_gap_days": 35,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RAND",
+    "composite_score": 0.3549,
+    "avg_gap_magnitude": 4.1,
+    "gap_frequency": 0.0575,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 10,
+    "float_shares": 2969814,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FEED",
+    "composite_score": 0.3548,
+    "avg_gap_magnitude": 14.86,
+    "gap_frequency": 0.1092,
+    "mean_reversion_rate": 0.789,
+    "n_gap_days": 19,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PED",
+    "composite_score": 0.3543,
+    "avg_gap_magnitude": 5.14,
+    "gap_frequency": 0.092,
+    "mean_reversion_rate": 0.875,
+    "n_gap_days": 16,
+    "float_shares": 13292013,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NFE",
+    "composite_score": 0.354,
+    "avg_gap_magnitude": 4.81,
+    "gap_frequency": 0.092,
+    "mean_reversion_rate": 0.875,
+    "n_gap_days": 16,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NXL",
+    "composite_score": 0.3535,
+    "avg_gap_magnitude": 6.59,
+    "gap_frequency": 0.1379,
+    "mean_reversion_rate": 0.708,
+    "n_gap_days": 24,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "GRML",
+    "composite_score": 0.3532,
+    "avg_gap_magnitude": 6.18,
+    "gap_frequency": 0.1379,
+    "mean_reversion_rate": 0.708,
+    "n_gap_days": 24,
+    "float_shares": 3177013,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ONCO",
+    "composite_score": 0.3529,
+    "avg_gap_magnitude": 13.63,
+    "gap_frequency": 0.0862,
+    "mean_reversion_rate": 0.867,
+    "n_gap_days": 15,
+    "float_shares": 4380522,
+    "in_original_float": false
+  },
+  {
+    "ticker": "JTAI",
+    "composite_score": 0.3527,
+    "avg_gap_magnitude": 16.97,
+    "gap_frequency": 0.069,
+    "mean_reversion_rate": 0.917,
+    "n_gap_days": 12,
+    "float_shares": 1421721,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LBTYB",
+    "composite_score": 0.3527,
+    "avg_gap_magnitude": 16.91,
+    "gap_frequency": 0.069,
+    "mean_reversion_rate": 0.917,
+    "n_gap_days": 12,
+    "float_shares": 12968658,
+    "in_original_float": false
+  },
+  {
+    "ticker": "WULF",
+    "composite_score": 0.3515,
+    "avg_gap_magnitude": 5.19,
+    "gap_frequency": 0.2011,
+    "mean_reversion_rate": 0.486,
+    "n_gap_days": 35,
+    "float_shares": 498968677,
+    "in_original_float": true
+  },
+  {
+    "ticker": "ELAB",
+    "composite_score": 0.3511,
+    "avg_gap_magnitude": 18.67,
+    "gap_frequency": 0.1379,
+    "mean_reversion_rate": 0.667,
+    "n_gap_days": 24,
+    "float_shares": 809584,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HUT",
+    "composite_score": 0.3506,
+    "avg_gap_magnitude": 5.68,
+    "gap_frequency": 0.2184,
+    "mean_reversion_rate": 0.421,
+    "n_gap_days": 38,
+    "float_shares": 123259468,
+    "in_original_float": true
+  },
+  {
+    "ticker": "ONFO",
+    "composite_score": 0.3498,
+    "avg_gap_magnitude": 11.07,
+    "gap_frequency": 0.0977,
+    "mean_reversion_rate": 0.824,
+    "n_gap_days": 17,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VRT",
+    "composite_score": 0.3496,
+    "avg_gap_magnitude": 4.94,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.68,
+    "n_gap_days": 25,
+    "float_shares": 384988173,
+    "in_original_float": true
+  },
+  {
+    "ticker": "SDOT",
+    "composite_score": 0.3493,
+    "avg_gap_magnitude": 21.77,
+    "gap_frequency": 0.1667,
+    "mean_reversion_rate": 0.552,
+    "n_gap_days": 29,
+    "float_shares": 1454828,
+    "in_original_float": false
+  },
+  {
+    "ticker": "WDC",
+    "composite_score": 0.3486,
+    "avg_gap_magnitude": 5.42,
+    "gap_frequency": 0.1897,
+    "mean_reversion_rate": 0.515,
+    "n_gap_days": 33,
+    "float_shares": 344682131,
+    "in_original_float": false
+  },
+  {
+    "ticker": "INLF",
+    "composite_score": 0.3484,
+    "avg_gap_magnitude": 14.19,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.75,
+    "n_gap_days": 20,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ANPA",
+    "composite_score": 0.3482,
+    "avg_gap_magnitude": 21.42,
+    "gap_frequency": 0.0632,
+    "mean_reversion_rate": 0.909,
+    "n_gap_days": 11,
+    "float_shares": 15101755,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MXC",
+    "composite_score": 0.348,
+    "avg_gap_magnitude": 6.82,
+    "gap_frequency": 0.1092,
+    "mean_reversion_rate": 0.789,
+    "n_gap_days": 19,
+    "float_shares": 2046000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "WOLF",
+    "composite_score": 0.3477,
+    "avg_gap_magnitude": 6.81,
+    "gap_frequency": 0.1782,
+    "mean_reversion_rate": 0.548,
+    "n_gap_days": 31,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BIYA",
+    "composite_score": 0.3476,
+    "avg_gap_magnitude": 18.48,
+    "gap_frequency": 0.1494,
+    "mean_reversion_rate": 0.615,
+    "n_gap_days": 26,
+    "float_shares": 2699211,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NTCL",
+    "composite_score": 0.3475,
+    "avg_gap_magnitude": 6.91,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.727,
+    "n_gap_days": 22,
+    "float_shares": 1278858,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FFAI",
+    "composite_score": 0.3472,
+    "avg_gap_magnitude": 6.65,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.727,
+    "n_gap_days": 22,
+    "float_shares": 3855256,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CHSN",
+    "composite_score": 0.3471,
+    "avg_gap_magnitude": 6.76,
+    "gap_frequency": 0.0862,
+    "mean_reversion_rate": 0.867,
+    "n_gap_days": 15,
+    "float_shares": 3639079,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FVN",
+    "composite_score": 0.3467,
+    "avg_gap_magnitude": 8.63,
+    "gap_frequency": 0.046,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 8,
+    "float_shares": 7544000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LABT",
+    "composite_score": 0.3467,
+    "avg_gap_magnitude": 58.65,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LRCX",
+    "composite_score": 0.3467,
+    "avg_gap_magnitude": 5.55,
+    "gap_frequency": 0.1782,
+    "mean_reversion_rate": 0.548,
+    "n_gap_days": 31,
+    "float_shares": 1251321000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AEMD",
+    "composite_score": 0.3466,
+    "avg_gap_magnitude": 6.06,
+    "gap_frequency": 0.0862,
+    "mean_reversion_rate": 0.867,
+    "n_gap_days": 15,
+    "float_shares": 711136,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NVNO",
+    "composite_score": 0.3456,
+    "avg_gap_magnitude": 4.72,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.727,
+    "n_gap_days": 22,
+    "float_shares": 694826,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NNNN",
+    "composite_score": 0.3456,
+    "avg_gap_magnitude": 4.71,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.727,
+    "n_gap_days": 22,
+    "float_shares": 43891200,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RMBS",
+    "composite_score": 0.3455,
+    "avg_gap_magnitude": 4.83,
+    "gap_frequency": 0.1724,
+    "mean_reversion_rate": 0.567,
+    "n_gap_days": 30,
+    "float_shares": 108461603,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NVMI",
+    "composite_score": 0.3451,
+    "avg_gap_magnitude": 4.27,
+    "gap_frequency": 0.1724,
+    "mean_reversion_rate": 0.567,
+    "n_gap_days": 30,
+    "float_shares": 31782972,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BCTX",
+    "composite_score": 0.3449,
+    "avg_gap_magnitude": 56.54,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 8699787,
+    "in_original_float": false
+  },
+  {
+    "ticker": "JLHL",
+    "composite_score": 0.3434,
+    "avg_gap_magnitude": 8.24,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.75,
+    "n_gap_days": 20,
+    "float_shares": 11448632,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FPS",
+    "composite_score": 0.3421,
+    "avg_gap_magnitude": 4.68,
+    "gap_frequency": 0.1322,
+    "mean_reversion_rate": 0.696,
+    "n_gap_days": 23,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HAO",
+    "composite_score": 0.3417,
+    "avg_gap_magnitude": 10.82,
+    "gap_frequency": 0.0805,
+    "mean_reversion_rate": 0.857,
+    "n_gap_days": 14,
+    "float_shares": 595232,
+    "in_original_float": false
+  },
+  {
+    "ticker": "DOCS",
+    "composite_score": 0.3417,
+    "avg_gap_magnitude": 45.57,
+    "gap_frequency": 0.0115,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 2,
+    "float_shares": 127349369,
+    "in_original_float": false
+  },
+  {
+    "ticker": "DGNX",
+    "composite_score": 0.3416,
+    "avg_gap_magnitude": 9.71,
+    "gap_frequency": 0.0402,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 7,
+    "float_shares": 29130130,
+    "in_original_float": false
+  },
+  {
+    "ticker": "EZGO",
+    "composite_score": 0.3415,
+    "avg_gap_magnitude": 9.5,
+    "gap_frequency": 0.0402,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 7,
+    "float_shares": 2305899,
+    "in_original_float": false
+  },
+  {
+    "ticker": "TDIC",
+    "composite_score": 0.3412,
+    "avg_gap_magnitude": 15.67,
+    "gap_frequency": 0.1264,
+    "mean_reversion_rate": 0.682,
+    "n_gap_days": 22,
+    "float_shares": 1501557,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VRM",
+    "composite_score": 0.3405,
+    "avg_gap_magnitude": 6.04,
+    "gap_frequency": 0.1379,
+    "mean_reversion_rate": 0.667,
+    "n_gap_days": 24,
+    "float_shares": 5233912,
+    "in_original_float": false
+  },
+  {
+    "ticker": "GTE",
+    "composite_score": 0.3405,
+    "avg_gap_magnitude": 51.24,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 35380429,
+    "in_original_float": false
+  },
+  {
+    "ticker": "EEIQ",
+    "composite_score": 0.3399,
+    "avg_gap_magnitude": 50.57,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 1646623,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CRDO",
+    "composite_score": 0.3397,
+    "avg_gap_magnitude": 5.63,
+    "gap_frequency": 0.1897,
+    "mean_reversion_rate": 0.485,
+    "n_gap_days": 33,
+    "float_shares": 187951918,
+    "in_original_float": true
+  },
+  {
+    "ticker": "SLAB",
+    "composite_score": 0.3396,
+    "avg_gap_magnitude": 50.23,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 33366761,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SMTC",
+    "composite_score": 0.3395,
+    "avg_gap_magnitude": 5.47,
+    "gap_frequency": 0.1897,
+    "mean_reversion_rate": 0.485,
+    "n_gap_days": 33,
+    "float_shares": 93325626,
+    "in_original_float": false
+  },
+  {
+    "ticker": "KUST",
+    "composite_score": 0.3391,
+    "avg_gap_magnitude": 35.37,
+    "gap_frequency": 0.0172,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 3,
+    "float_shares": 6506860,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MRAM",
+    "composite_score": 0.3389,
+    "avg_gap_magnitude": 7.81,
+    "gap_frequency": 0.1782,
+    "mean_reversion_rate": 0.516,
+    "n_gap_days": 31,
+    "float_shares": 24350009,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SKYQ",
+    "composite_score": 0.3388,
+    "avg_gap_magnitude": 49.32,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 8833390,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RYTM",
+    "composite_score": 0.3382,
+    "avg_gap_magnitude": 5.58,
+    "gap_frequency": 0.0402,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 7,
+    "float_shares": 68532607,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ASMB",
+    "composite_score": 0.3379,
+    "avg_gap_magnitude": 5.32,
+    "gap_frequency": 0.0402,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 7,
+    "float_shares": 20360596,
+    "in_original_float": false
+  },
+  {
+    "ticker": "TECK",
+    "composite_score": 0.3374,
+    "avg_gap_magnitude": 4.62,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.64,
+    "n_gap_days": 25,
+    "float_shares": 482973642,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SXTC",
+    "composite_score": 0.3373,
+    "avg_gap_magnitude": 16.68,
+    "gap_frequency": 0.0747,
+    "mean_reversion_rate": 0.846,
+    "n_gap_days": 13,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "TTMI",
+    "composite_score": 0.3372,
+    "avg_gap_magnitude": 5.81,
+    "gap_frequency": 0.1782,
+    "mean_reversion_rate": 0.516,
+    "n_gap_days": 31,
+    "float_shares": 105348864,
+    "in_original_float": false
+  },
+  {
+    "ticker": "INTC",
+    "composite_score": 0.3371,
+    "avg_gap_magnitude": 5.75,
+    "gap_frequency": 0.1782,
+    "mean_reversion_rate": 0.516,
+    "n_gap_days": 31,
+    "float_shares": 5044000000,
+    "in_original_float": true
+  },
+  {
+    "ticker": "AAON",
+    "composite_score": 0.337,
+    "avg_gap_magnitude": 8.15,
+    "gap_frequency": 0.0632,
+    "mean_reversion_rate": 0.909,
+    "n_gap_days": 11,
+    "float_shares": 82453639,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PLRZ",
+    "composite_score": 0.3369,
+    "avg_gap_magnitude": 6.73,
+    "gap_frequency": 0.092,
+    "mean_reversion_rate": 0.812,
+    "n_gap_days": 16,
+    "float_shares": 2139567,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NCRA",
+    "composite_score": 0.3367,
+    "avg_gap_magnitude": 15.92,
+    "gap_frequency": 0.0747,
+    "mean_reversion_rate": 0.846,
+    "n_gap_days": 13,
+    "float_shares": 2376148,
+    "in_original_float": false
+  },
+  {
+    "ticker": "UMAC",
+    "composite_score": 0.3367,
+    "avg_gap_magnitude": 6.86,
+    "gap_frequency": 0.1609,
+    "mean_reversion_rate": 0.571,
+    "n_gap_days": 28,
+    "float_shares": 49956505,
+    "in_original_float": false
+  },
+  {
+    "ticker": "UBCP",
+    "composite_score": 0.3366,
+    "avg_gap_magnitude": 3.74,
+    "gap_frequency": 0.0402,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 7,
+    "float_shares": 5735518,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AOSL",
+    "composite_score": 0.3361,
+    "avg_gap_magnitude": 5.75,
+    "gap_frequency": 0.1552,
+    "mean_reversion_rate": 0.593,
+    "n_gap_days": 27,
+    "float_shares": 30259255,
+    "in_original_float": false
+  },
+  {
+    "ticker": "TSEM",
+    "composite_score": 0.3359,
+    "avg_gap_magnitude": 5.88,
+    "gap_frequency": 0.1667,
+    "mean_reversion_rate": 0.552,
+    "n_gap_days": 29,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ADTX",
+    "composite_score": 0.3359,
+    "avg_gap_magnitude": 6.74,
+    "gap_frequency": 0.0632,
+    "mean_reversion_rate": 0.909,
+    "n_gap_days": 11,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VRDN",
+    "composite_score": 0.3356,
+    "avg_gap_magnitude": 9.64,
+    "gap_frequency": 0.0345,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 6,
+    "float_shares": 113292269,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CAMT",
+    "composite_score": 0.3354,
+    "avg_gap_magnitude": 5.4,
+    "gap_frequency": 0.1609,
+    "mean_reversion_rate": 0.571,
+    "n_gap_days": 28,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HL",
+    "composite_score": 0.3353,
+    "avg_gap_magnitude": 5.17,
+    "gap_frequency": 0.1667,
+    "mean_reversion_rate": 0.552,
+    "n_gap_days": 29,
+    "float_shares": 671768431,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ACVA",
+    "composite_score": 0.3351,
+    "avg_gap_magnitude": 44.81,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 169807980,
+    "in_original_float": true
+  },
+  {
+    "ticker": "ERO",
+    "composite_score": 0.3347,
+    "avg_gap_magnitude": 4.39,
+    "gap_frequency": 0.1667,
+    "mean_reversion_rate": 0.552,
+    "n_gap_days": 29,
+    "float_shares": 104302633,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HCTI",
+    "composite_score": 0.3345,
+    "avg_gap_magnitude": 22.63,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 14974322,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LEXX",
+    "composite_score": 0.3342,
+    "avg_gap_magnitude": 4.71,
+    "gap_frequency": 0.0632,
+    "mean_reversion_rate": 0.909,
+    "n_gap_days": 11,
+    "float_shares": 1652518,
+    "in_original_float": false
+  },
+  {
+    "ticker": "FIRY",
+    "composite_score": 0.333,
+    "avg_gap_magnitude": 35.21,
+    "gap_frequency": 0.0115,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 2,
+    "float_shares": 13192194,
+    "in_original_float": false
+  },
+  {
+    "ticker": "APUS",
+    "composite_score": 0.3329,
+    "avg_gap_magnitude": 9.29,
+    "gap_frequency": 0.1322,
+    "mean_reversion_rate": 0.652,
+    "n_gap_days": 23,
+    "float_shares": 1509118,
+    "in_original_float": false
+  },
+  {
+    "ticker": "OUST",
+    "composite_score": 0.3326,
+    "avg_gap_magnitude": 5.67,
+    "gap_frequency": 0.1954,
+    "mean_reversion_rate": 0.441,
+    "n_gap_days": 34,
+    "float_shares": 72112333,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MNTN",
+    "composite_score": 0.3322,
+    "avg_gap_magnitude": 41.45,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 61892533,
+    "in_original_float": false
+  },
+  {
+    "ticker": "INIO",
+    "composite_score": 0.3322,
+    "avg_gap_magnitude": 5.6,
+    "gap_frequency": 0.0345,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 6,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VELO",
+    "composite_score": 0.3318,
+    "avg_gap_magnitude": 7.08,
+    "gap_frequency": 0.1897,
+    "mean_reversion_rate": 0.455,
+    "n_gap_days": 33,
+    "float_shares": 32149118,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NUWE",
+    "composite_score": 0.3315,
+    "avg_gap_magnitude": 11.99,
+    "gap_frequency": 0.0862,
+    "mean_reversion_rate": 0.8,
+    "n_gap_days": 15,
+    "float_shares": 3647264,
+    "in_original_float": false
+  },
+  {
+    "ticker": "WCT",
+    "composite_score": 0.3314,
+    "avg_gap_magnitude": 7.47,
+    "gap_frequency": 0.1322,
+    "mean_reversion_rate": 0.652,
+    "n_gap_days": 23,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NDLS",
+    "composite_score": 0.3314,
+    "avg_gap_magnitude": 11.82,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 5966660,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SLGL",
+    "composite_score": 0.331,
+    "avg_gap_magnitude": 5.33,
+    "gap_frequency": 0.1092,
+    "mean_reversion_rate": 0.737,
+    "n_gap_days": 19,
+    "float_shares": 2809879,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ZD",
+    "composite_score": 0.3307,
+    "avg_gap_magnitude": 25.3,
+    "gap_frequency": 0.0172,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 3,
+    "float_shares": 34287208,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CTSO",
+    "composite_score": 0.3303,
+    "avg_gap_magnitude": 4.52,
+    "gap_frequency": 0.1092,
+    "mean_reversion_rate": 0.737,
+    "n_gap_days": 19,
+    "float_shares": 3151101,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BBCP",
+    "composite_score": 0.3293,
+    "avg_gap_magnitude": 30.81,
+    "gap_frequency": 0.0115,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 2,
+    "float_shares": 50393420,
+    "in_original_float": false
+  },
+  {
+    "ticker": "EXOZ",
+    "composite_score": 0.329,
+    "avg_gap_magnitude": 6.78,
+    "gap_frequency": 0.0747,
+    "mean_reversion_rate": 0.846,
+    "n_gap_days": 13,
+    "float_shares": 9281359,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CLDI",
+    "composite_score": 0.3289,
+    "avg_gap_magnitude": 8.86,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 2584184,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BARK",
+    "composite_score": 0.3286,
+    "avg_gap_magnitude": 8.52,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AIOS",
+    "composite_score": 0.3286,
+    "avg_gap_magnitude": 8.44,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.7,
+    "n_gap_days": 20,
+    "float_shares": 3249255,
+    "in_original_float": false
+  },
+  {
+    "ticker": "GMM",
+    "composite_score": 0.3281,
+    "avg_gap_magnitude": 19.08,
+    "gap_frequency": 0.0517,
+    "mean_reversion_rate": 0.889,
+    "n_gap_days": 9,
+    "float_shares": 5791663,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BLMN",
+    "composite_score": 0.3276,
+    "avg_gap_magnitude": 35.87,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 85620917,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CTRN",
+    "composite_score": 0.3273,
+    "avg_gap_magnitude": 14.13,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 8339447,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CMCT",
+    "composite_score": 0.3272,
+    "avg_gap_magnitude": 21.17,
+    "gap_frequency": 0.0172,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 3,
+    "float_shares": 2758835,
+    "in_original_float": false
+  },
+  {
+    "ticker": "IREN",
+    "composite_score": 0.327,
+    "avg_gap_magnitude": 5.19,
+    "gap_frequency": 0.1782,
+    "mean_reversion_rate": 0.484,
+    "n_gap_days": 31,
+    "float_shares": 394058648,
+    "in_original_float": true
+  },
+  {
+    "ticker": "SRXH",
+    "composite_score": 0.3269,
+    "avg_gap_magnitude": 6.46,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 20265391,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NPCE",
+    "composite_score": 0.3265,
+    "avg_gap_magnitude": 6.02,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 34324274,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SMXT",
+    "composite_score": 0.3265,
+    "avg_gap_magnitude": 13.12,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 4742215,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ENLV",
+    "composite_score": 0.3265,
+    "avg_gap_magnitude": 5.93,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.7,
+    "n_gap_days": 20,
+    "float_shares": 17485462,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CCOI",
+    "composite_score": 0.3264,
+    "avg_gap_magnitude": 5.81,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 51215736,
+    "in_original_float": false
+  },
+  {
+    "ticker": "ALAB",
+    "composite_score": 0.3263,
+    "avg_gap_magnitude": 5.74,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.6,
+    "n_gap_days": 25,
+    "float_shares": 173485104,
+    "in_original_float": true
+  },
+  {
+    "ticker": "VABK",
+    "composite_score": 0.3261,
+    "avg_gap_magnitude": 5.56,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 5425282,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MKSI",
+    "composite_score": 0.3259,
+    "avg_gap_magnitude": 5.31,
+    "gap_frequency": 0.1437,
+    "mean_reversion_rate": 0.6,
+    "n_gap_days": 25,
+    "float_shares": 67617558,
+    "in_original_float": false
+  },
+  {
+    "ticker": "IMCC",
+    "composite_score": 0.3259,
+    "avg_gap_magnitude": 5.27,
+    "gap_frequency": 0.0575,
+    "mean_reversion_rate": 0.9,
+    "n_gap_days": 10,
+    "float_shares": 603922,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HKIT",
+    "composite_score": 0.3259,
+    "avg_gap_magnitude": 23.13,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.65,
+    "n_gap_days": 20,
+    "float_shares": 799860,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RSI",
+    "composite_score": 0.3258,
+    "avg_gap_magnitude": 12.31,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 115626347,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SMID",
+    "composite_score": 0.3258,
+    "avg_gap_magnitude": 5.12,
+    "gap_frequency": 0.0862,
+    "mean_reversion_rate": 0.8,
+    "n_gap_days": 15,
+    "float_shares": 5304606,
+    "in_original_float": false
+  },
+  {
+    "ticker": "STNE",
+    "composite_score": 0.3257,
+    "avg_gap_magnitude": 5.0,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 232663503,
+    "in_original_float": false
+  },
+  {
+    "ticker": "PBFS",
+    "composite_score": 0.3254,
+    "avg_gap_magnitude": 4.73,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 24841663,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BUDA",
+    "composite_score": 0.3254,
+    "avg_gap_magnitude": 4.63,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RILY",
+    "composite_score": 0.3253,
+    "avg_gap_magnitude": 33.18,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 40199755,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CR",
+    "composite_score": 0.3253,
+    "avg_gap_magnitude": 4.49,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 57800356,
+    "in_original_float": false
+  },
+  {
+    "ticker": "RAMP",
+    "composite_score": 0.3252,
+    "avg_gap_magnitude": 11.57,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 60794982,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BBGI",
+    "composite_score": 0.3251,
+    "avg_gap_magnitude": 4.27,
+    "gap_frequency": 0.1149,
+    "mean_reversion_rate": 0.7,
+    "n_gap_days": 20,
+    "float_shares": 1019614,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CZFS",
+    "composite_score": 0.325,
+    "avg_gap_magnitude": 4.18,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 4809855,
+    "in_original_float": false
+  },
+  {
+    "ticker": "AVPT",
+    "composite_score": 0.3249,
+    "avg_gap_magnitude": 4.08,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 211565426,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VBIO",
+    "composite_score": 0.3249,
+    "avg_gap_magnitude": 4.04,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "DKS",
+    "composite_score": 0.3246,
+    "avg_gap_magnitude": 3.72,
+    "gap_frequency": 0.0287,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 5,
+    "float_shares": 65355923,
+    "in_original_float": true
+  },
+  {
+    "ticker": "ONTO",
+    "composite_score": 0.3235,
+    "avg_gap_magnitude": 5.32,
+    "gap_frequency": 0.1954,
+    "mean_reversion_rate": 0.412,
+    "n_gap_days": 34,
+    "float_shares": 49074247,
+    "in_original_float": false
+  },
+  {
+    "ticker": "WFCF",
+    "composite_score": 0.3232,
+    "avg_gap_magnitude": 6.86,
+    "gap_frequency": 0.1207,
+    "mean_reversion_rate": 0.667,
+    "n_gap_days": 21,
+    "float_shares": 4979663,
+    "in_original_float": false
+  },
+  {
+    "ticker": "GCTK",
+    "composite_score": 0.3225,
+    "avg_gap_magnitude": 12.38,
+    "gap_frequency": 0.0517,
+    "mean_reversion_rate": 0.889,
+    "n_gap_days": 9,
+    "float_shares": 798144,
+    "in_original_float": false
+  },
+  {
+    "ticker": "MKTX",
+    "composite_score": 0.3224,
+    "avg_gap_magnitude": 29.76,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": 35192891,
+    "in_original_float": false
+  },
+  {
+    "ticker": "XPON",
+    "composite_score": 0.3224,
+    "avg_gap_magnitude": 8.22,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 962335,
+    "in_original_float": false
+  },
+  {
+    "ticker": "STRZ",
+    "composite_score": 0.3223,
+    "avg_gap_magnitude": 8.07,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 17124171,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VTIX",
+    "composite_score": 0.3217,
+    "avg_gap_magnitude": 28.87,
+    "gap_frequency": 0.0057,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 1,
+    "float_shares": null,
+    "in_original_float": false
+  },
+  {
+    "ticker": "THC",
+    "composite_score": 0.3217,
+    "avg_gap_magnitude": 7.37,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 80519000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "OCUL",
+    "composite_score": 0.3217,
+    "avg_gap_magnitude": 7.37,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 219615868,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NXT",
+    "composite_score": 0.3215,
+    "avg_gap_magnitude": 6.36,
+    "gap_frequency": 0.1034,
+    "mean_reversion_rate": 0.722,
+    "n_gap_days": 18,
+    "float_shares": 151729520,
+    "in_original_float": false
+  },
+  {
+    "ticker": "NRIX",
+    "composite_score": 0.3213,
+    "avg_gap_magnitude": 6.99,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 103781683,
+    "in_original_float": false
+  },
+  {
+    "ticker": "TDC",
+    "composite_score": 0.3206,
+    "avg_gap_magnitude": 13.22,
+    "gap_frequency": 0.0172,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 3,
+    "float_shares": 93000000,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BCAX",
+    "composite_score": 0.3205,
+    "avg_gap_magnitude": 5.93,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 66172934,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SONO",
+    "composite_score": 0.3205,
+    "avg_gap_magnitude": 5.93,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 118293979,
+    "in_original_float": false
+  },
+  {
+    "ticker": "HCWB",
+    "composite_score": 0.3204,
+    "avg_gap_magnitude": 13.08,
+    "gap_frequency": 0.0172,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 3,
+    "float_shares": 1836324,
+    "in_original_float": false
+  },
+  {
+    "ticker": "JOBY",
+    "composite_score": 0.3201,
+    "avg_gap_magnitude": 5.45,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 989124237,
+    "in_original_float": false
+  },
+  {
+    "ticker": "VC",
+    "composite_score": 0.3199,
+    "avg_gap_magnitude": 5.24,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 26695429,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SIMA",
+    "composite_score": 0.3197,
+    "avg_gap_magnitude": 5.03,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 3552768,
+    "in_original_float": false
+  },
+  {
+    "ticker": "LAZ",
+    "composite_score": 0.3197,
+    "avg_gap_magnitude": 4.97,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 110548172,
+    "in_original_float": false
+  },
+  {
+    "ticker": "CLYM",
+    "composite_score": 0.3196,
+    "avg_gap_magnitude": 4.88,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 57436255,
+    "in_original_float": false
+  },
+  {
+    "ticker": "BODI",
+    "composite_score": 0.3196,
+    "avg_gap_magnitude": 4.87,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 4555733,
+    "in_original_float": false
+  },
+  {
+    "ticker": "SVCO",
+    "composite_score": 0.3195,
+    "avg_gap_magnitude": 4.74,
+    "gap_frequency": 0.023,
+    "mean_reversion_rate": 1.0,
+    "n_gap_days": 4,
+    "float_shares": 33885758,
+    "in_original_float": false
+  }
+]

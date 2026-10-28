@@ -51,6 +51,24 @@
 
 ## agent1.py Production Scanner Changes
 
+### 2026-09-21 — AH Freshness Filter + Gap Erosion + GAP_MIN 3% + TOP_N=5
+
+**Changes:**
+1. **AH freshness filter** — gap now computed vs last after-hours price (16:00-20:00 ET) on prior trading day, not vs prior close. Catches stale M&A/overnight gaps where the stock already moved to equilibrium in AH.
+   - Example: ACVA daily gap +44.6%, but AH ref $10.38 → fresh gap +0.6% → EXCLUDED
+2. **Gap erosion filter** — skip stocks where >50% of gap consumed by scan time. Uses intraday LOW (not close) through SCAN_TIME_ET to catch stocks that dropped hard then bounced.
+   - `GAP_CONSUMED_MAX = 0.50`
+   - Example: TANH gap_consumed 55% → EXCLUDED
+3. **GAP_MIN changed 5% → 3%** — wider candidate pool for both E2-A and E2-B
+4. **TOP_N changed to 5** — wider watchlist
+5. **E2-A time gate removed** — scanner runs at any time (no longer gated to 6:31 PST)
+6. **Step 6b restructured** — now runs for both live and historical modes (was historical-only). Fetches scan-day minute bars, re-ranks by gap at SCAN_TIME_ET, and checks gap erosion.
+7. **New function `get_ah_reference_prices()`** — fetches prior day minute bars and returns last AH close per ticker.
+
+**Motivation:** Live scanner was recommending stale gaps (ACVA — M&A stock that moved in AH 10 days prior) and eroded gaps (TANH — gap had already faded 55% by scan time). Both are false signals that waste trader attention.
+
+---
+
 ### 2026-09-15 — Remove PM Retrace Filter + TOP_N=6
 
 **Changes:**

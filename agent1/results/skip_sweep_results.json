@@ -1,0 +1,645 @@
+{
+  "run_date": "2026-09-19 01:35",
+  "period": "2026-01-02 to 2026-09-11",
+  "n_trades": 166,
+  "n_winners": 128,
+  "n_losers": 38,
+  "total_net_dollars": 2243565,
+  "baseline": {
+    "avg": 13.52,
+    "sharpe": 0.542
+  },
+  "bucket_analysis_abs": [
+    {
+      "label": "Rising (<0%)",
+      "n": 20,
+      "n_win": 18,
+      "n_lose": 2,
+      "win_dol": 529153,
+      "lose_dol": -57586,
+      "net_dol": 471567,
+      "avg": 23.58,
+      "wr": 0.9
+    },
+    {
+      "label": "0-5% drop",
+      "n": 39,
+      "n_win": 27,
+      "n_lose": 12,
+      "win_dol": 347649,
+      "lose_dol": -79156,
+      "net_dol": 268493,
+      "avg": 6.88,
+      "wr": 0.692
+    },
+    {
+      "label": "5-10% drop",
+      "n": 48,
+      "n_win": 38,
+      "n_lose": 10,
+      "win_dol": 707250,
+      "lose_dol": -112355,
+      "net_dol": 594895,
+      "avg": 12.39,
+      "wr": 0.792
+    },
+    {
+      "label": "10-15% drop",
+      "n": 34,
+      "n_win": 25,
+      "n_lose": 9,
+      "win_dol": 521329,
+      "lose_dol": -200494,
+      "net_dol": 320835,
+      "avg": 9.44,
+      "wr": 0.735
+    },
+    {
+      "label": "15-20% drop",
+      "n": 12,
+      "n_win": 10,
+      "n_lose": 2,
+      "win_dol": 236839,
+      "lose_dol": -13344,
+      "net_dol": 223495,
+      "avg": 18.62,
+      "wr": 0.833
+    },
+    {
+      "label": "20-30% drop",
+      "n": 8,
+      "n_win": 5,
+      "n_lose": 3,
+      "win_dol": 156602,
+      "lose_dol": -43513,
+      "net_dol": 113089,
+      "avg": 14.14,
+      "wr": 0.625
+    },
+    {
+      "label": "30%+ drop",
+      "n": 5,
+      "n_win": 5,
+      "n_lose": 0,
+      "win_dol": 251191,
+      "lose_dol": 0,
+      "net_dol": 251191,
+      "avg": 50.24,
+      "wr": 1.0
+    }
+  ],
+  "bucket_analysis_gc": [
+    {
+      "label": "< 0% (rising)",
+      "n": 20,
+      "n_win": 18,
+      "n_lose": 2,
+      "win_dol": 529153,
+      "lose_dol": -57586,
+      "net_dol": 471567,
+      "avg": 23.58,
+      "wr": 0.9
+    },
+    {
+      "label": "0-25% eaten",
+      "n": 60,
+      "n_win": 47,
+      "n_lose": 13,
+      "win_dol": 999885,
+      "lose_dol": -89330,
+      "net_dol": 910555,
+      "avg": 15.18,
+      "wr": 0.783
+    },
+    {
+      "label": "25-50% eaten",
+      "n": 51,
+      "n_win": 39,
+      "n_lose": 12,
+      "win_dol": 682716,
+      "lose_dol": -301608,
+      "net_dol": 381108,
+      "avg": 7.47,
+      "wr": 0.765
+    },
+    {
+      "label": "50-75% eaten",
+      "n": 23,
+      "n_win": 18,
+      "n_lose": 5,
+      "win_dol": 378825,
+      "lose_dol": -26438,
+      "net_dol": 352387,
+      "avg": 15.32,
+      "wr": 0.783
+    },
+    {
+      "label": "75-100% eaten",
+      "n": 7,
+      "n_win": 3,
+      "n_lose": 4,
+      "win_dol": 42948,
+      "lose_dol": -22741,
+      "net_dol": 20207,
+      "avg": 2.89,
+      "wr": 0.429
+    },
+    {
+      "label": ">100% (below)",
+      "n": 5,
+      "n_win": 3,
+      "n_lose": 2,
+      "win_dol": 116486,
+      "lose_dol": -8745,
+      "net_dol": 107741,
+      "avg": 21.55,
+      "wr": 0.6
+    }
+  ],
+  "cumulative_skip_abs": [
+    {
+      "thresh": 0.3,
+      "n_kept": 161,
+      "n_skip": 5,
+      "skip_dol": 251191,
+      "kept_dol": 1992374,
+      "delta": -251191,
+      "n_w_skip": 5,
+      "n_l_skip": 0,
+      "loser_frac": 0.0
+    },
+    {
+      "thresh": 0.25,
+      "n_kept": 157,
+      "n_skip": 9,
+      "skip_dol": 294483,
+      "kept_dol": 1949082,
+      "delta": -294483,
+      "n_w_skip": 7,
+      "n_l_skip": 2,
+      "loser_frac": 0.222
+    },
+    {
+      "thresh": 0.2,
+      "n_kept": 153,
+      "n_skip": 13,
+      "skip_dol": 364280,
+      "kept_dol": 1879285,
+      "delta": -364280,
+      "n_w_skip": 10,
+      "n_l_skip": 3,
+      "loser_frac": 0.231
+    },
+    {
+      "thresh": 0.18,
+      "n_kept": 150,
+      "n_skip": 16,
+      "skip_dol": 379492,
+      "kept_dol": 1864073,
+      "delta": -379492,
+      "n_w_skip": 12,
+      "n_l_skip": 4,
+      "loser_frac": 0.25
+    },
+    {
+      "thresh": 0.15,
+      "n_kept": 141,
+      "n_skip": 25,
+      "skip_dol": 587775,
+      "kept_dol": 1655790,
+      "delta": -587775,
+      "n_w_skip": 20,
+      "n_l_skip": 5,
+      "loser_frac": 0.2
+    },
+    {
+      "thresh": 0.12,
+      "n_kept": 122,
+      "n_skip": 44,
+      "skip_dol": 693807,
+      "kept_dol": 1549758,
+      "delta": -693807,
+      "n_w_skip": 32,
+      "n_l_skip": 12,
+      "loser_frac": 0.273
+    },
+    {
+      "thresh": 0.1,
+      "n_kept": 109,
+      "n_skip": 57,
+      "skip_dol": 883267,
+      "kept_dol": 1360298,
+      "delta": -883267,
+      "n_w_skip": 43,
+      "n_l_skip": 14,
+      "loser_frac": 0.246
+    },
+    {
+      "thresh": 0.08,
+      "n_kept": 95,
+      "n_skip": 71,
+      "skip_dol": 936979,
+      "kept_dol": 1306586,
+      "delta": -936979,
+      "n_w_skip": 54,
+      "n_l_skip": 17,
+      "loser_frac": 0.239
+    },
+    {
+      "thresh": 0.05,
+      "n_kept": 59,
+      "n_skip": 107,
+      "skip_dol": 1503505,
+      "kept_dol": 740060,
+      "delta": -1503505,
+      "n_w_skip": 83,
+      "n_l_skip": 24,
+      "loser_frac": 0.224
+    }
+  ],
+  "cumulative_skip_gc": [
+    {
+      "thresh": 1.0,
+      "n_kept": 161,
+      "n_skip": 5,
+      "skip_dol": 107741,
+      "kept_dol": 2135824,
+      "delta": -107741,
+      "n_w_skip": 3,
+      "n_l_skip": 2,
+      "loser_frac": 40.0
+    },
+    {
+      "thresh": 0.9,
+      "n_kept": 157,
+      "n_skip": 9,
+      "skip_dol": 121012,
+      "kept_dol": 2122553,
+      "delta": -121012,
+      "n_w_skip": 5,
+      "n_l_skip": 4,
+      "loser_frac": 44.4
+    },
+    {
+      "thresh": 0.8,
+      "n_kept": 155,
+      "n_skip": 11,
+      "skip_dol": 128774,
+      "kept_dol": 2114791,
+      "delta": -128774,
+      "n_w_skip": 6,
+      "n_l_skip": 5,
+      "loser_frac": 45.5
+    },
+    {
+      "thresh": 0.75,
+      "n_kept": 154,
+      "n_skip": 12,
+      "skip_dol": 127948,
+      "kept_dol": 2115617,
+      "delta": -127948,
+      "n_w_skip": 6,
+      "n_l_skip": 6,
+      "loser_frac": 50.0
+    },
+    {
+      "thresh": 0.7,
+      "n_kept": 149,
+      "n_skip": 17,
+      "skip_dol": 141361,
+      "kept_dol": 2102204,
+      "delta": -141361,
+      "n_w_skip": 9,
+      "n_l_skip": 8,
+      "loser_frac": 47.1
+    },
+    {
+      "thresh": 0.6,
+      "n_kept": 146,
+      "n_skip": 20,
+      "skip_dol": 297325,
+      "kept_dol": 1946240,
+      "delta": -297325,
+      "n_w_skip": 12,
+      "n_l_skip": 8,
+      "loser_frac": 40.0
+    },
+    {
+      "thresh": 0.5,
+      "n_kept": 131,
+      "n_skip": 35,
+      "skip_dol": 480335,
+      "kept_dol": 1763230,
+      "delta": -480335,
+      "n_w_skip": 24,
+      "n_l_skip": 11,
+      "loser_frac": 31.4
+    }
+  ],
+  "losers": [
+    {
+      "date": "2026-05-12",
+      "ticker": "TDIC",
+      "gap_pct": 73.6,
+      "opening_drop": 13.0,
+      "gap_consumed": 30.7,
+      "pnl": -132.6
+    },
+    {
+      "date": "2026-06-26",
+      "ticker": "SDOT",
+      "gap_pct": 86.1,
+      "opening_drop": -5.3,
+      "gap_consumed": -11.5,
+      "pnl": -51.7
+    },
+    {
+      "date": "2026-07-27",
+      "ticker": "GOSS",
+      "gap_pct": 27.5,
+      "opening_drop": 9.4,
+      "gap_consumed": 43.4,
+      "pnl": -50.7
+    },
+    {
+      "date": "2026-03-02",
+      "ticker": "BATL",
+      "gap_pct": 93.8,
+      "opening_drop": 5.0,
+      "gap_consumed": 10.2,
+      "pnl": -40.4
+    },
+    {
+      "date": "2026-01-26",
+      "ticker": "BNAI",
+      "gap_pct": 234.7,
+      "opening_drop": 29.4,
+      "gap_consumed": 41.9,
+      "pnl": -33.0
+    },
+    {
+      "date": "2026-07-23",
+      "ticker": "LGCL",
+      "gap_pct": 67.1,
+      "opening_drop": 10.7,
+      "gap_consumed": 26.6,
+      "pnl": -23.2
+    },
+    {
+      "date": "2026-03-20",
+      "ticker": "VCX",
+      "gap_pct": 37.9,
+      "opening_drop": 13.6,
+      "gap_consumed": 49.4,
+      "pnl": -21.7
+    },
+    {
+      "date": "2026-06-08",
+      "ticker": "SMTK",
+      "gap_pct": 51.5,
+      "opening_drop": 9.8,
+      "gap_consumed": 28.9,
+      "pnl": -18.5
+    },
+    {
+      "date": "2026-07-17",
+      "ticker": "SDOT",
+      "gap_pct": 54.0,
+      "opening_drop": 0.3,
+      "gap_consumed": 0.9,
+      "pnl": -16.0
+    },
+    {
+      "date": "2026-02-03",
+      "ticker": "HYMC",
+      "gap_pct": 13.6,
+      "opening_drop": 6.8,
+      "gap_consumed": 57.1,
+      "pnl": -12.5
+    },
+    {
+      "date": "2026-01-14",
+      "ticker": "PFSA",
+      "gap_pct": 9.2,
+      "opening_drop": 8.0,
+      "gap_consumed": 94.7,
+      "pnl": -11.9
+    },
+    {
+      "date": "2026-09-09",
+      "ticker": "ODD",
+      "gap_pct": 34.4,
+      "opening_drop": 13.2,
+      "gap_consumed": 51.6,
+      "pnl": -10.9
+    },
+    {
+      "date": "2026-03-24",
+      "ticker": "FEED",
+      "gap_pct": 53.8,
+      "opening_drop": 8.4,
+      "gap_consumed": 24.0,
+      "pnl": -10.2
+    },
+    {
+      "date": "2026-05-21",
+      "ticker": "AIAI",
+      "gap_pct": 44.4,
+      "opening_drop": 29.7,
+      "gap_consumed": 96.8,
+      "pnl": -9.5
+    },
+    {
+      "date": "2026-03-23",
+      "ticker": "TDIC",
+      "gap_pct": 15.0,
+      "opening_drop": 16.9,
+      "gap_consumed": 129.0,
+      "pnl": -7.1
+    },
+    {
+      "date": "2026-05-01",
+      "ticker": "CUE",
+      "gap_pct": 129.0,
+      "opening_drop": 18.9,
+      "gap_consumed": 33.6,
+      "pnl": -6.2
+    },
+    {
+      "date": "2026-07-15",
+      "ticker": "ELVA",
+      "gap_pct": 54.6,
+      "opening_drop": 13.2,
+      "gap_consumed": 37.4,
+      "pnl": -6.1
+    },
+    {
+      "date": "2026-03-26",
+      "ticker": "KOD",
+      "gap_pct": 55.6,
+      "opening_drop": -8.7,
+      "gap_consumed": -24.4,
+      "pnl": -5.9
+    },
+    {
+      "date": "2026-03-05",
+      "ticker": "CDTG",
+      "gap_pct": 29.4,
+      "opening_drop": 7.0,
+      "gap_consumed": 30.9,
+      "pnl": -4.0
+    },
+    {
+      "date": "2026-08-14",
+      "ticker": "IMXI",
+      "gap_pct": 21.7,
+      "opening_drop": 1.2,
+      "gap_consumed": 6.9,
+      "pnl": -3.3
+    },
+    {
+      "date": "2026-05-07",
+      "ticker": "SITM",
+      "gap_pct": 34.0,
+      "opening_drop": 4.3,
+      "gap_consumed": 16.9,
+      "pnl": -3.2
+    },
+    {
+      "date": "2026-09-03",
+      "ticker": "BIAF",
+      "gap_pct": 35.4,
+      "opening_drop": 7.3,
+      "gap_consumed": 28.1,
+      "pnl": -3.2
+    },
+    {
+      "date": "2026-04-28",
+      "ticker": "OMCL",
+      "gap_pct": 19.9,
+      "opening_drop": 0.9,
+      "gap_consumed": 5.5,
+      "pnl": -3.1
+    },
+    {
+      "date": "2026-02-13",
+      "ticker": "RIVN",
+      "gap_pct": 26.9,
+      "opening_drop": 2.8,
+      "gap_consumed": 13.3,
+      "pnl": -3.0
+    },
+    {
+      "date": "2026-02-26",
+      "ticker": "ARHS",
+      "gap_pct": 25.9,
+      "opening_drop": 11.1,
+      "gap_consumed": 53.9,
+      "pnl": -2.9
+    },
+    {
+      "date": "2026-05-04",
+      "ticker": "RLYB",
+      "gap_pct": 49.0,
+      "opening_drop": 2.7,
+      "gap_consumed": 8.1,
+      "pnl": -2.9
+    },
+    {
+      "date": "2026-08-17",
+      "ticker": "DUOT",
+      "gap_pct": 13.6,
+      "opening_drop": 0.7,
+      "gap_consumed": 6.2,
+      "pnl": -2.4
+    },
+    {
+      "date": "2026-04-02",
+      "ticker": "GSAT",
+      "gap_pct": 11.0,
+      "opening_drop": null,
+      "gap_consumed": null,
+      "pnl": -2.1
+    },
+    {
+      "date": "2026-02-10",
+      "ticker": "EVMN",
+      "gap_pct": 73.7,
+      "opening_drop": 4.1,
+      "gap_consumed": 9.7,
+      "pnl": -1.9
+    },
+    {
+      "date": "2026-07-09",
+      "ticker": "SMPL",
+      "gap_pct": 17.1,
+      "opening_drop": 14.9,
+      "gap_consumed": 102.3,
+      "pnl": -1.6
+    },
+    {
+      "date": "2026-07-31",
+      "ticker": "AXTI",
+      "gap_pct": 42.1,
+      "opening_drop": 12.2,
+      "gap_consumed": 41.0,
+      "pnl": -1.3
+    },
+    {
+      "date": "2026-04-22",
+      "ticker": "INBX",
+      "gap_pct": 75.4,
+      "opening_drop": 21.0,
+      "gap_consumed": 48.9,
+      "pnl": -1.0
+    },
+    {
+      "date": "2026-07-22",
+      "ticker": "SPKL",
+      "gap_pct": 8.5,
+      "opening_drop": 5.9,
+      "gap_consumed": 75.2,
+      "pnl": -0.8
+    },
+    {
+      "date": "2026-05-11",
+      "ticker": "BZH",
+      "gap_pct": 34.8,
+      "opening_drop": 3.8,
+      "gap_consumed": 14.8,
+      "pnl": -0.7
+    },
+    {
+      "date": "2026-08-10",
+      "ticker": "CAMT",
+      "gap_pct": 9.4,
+      "opening_drop": 7.3,
+      "gap_consumed": 85.3,
+      "pnl": -0.5
+    },
+    {
+      "date": "2026-07-29",
+      "ticker": "ANIK",
+      "gap_pct": 13.7,
+      "opening_drop": 2.0,
+      "gap_consumed": 16.6,
+      "pnl": -0.3
+    },
+    {
+      "date": "2026-02-09",
+      "ticker": "PHOE",
+      "gap_pct": 20.4,
+      "opening_drop": 12.2,
+      "gap_consumed": 72.0,
+      "pnl": -0.1
+    },
+    {
+      "date": "2026-09-10",
+      "ticker": "ALMS",
+      "gap_pct": 7.7,
+      "opening_drop": 5.0,
+      "gap_consumed": 70.7,
+      "pnl": 0.0
+    }
+  ]
+}

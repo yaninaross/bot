@@ -1,0 +1,39 @@
+{
+  "id": "H020",
+  "desc": "LONG gap-down>=5% hold T+10 close",
+  "direction": "LONG",
+  "catalyst": "gap_down",
+  "entry": "open_9:30",
+  "exit": "T+10_close",
+  "filters": {
+    "gap_min": 0.05
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H020",
+    "n": 64,
+    "avg": 0.086,
+    "med": 0.216,
+    "std": 22.484,
+    "wr": 0.5,
+    "sharpe": 0.0038,
+    "pf": 1.01,
+    "ci_lo": -5.557,
+    "ci_hi": 5.685,
+    "trimmed_mean": 0.298,
+    "max_loss": -57.533,
+    "max_gain": 68.694,
+    "max_dd_pct": -40.36
+  },
+  "trades_per_week": 6.96,
+  "avg_hold_hrs": 92.4,
+  "reasons": [
+    "avg=0.09% <= 2.0%",
+    "Sharpe=0.004 <= 0.2",
+    "CI_lo=-5.56 <= 0",
+    "maxDD=-40.4% > 35%"
+  ],
+  "n_trades": 64,
+  "run_date": "2026-10-07 00:14"
+}

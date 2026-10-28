@@ -1,0 +1,41 @@
+{
+  "id": "H008",
+  "desc": "SHORT gap-up>=5% no-pharma sustained_drop 10:00 entry",
+  "direction": "SHORT",
+  "catalyst": "gap_up",
+  "entry": "10:00",
+  "exit": "17:00",
+  "filters": {
+    "gap_min": 0.05,
+    "pattern": "sustained_drop",
+    "sector_excl": "pharma_health_biotech",
+    "entry_confirm": "drop_30m >= 3%"
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H008",
+    "n": 49,
+    "avg": 0.425,
+    "med": 0.628,
+    "std": 3.056,
+    "wr": 0.5918,
+    "sharpe": 0.139,
+    "pf": 1.446,
+    "ci_lo": -0.413,
+    "ci_hi": 1.208,
+    "trimmed_mean": 0.553,
+    "max_loss": -8.004,
+    "max_gain": 7.719,
+    "max_dd_pct": -1.91
+  },
+  "trades_per_week": 5.33,
+  "avg_hold_hrs": 7.0,
+  "reasons": [
+    "avg=0.42% <= 2.0%",
+    "Sharpe=0.139 <= 0.2",
+    "CI_lo=-0.41 <= 0"
+  ],
+  "n_trades": 49,
+  "run_date": "2026-10-07 00:14"
+}

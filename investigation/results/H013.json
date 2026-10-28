@@ -1,0 +1,40 @@
+{
+  "id": "H013",
+  "desc": "SHORT post-earnings gap-up>=5% open T+2",
+  "direction": "SHORT",
+  "catalyst": "earnings_beat",
+  "entry": "open_9:30",
+  "exit": "T+2_close",
+  "filters": {
+    "gap_min": 0.05,
+    "catalyst_type": "earnings",
+    "eps_surprise": "positive"
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H013",
+    "n": 95,
+    "avg": 1.728,
+    "med": 2.065,
+    "std": 10.009,
+    "wr": 0.5895,
+    "sharpe": 0.1726,
+    "pf": 1.569,
+    "ci_lo": -0.266,
+    "ci_hi": 3.761,
+    "trimmed_mean": 1.64,
+    "max_loss": -22.867,
+    "max_gain": 35.549,
+    "max_dd_pct": -5.21
+  },
+  "trades_per_week": 10.33,
+  "avg_hold_hrs": 19.0,
+  "reasons": [
+    "avg=1.73% <= 2.0%",
+    "Sharpe=0.173 <= 0.2",
+    "CI_lo=-0.27 <= 0"
+  ],
+  "n_trades": 95,
+  "run_date": "2026-10-07 00:14"
+}

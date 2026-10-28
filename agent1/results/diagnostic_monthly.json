@@ -1,0 +1,220 @@
+{
+  "run_date": "2026-09-19 00:39",
+  "period": "2026-01-02 to 2026-09-11",
+  "n_trades": 166,
+  "overall": {
+    "avg": 13.64,
+    "sharpe": 0.547,
+    "wr": 0.771,
+    "total_dollars": 2264461
+  },
+  "monthly": [
+    {
+      "month": "Jan",
+      "n": 20,
+      "avg": 15.57,
+      "median": 15.56,
+      "wr": 0.9,
+      "sharpe": 0.907,
+      "total_dol": 311419,
+      "n_win": 18,
+      "n_lose": 2,
+      "best": {
+        "ticker": "SHPH",
+        "pnl": 45.6,
+        "date": "2026-01-20"
+      },
+      "worst": {
+        "ticker": "BNAI",
+        "pnl": -33.0,
+        "date": "2026-01-26"
+      }
+    },
+    {
+      "month": "Feb",
+      "n": 19,
+      "avg": 13.41,
+      "median": 13.64,
+      "wr": 0.737,
+      "sharpe": 0.853,
+      "total_dol": 254705,
+      "n_win": 14,
+      "n_lose": 5,
+      "best": {
+        "ticker": "RUBI",
+        "pnl": 51.8,
+        "date": "2026-02-19"
+      },
+      "worst": {
+        "ticker": "HYMC",
+        "pnl": -12.5,
+        "date": "2026-02-03"
+      }
+    },
+    {
+      "month": "Mar",
+      "n": 22,
+      "avg": 14.55,
+      "median": 11.34,
+      "wr": 0.727,
+      "sharpe": 0.537,
+      "total_dol": 320013,
+      "n_win": 16,
+      "n_lose": 6,
+      "best": {
+        "ticker": "LBGJ",
+        "pnl": 73.1,
+        "date": "2026-03-18"
+      },
+      "worst": {
+        "ticker": "BATL",
+        "pnl": -40.4,
+        "date": "2026-03-02"
+      }
+    },
+    {
+      "month": "Apr",
+      "n": 19,
+      "avg": 15.44,
+      "median": 10.68,
+      "wr": 0.842,
+      "sharpe": 0.881,
+      "total_dol": 293286,
+      "n_win": 16,
+      "n_lose": 3,
+      "best": {
+        "ticker": "CTNT",
+        "pnl": 51.2,
+        "date": "2026-04-16"
+      },
+      "worst": {
+        "ticker": "OMCL",
+        "pnl": -3.1,
+        "date": "2026-04-28"
+      }
+    },
+    {
+      "month": "May",
+      "n": 20,
+      "avg": 15.84,
+      "median": 17.79,
+      "wr": 0.7,
+      "sharpe": 0.361,
+      "total_dol": 316759,
+      "n_win": 14,
+      "n_lose": 6,
+      "best": {
+        "ticker": "EZGO",
+        "pnl": 89.6,
+        "date": "2026-05-06"
+      },
+      "worst": {
+        "ticker": "TDIC",
+        "pnl": -132.6,
+        "date": "2026-05-12"
+      }
+    },
+    {
+      "month": "Jun",
+      "n": 20,
+      "avg": 17.91,
+      "median": 15.63,
+      "wr": 0.9,
+      "sharpe": 0.682,
+      "total_dol": 358102,
+      "n_win": 18,
+      "n_lose": 2,
+      "best": {
+        "ticker": "HUBC",
+        "pnl": 65.7,
+        "date": "2026-06-03"
+      },
+      "worst": {
+        "ticker": "SDOT",
+        "pnl": -51.7,
+        "date": "2026-06-26"
+      }
+    },
+    {
+      "month": "Jul",
+      "n": 21,
+      "avg": 10.72,
+      "median": 1.7,
+      "wr": 0.619,
+      "sharpe": 0.379,
+      "total_dol": 225082,
+      "n_win": 13,
+      "n_lose": 8,
+      "best": {
+        "ticker": "HAO",
+        "pnl": 81.1,
+        "date": "2026-07-10"
+      },
+      "worst": {
+        "ticker": "GOSS",
+        "pnl": -50.7,
+        "date": "2026-07-27"
+      }
+    },
+    {
+      "month": "Aug",
+      "n": 18,
+      "avg": 9.51,
+      "median": 5.64,
+      "wr": 0.833,
+      "sharpe": 0.675,
+      "total_dol": 171179,
+      "n_win": 15,
+      "n_lose": 3,
+      "best": {
+        "ticker": "MB",
+        "pnl": 46.0,
+        "date": "2026-08-07"
+      },
+      "worst": {
+        "ticker": "IMXI",
+        "pnl": -3.3,
+        "date": "2026-08-14"
+      }
+    },
+    {
+      "month": "Sep",
+      "n": 7,
+      "avg": 1.99,
+      "median": 1.24,
+      "wr": 0.571,
+      "sharpe": 0.219,
+      "total_dol": 13916,
+      "n_win": 4,
+      "n_lose": 3,
+      "best": {
+        "ticker": "TANH",
+        "pnl": 18.8,
+        "date": "2026-09-11"
+      },
+      "worst": {
+        "ticker": "ODD",
+        "pnl": -10.9,
+        "date": "2026-09-09"
+      }
+    }
+  ],
+  "diagnosis": {
+    "first_avg_below_10": "Aug",
+    "first_wr_below_70": "Jul",
+    "strong_months": [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul"
+    ],
+    "weak_months": [
+      "Aug",
+      "Sep"
+    ],
+    "negative_months": []
+  }
+}

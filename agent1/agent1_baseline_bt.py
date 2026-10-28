@@ -1,9 +1,15 @@
-# %% Agent 1 — Gap-Fade SHORT Backtest (CS+SD deployed strategy)
+# %% Agent 1 — Gap-Fade SHORT Backtest
 #
-# Deployed strategy:
-#   CS + sustained_drop filter, SOFT float, top 1 by gap, local_high entry, SHORT
-#   Exit at 17:00 ET (1h after close, after-hours), PNL_CAP = -50%
-#   No TP, no SL — hold to fixed exit time.
+# Two variants, shared pipeline:
+#   E2-A  Agent 1:     CS only, local_high bars 3-11, fb 15 (6:33-6:45 PST)
+#   E2-B  Agent 1-SD:  CS + sustained_drop (confirmed 7:30 AM PST),
+#                       local_high bars 60-72, fb 75 (7:30-7:45 PST)
+#
+# Scan at 09:31 ET (6:31 AM PST). Re-rank by gap at scan time.
+# AH freshness: gap vs last AH price (16:00-20:00) on prior day, not prior close.
+# Gap erosion: skip if >50% of gap consumed by scan time.
+# SOFT float (frozen dict, miss=INCLUDE, hit+<10M=EXCLUDE), top 1 by gap.
+# Exit 17:00 ET (2:00 PM PST). No TP, no SL, no PNL cap.
 #
 # Colab-cell friendly.
 
@@ -55,12 +61,10 @@ except: pass
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
 
-BACKTEST_START = '2026-01-02'
-BACKTEST_END   = '2026-09-18'
+BACKTEST_START = '2026-07-01'
+BACKTEST_END   = '2026-10-09'
 
-AB_COMPARE     = False         # True = run OLD vs NEW float filter side by side
-
-GAP_MIN_PCT    = 5.0
+GAP_MIN_PCT    = 3.0           # 3% threshold applied after re-ranking at SCAN_TIME
 PRICE_MIN      = 10.0
 FLOAT_MIN      = 10_000_000
 TOP_N          = 1
@@ -70,14 +74,17 @@ PEAK_WINDOW    = 3
 MAX_PEAK_BAR   = 12
 FALLBACK_BAR   = 15
 
+SD_MAX_PEAK_BAR = 72       # local_high search bars 60-71 (10:30-10:41 ET)
+SD_FALLBACK_BAR = 75       # fallback at 10:45 ET
+SD_CONFIRM_BAR  = 59       # bar 59 close = SD confirmed at 10:30 ET
+
 EXIT_TIME      = '17:00'      # exit at 17:00 ET (1h after close, after-hours)
-PNL_CAP        = -50.0        # clip catastrophic losses
+SCAN_TIME_ET   = '09:31'      # 6:31 AM PST — rank candidates by gap at this time
+GAP_CONSUMED_MAX = 0.50       # skip if >50% of gap eroded by scan time
 
 CAPITAL        = 100_000
-SCORING_TIME_ET = '09:20'     # 6:20 AM PST = 9:20 AM ET (premarket, matches live scanner)
-PM_MIN_BARS    = 5            # min premarket bars to use PM price (filters thinly-traded tickers)
 
-POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
 _BASE = "https://api.polygon.io"
 _TK_RE = re.compile(r'^[A-Z]{1,5}$')
 ET = pytz.timezone('America/New_York')
@@ -338,10 +345,11 @@ def classify_open_pattern(rth_bars):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def find_local_high(bars, window=PEAK_WINDOW, max_peak_bar=MAX_PEAK_BAR,
-                    fallback_bar=FALLBACK_BAR):
+                    fallback_bar=FALLBACK_BAR, min_entry_bar=0):
     if len(bars) < window * 2 + 1:
         return None
-    for i in range(window, min(max_peak_bar, len(bars) - window)):
+    start = max(window, min_entry_bar - window)
+    for i in range(start, min(max_peak_bar, len(bars) - window)):
         ch = bars[i][1]['h']
         if all(bars[i - j][1]['h'] < ch and bars[i + j][1]['h'] < ch
                for j in range(1, window + 1)):
@@ -353,14 +361,37 @@ def find_local_high(bars, window=PEAK_WINDOW, max_peak_bar=MAX_PEAK_BAR,
                     'entry_type': 'local_high',
                     'peak_bar': i,
                 }
-    if fallback_bar is not None and fallback_bar < len(bars):
+    fb = max(fallback_bar, min_entry_bar) if fallback_bar is not None else None
+    if fb is not None and fb < len(bars):
         return {
-            'entry_price': bars[fallback_bar][1]['c'],
-            'entry_time': bars[fallback_bar][0],
+            'entry_price': bars[fb][1]['c'],
+            'entry_time': bars[fb][0],
             'entry_type': 'fallback',
             'peak_bar': None,
         }
     return None
+
+
+def _T_to_min_entry_bar(T):
+    h, m = int(T[:2]), int(T[3:5])
+    T_min = h * 60 + m
+    rth_start = 9 * 60 + 30
+    if T_min <= rth_start:
+        return 0
+    return T_min - rth_start
+
+
+def get_price_at_T(bar_data, T):
+    if bar_data is None:
+        return None
+    all_bars = (bar_data.get('pm') or []) + (bar_data.get('rth') or [])
+    best = None
+    for t_str, bd in all_bars:
+        if t_str <= T:
+            best = bd['c']
+        else:
+            break
+    return best
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -402,6 +433,7 @@ def scan_day(dt_str):
     for s in candidates:
         s['t1_date'] = t1
         s['t2_date'] = t2
+        s['prior_str'] = prior_str
     return candidates
 
 
@@ -442,15 +474,16 @@ def run_backtest():
     timings = {}
 
     print(f"\n{'='*80}")
-    print(f"  AGENT 1 — Gap-Fade SHORT (CS+SD deployed strategy)")
+    print(f"  AGENT 1 — Gap-Fade SHORT (E2 benchmark config)")
     print(f"  {BACKTEST_START} → {BACKTEST_END}")
     print(f"  Universe: ALL US equities, gap >= {GAP_MIN_PCT}%, price >= ${PRICE_MIN}")
-    pst_h = int(SCORING_TIME_ET.split(':')[0]) - 3
-    pst_m = SCORING_TIME_ET.split(':')[1]
-    print(f"  Gap source: PREMARKET bars at {SCORING_TIME_ET} ET ({pst_h}:{pst_m} AM PST)")
-    print(f"  Filter: CS + sustained_drop + float >= {FLOAT_MIN/1e6:.0f}M, top {TOP_N} by gap")
-    print(f"  Entry: local_high + fallback  |  Exit: {EXIT_TIME} ET  |  Direction: SHORT")
-    print(f"  PNL_CAP: {PNL_CAP}%  |  Capital: ${CAPITAL:,.0f}/day, non-compounding")
+    print(f"  Gap source: re-ranked by gap at {SCAN_TIME_ET} ET (6:31 AM PST)")
+    print(f"  Gap freshness: vs AH ref (last 16:00-20:00 bar on prior day)")
+    print(f"  Gap erosion: skip if >{GAP_CONSUMED_MAX*100:.0f}% consumed by scan time")
+    print(f"  Filter: CS + float SOFT (dict only, miss=INCLUDE)")
+    print(f"  E2-A: LH bars 3-11, fb 15  |  E2-B: SD confirmed @10:30, LH bars 60-72, fb 75")
+    print(f"  Exit: {EXIT_TIME} ET (2:00 PM PST)  |  Direction: SHORT")
+    print(f"  Capital: ${CAPITAL:,.0f}/day, non-compounding")
     print(f"{'='*80}")
 
     # ── Trading days ──
@@ -482,6 +515,8 @@ def run_backtest():
     for dt, cands in all_candidates.items():
         for c in cands[:PRE_FILTER_N]:
             all_pairs.add((c['ticker'], dt))
+            if c.get('prior_str'):
+                all_pairs.add((c['ticker'], c['prior_str']))
 
     print(f"\n  Phase 2: Fetching 1-min bars for {len(all_pairs)} pairs...")
     pairs_list = list(all_pairs)
@@ -496,44 +531,81 @@ def run_backtest():
     timings['bars'] = time.time() - t2
     print(f"  → Got bars for {len(all_bars)}/{len(all_pairs)} pairs")
 
-    # ── Phase 2b: Rerank candidates by premarket price at SCORING_TIME_ET ──
-    # Only use PM price for tickers with >= PM_MIN_BARS bars (filters thinly traded
-    # tickers that wouldn't appear in the live scanner's snapshot API)
-    print(f"\n  Phase 2b: Reranking by premarket gap at {SCORING_TIME_ET} ET "
-          f"(min {PM_MIN_BARS} PM bars)...")
+    # ── Phase 2a: AH freshness — recompute gap vs last after-hours price ──
     gap_min_final = GAP_MIN_PCT / 100.0
-    n_reranked = 0
-    n_skipped_thin = 0
+    print(f"\n  Phase 2a: Computing AH reference prices (gap freshness)...")
+    n_ah_found = 0
+    n_stale = 0
     for dt in dates:
         cands = all_candidates.get(dt, [])
-        for c in cands:
+        for c in cands[:PRE_FILTER_N]:
             tk = c['ticker']
-            key = (tk, dt)
-            bar_data = all_bars.get(key)
-            if bar_data is None:
+            prior_str = c.get('prior_str')
+            if not prior_str:
                 continue
-            pm_bars = bar_data.get('pm', [])
-            if not pm_bars:
+            prior_bars = all_bars.get((tk, prior_str))
+            if prior_bars is None:
                 continue
-            # Count PM bars up to scoring time
-            pm_before = [(t, d) for t, d in pm_bars if t <= SCORING_TIME_ET]
-            if len(pm_before) < PM_MIN_BARS:
-                n_skipped_thin += 1
-                continue
-            pm_price = pm_before[-1][1]['c']
-            if pm_price and pm_price > 0:
-                prev_c = c['prior_close']
-                c['gap_pct'] = (pm_price - prev_c) / prev_c
-                c['pm_price'] = pm_price
-                n_reranked += 1
+            ah_bars = prior_bars.get('ah', [])
+            if ah_bars:
+                ah_ref = ah_bars[-1][1]['c']
+                c['ah_ref_price'] = ah_ref
+                n_ah_found += 1
+                old_gap = c['gap_pct']
+                fresh_gap = (c['open_price'] - ah_ref) / ah_ref
+                c['gap_pct_daily'] = old_gap
+                c['gap_pct'] = fresh_gap
+                if fresh_gap < gap_min_final:
+                    c['ah_stale'] = True
+                    n_stale += 1
+    print(f"  → AH reference: {n_ah_found} tickers with AH data, {n_stale} stale gaps excluded")
 
-        # Re-sort by PM gap and re-filter at 5%
-        reranked = [c for c in cands if c['gap_pct'] >= gap_min_final]
+    # ── Phase 2b: Re-rank by gap at SCAN_TIME_ET + gap erosion ──
+    print(f"\n  Phase 2b: Re-ranking by gap at {SCAN_TIME_ET} ET + gap erosion...")
+    n_reranked = 0
+    n_dropped = 0
+    n_eroded = 0
+    for dt in dates:
+        cands = all_candidates.get(dt, [])
+        reranked = []
+        for c in cands:
+            if c.get('ah_stale'):
+                continue
+            tk = c['ticker']
+            bar_data = all_bars.get((tk, dt))
+            price_T = get_price_at_T(bar_data, SCAN_TIME_ET)
+            if price_T is None:
+                n_dropped += 1
+                continue
+            ref_price = c.get('ah_ref_price', c['prior_close'])
+            gap_T = (price_T - ref_price) / ref_price
+            if gap_T < gap_min_final:
+                continue
+            if price_T < PRICE_MIN:
+                continue
+            c['gap_pct'] = gap_T
+            c['scan_price'] = price_T
+
+            rth = bar_data.get('rth', []) if bar_data else []
+            if rth:
+                daily_open = rth[0][1]['o']
+                scan_bars = [b for b in rth if b[0] <= SCAN_TIME_ET]
+                gap_range = daily_open - ref_price
+                if scan_bars and gap_range > 0:
+                    low_to_scan = min(b[1]['l'] for b in scan_bars)
+                    gap_consumed = (daily_open - low_to_scan) / gap_range
+                    c['gap_consumed'] = gap_consumed
+                    if gap_consumed > GAP_CONSUMED_MAX:
+                        n_eroded += 1
+                        continue
+
+            reranked.append(c)
+            n_reranked += 1
         reranked.sort(key=lambda x: -x['gap_pct'])
         all_candidates[dt] = reranked
 
-    print(f"  → Reranked {n_reranked} candidates using premarket prices "
-          f"({n_skipped_thin} skipped: < {PM_MIN_BARS} PM bars)")
+    print(f"  → Re-ranked {n_reranked} by gap at {SCAN_TIME_ET} "
+          f"({n_dropped} no bar, {n_stale} stale, {n_eroded} eroded)")
 
     # ── Phase 3: Fetch ticker reference data (asset type for CS filter) ──
     t3 = time.time()
@@ -561,15 +633,24 @@ def run_backtest():
 
     # ── Phase 4: Classify patterns + find entries ──
     t4 = time.time()
+    min_eb = _T_to_min_entry_bar(SCAN_TIME_ET)
     pattern_cache = {}
-    entry_cache = {}
+    entry_cache_bl = {}    # baseline: LH anchored to 09:31 (bars 1-12, fb 15)
+    entry_cache_sd = {}    # SD LH: post-10:30 (bars 60-72, fb 75)
     for key, bar_data in all_bars.items():
         rth_bars = bar_data.get('rth', []) if isinstance(bar_data, dict) else bar_data
         pattern_cache[key] = classify_open_pattern(rth_bars)
         if rth_bars and len(rth_bars) >= PEAK_WINDOW * 2 + 1:
-            entry_cache[key] = find_local_high(rth_bars)
+            entry_cache_bl[key] = find_local_high(rth_bars, min_entry_bar=min_eb)
         else:
-            entry_cache[key] = None
+            entry_cache_bl[key] = None
+        if rth_bars and len(rth_bars) > SD_MAX_PEAK_BAR + PEAK_WINDOW:
+            entry_cache_sd[key] = find_local_high(
+                rth_bars, window=PEAK_WINDOW,
+                max_peak_bar=SD_MAX_PEAK_BAR, fallback_bar=SD_FALLBACK_BAR,
+                min_entry_bar=60)
+        else:
+            entry_cache_sd[key] = None
     timings['classify'] = time.time() - t4
 
     pat_counts = defaultdict(int)
@@ -597,15 +678,44 @@ def run_backtest():
     elapsed = time.time() - t_total
     print(f"\n  Shared pipeline: {elapsed:.0f}s ({elapsed/60:.1f} min)")
 
-    return all_candidates, all_bars, pattern_cache, entry_cache, dates, timings, t_total
+    return all_candidates, all_bars, pattern_cache, entry_cache_bl, entry_cache_sd, dates, timings, t_total
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 6: Build trades (use_api_float toggles OLD vs NEW filter)
+# PHASE 6: Build trades
+#   mode='e2a':  CS only, entry via LH bars 3-11, fb 15 (entry_cache_bl)
+#   mode='e2b':  CS + sustained_drop, LH bars 60-72, fb 75 (entry_cache_sd)
 # ═══════════════════════════════════════════════════════════════════════════════
+
+_MODE_LABELS = {
+    'e2a': 'E2-A: Agent 1',
+    'e2b': 'E2-B: Agent 1-SD',
+    'e2a_nofb': 'Strategy B: No Fallback',
+    'e2a_sd_nofb': 'Strategy B+SD: SD + No Fallback',
+    'e2a_nofb_drift': 'C1: NoFB + Drift Exit',
+    'e2a_nofb_accel': 'C2: NoFB + Accel Gate',
+    'e2a_nofb_skip_t6': 'C3: NoFB + Skip T6',
+    'e2a_nofb_combo': 'C4: NoFB + Drift+Accel+SkipT6',
+    'e2a_nofb_pm': 'C5: NoFB + PM Retrace+RedBar',
+    'e2a_nofb_all': 'C6: NoFB + ALL filters',
+    'e2a_nofb_t6_pm': 'C3+C5: SkipT6+PM',
+    'e2b_skip_t6': 'E2-B+C3: SD+SkipT6',
+    'e2b_pm': 'E2-B+C5: SD+PM+Red',
+    'e2b_t6_pm': 'E2-B+C3+C5: SD+SkipT6+PM',
+}
 
 def build_trades(all_candidates, all_bars, pattern_cache, entry_cache, dates,
-                 use_api_float=True, verbose=True):
+                 mode='e2a', verbose=True, top_n=None):
+
+    label = _MODE_LABELS[mode]
+    require_sd = (mode in ('e2b', 'e2b_skip_t6', 'e2b_pm', 'e2b_t6_pm'))
+    skip_fallback = (mode not in ('e2a', 'e2b', 'e2b_skip_t6', 'e2b_pm', 'e2b_t6_pm'))
+    drift_exit = (mode in ('e2a_nofb_drift', 'e2a_nofb_combo', 'e2a_nofb_all'))
+    accel_gate = (mode in ('e2a_nofb_accel', 'e2a_nofb_combo', 'e2a_nofb_all'))
+    skip_t6 = (mode in ('e2a_nofb_skip_t6', 'e2a_nofb_combo', 'e2a_nofb_all',
+                         'e2a_nofb_t6_pm', 'e2b_skip_t6', 'e2b_t6_pm'))
+    pm_filters = (mode in ('e2a_nofb_pm', 'e2a_nofb_all',
+                           'e2a_nofb_t6_pm', 'e2b_pm', 'e2b_t6_pm'))
 
     def _build_trade(c):
         tk, dt = c['ticker'], c['scan_date']
@@ -621,24 +731,44 @@ def build_trades(all_candidates, all_bars, pattern_cache, entry_cache, dates,
         ep = tc['entry_price']
 
         bar_data = all_bars.get((tk, dt))
+        rth = bar_data.get('rth', []) if bar_data else []
+
+        # bar-30 early exit checks
+        early_exit_bar30 = False
+        if (drift_exit or accel_gate) and len(rth) > 30:
+            open_price = rth[0][1]['o']
+            bar30_close = rth[29][1]['c']
+            if drift_exit and bar30_close > open_price:
+                early_exit_bar30 = True
+                tc['exit_reason'] = 'drift_exit'
+            if accel_gate and not early_exit_bar30 and len(rth) > 29:
+                mom_0_15 = (rth[14][1]['c'] - open_price) / open_price
+                mom_15_30 = (rth[29][1]['c'] - rth[14][1]['c']) / open_price
+                price_accel = mom_15_30 - mom_0_15
+                if price_accel > 0:
+                    early_exit_bar30 = True
+                    tc['exit_reason'] = 'accel_exit'
+
         exit_price = None
         if bar_data:
-            session_bars = bar_data.get('rth', []) + bar_data.get('ah', [])
+            session_bars = rth + bar_data.get('ah', [])
             entry_t = tc['entry_time']
-            for t_str, bar in session_bars:
-                if t_str > EXIT_TIME:
-                    break
-                if t_str >= entry_t:
-                    exit_price = bar['c']
+            if early_exit_bar30 and len(rth) > 30:
+                exit_price = rth[30][1]['c'] if len(rth) > 30 else rth[-1][1]['c']
+            else:
+                tc['exit_reason'] = 'eod'
+                for t_str, bar in session_bars:
+                    if t_str > EXIT_TIME:
+                        break
+                    if t_str >= entry_t:
+                        exit_price = bar['c']
 
         if exit_price is not None:
-            pnl = round((ep - exit_price) / ep * 100, 3)
-            tc['pnl_eod'] = max(pnl, PNL_CAP)
+            tc['pnl_eod'] = round((ep - exit_price) / ep * 100, 3)
         else:
             t0d = _gd_cache.get(dt, {}).get(tk, {})
             if t0d.get('c'):
-                pnl = round((ep - t0d['c']) / ep * 100, 3)
-                tc['pnl_eod'] = max(pnl, PNL_CAP)
+                tc['pnl_eod'] = round((ep - t0d['c']) / ep * 100, 3)
             else:
                 tc['pnl_eod'] = None
 
@@ -651,7 +781,6 @@ def build_trades(all_candidates, all_bars, pattern_cache, entry_cache, dates,
 
     trades = []
     cnt = {'lh': 0, 'fb': 0, 'ne': 0, 'nb': 0}
-    n_api_filtered = 0
     daily_picks = {}
 
     for dt in dates:
@@ -665,23 +794,50 @@ def build_trades(all_candidates, all_bars, pattern_cache, entry_cache, dates,
             if at != 'CS':
                 continue
             pattern = pattern_cache.get((tk, dt), 'no_data')
-            if pattern != 'sustained_drop':
+            if require_sd and pattern != 'sustained_drop':
                 continue
-            if use_api_float and tk not in _FLOAT:
-                api_shares = ref.get('shares')
-                if api_shares is not None and api_shares < FLOAT_MIN:
-                    n_api_filtered += 1
-                    continue
             cc = copy.deepcopy(c)
             cc['asset_type'] = at
             cc['open_pattern'] = pattern
             cs_qualified.append(cc)
 
-        daily_picks[dt] = [c['ticker'] for c in cs_qualified[:TOP_N]]
+        _n = top_n if top_n is not None else TOP_N
+        daily_picks[dt] = [c['ticker'] for c in cs_qualified[:_n]]
 
-        for c in cs_qualified[:TOP_N]:
+        for c in cs_qualified[:_n]:
+            if skip_t6:
+                gp = c.get('gap_pct', 0)
+                if 0.15 <= gp < 0.30:
+                    cnt['t6_skip'] = cnt.get('t6_skip', 0) + 1
+                    continue
+            if pm_filters:
+                tk, ddt = c['ticker'], c['scan_date']
+                bar_data = all_bars.get((tk, ddt))
+                if bar_data:
+                    pm_bars = bar_data.get('pm', [])
+                    rth_bars_local = bar_data.get('rth', [])
+                    # PM retrace check: require some gap retrace in PM
+                    pm_after_830 = [(t_s, b) for t_s, b in pm_bars if t_s >= '08:30']
+                    prior_close = c.get('prior_close', 0)
+                    if pm_after_830 and prior_close > 0:
+                        pm_high = max(b['h'] for _, b in pm_after_830)
+                        last_pm_close = pm_after_830[-1][1]['c']
+                        denom = pm_high - prior_close
+                        pm_retrace = (pm_high - last_pm_close) / denom if denom > 0 else 0
+                        if pm_retrace < 0.08:
+                            cnt['pm_skip'] = cnt.get('pm_skip', 0) + 1
+                            continue
+                    # Green opening bar check: skip if first RTH bar is green
+                    if rth_bars_local:
+                        bar0 = rth_bars_local[0][1]
+                        if bar0['c'] > bar0['o']:
+                            cnt['green_skip'] = cnt.get('green_skip', 0) + 1
+                            continue
             trade = _build_trade(c)
             if trade:
+                if skip_fallback and trade['entry_type'] == 'fallback':
+                    cnt['fb_skip'] = cnt.get('fb_skip', 0) + 1
+                    continue
                 cnt['lh' if trade['entry_type'] == 'local_high' else 'fb'] += 1
                 trades.append(trade)
             elif (c['ticker'], c['scan_date']) not in all_bars:
@@ -692,12 +848,18 @@ def build_trades(all_candidates, all_bars, pattern_cache, entry_cache, dates,
     valid_trades = [t for t in trades if t.get('pnl_eod') is not None]
 
     if verbose:
-        lbl = "NEW (API float)" if use_api_float else "OLD (dict only)"
-        print(f"\n  {lbl}: {len(valid_trades)} trades  "
-              f"(lh={cnt['lh']} fb={cnt['fb']} ne={cnt['ne']} nb={cnt['nb']}"
-              f"{f' api_filtered={n_api_filtered}' if use_api_float else ''})")
+        parts = []
+        for k in ['lh', 'fb', 'fb_skip', 't6_skip', 'pm_skip', 'green_skip', 'ne', 'nb']:
+            if cnt.get(k, 0) > 0:
+                parts.append(f"{k}={cnt[k]}")
+        # count early exits
+        n_drift = sum(1 for t in valid_trades if t.get('exit_reason') == 'drift_exit')
+        n_accel = sum(1 for t in valid_trades if t.get('exit_reason') == 'accel_exit')
+        if n_drift: parts.append(f"drift_exit={n_drift}")
+        if n_accel: parts.append(f"accel_exit={n_accel}")
+        print(f"\n  {label}: {len(valid_trades)} trades  ({', '.join(parts)})")
 
-    return valid_trades, daily_picks, n_api_filtered
+    return valid_trades, daily_picks
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -761,8 +923,8 @@ def build_result(trades, dates, label):
 def print_results(res, dates):
     m = res['metrics']
     print(f"\n\n{'='*90}")
-    print(f"  AGENT 1 — Gap-Fade SHORT CS+SD — {res['label']} — {dates[0]} → {dates[-1]}")
-    print(f"  Exit: {EXIT_TIME} ET  |  PNL_CAP: {PNL_CAP}%  |  Capital: ${CAPITAL:,.0f}/day NC")
+    print(f"  AGENT 1 — Gap-Fade SHORT — {res['label']} — {dates[0]} → {dates[-1]}")
+    print(f"  Exit: {EXIT_TIME} ET  |  Float: SOFT (dict, miss=INCLUDE)  |  Capital: ${CAPITAL:,.0f}/day NC")
     print(f"{'='*90}")
 
     tbl = [
@@ -800,104 +962,6 @@ def print_results(res, dates):
             sh = np.mean(a) / np.std(a, ddof=1) if len(a) > 1 and np.std(a, ddof=1) > 0 else 0
             print(f"    {lbl:6s}  n={len(a):<4d}  avg={np.mean(a):+.2f}%  "
                   f"med={np.median(a):+.2f}%  WR={float((a>0).mean())*100:.0f}%  Sharpe={sh:.3f}")
-    print()
-
-
-def print_ab_comparison(res_old, res_new, dates, picks_old, picks_new):
-    mo = res_old['metrics']
-    mn = res_new['metrics']
-
-    print(f"\n\n{'='*90}")
-    print(f"  FLOAT FILTER A/B — {dates[0]} → {dates[-1]} ({len(dates)} trading days)")
-    print(f"  OLD: CS + hardcoded _FLOAT only (unknown = pass)")
-    print(f"  NEW: CS + API share_class_shares_outstanding fallback (matches live)")
-    print(f"{'='*90}")
-
-    headers = ['Metric', 'OLD (dict only)', 'NEW (live match)', 'Delta']
-    rows = []
-    def _row(name, vo, vn, fmt='+.2f', pct=False):
-        so = f"{vo:{fmt.lstrip('+')}}" if not pct else f"{vo*100:.0f}%"
-        sn = f"{vn:{fmt.lstrip('+')}}" if not pct else f"{vn*100:.0f}%"
-        delta = vn - vo
-        sd = f"{delta*100:+.0f}pp" if pct else f"{delta:{fmt}}"
-        rows.append([name, so, sn, sd])
-
-    _row('Trades', mo['n'], mn['n'], fmt='.0f')
-    _row('Active days', res_old['active_days'], res_new['active_days'], fmt='.0f')
-    _row('Avg PnL %', mo['avg'], mn['avg'])
-    _row('Median PnL %', mo['med'], mn['med'])
-    _row('Trimmed Mean %', mo['trimmed_mean'], mn['trimmed_mean'])
-    _row('Win Rate', mo['wr'], mn['wr'], pct=True)
-    _row('Sharpe', mo['sharpe'], mn['sharpe'], fmt='+.3f')
-    _row('Profit Factor', mo['pf'], mn['pf'])
-    _row('Total $ (NC)', res_old['cum_nc'], res_new['cum_nc'], fmt='+,.0f')
-    _row('Max DD %', res_old['max_dd'], res_new['max_dd'])
-
-    print()
-    print(tabulate(rows, headers=headers, tablefmt='simple', stralign='right',
-                   numalign='right'))
-
-    # ── Days where picks differ ──
-    diff_days = [dt for dt in dates
-                 if picks_old.get(dt, []) != picks_new.get(dt, [])]
-    n_diff = len(diff_days)
-    print(f"\n  ── PICK DIFFERENCES ──")
-    print(f"  Same pick: {len(dates) - n_diff} days  |  Different pick: {n_diff} days "
-          f"({n_diff/len(dates)*100:.1f}%)")
-
-    if diff_days:
-        old_by_dt = {t['scan_date']: t for t in res_old['trades']}
-        new_by_dt = {t['scan_date']: t for t in res_new['trades']}
-        diff_rows = []
-        old_diff_pnls, new_diff_pnls = [], []
-        for dt in diff_days:
-            ot = old_by_dt.get(dt)
-            nt = new_by_dt.get(dt)
-            otk = ot['ticker'] if ot else '-'
-            ntk = nt['ticker'] if nt else '-'
-            opnl = ot['pnl_eod'] if ot and ot.get('pnl_eod') is not None else None
-            npnl = nt['pnl_eod'] if nt and nt.get('pnl_eod') is not None else None
-            opnl_s = f"{opnl:+.2f}%" if opnl is not None else "N/A"
-            npnl_s = f"{npnl:+.2f}%" if npnl is not None else "N/A"
-            old_ref = _ticker_ref.get(otk, {})
-            api_s = old_ref.get('shares')
-            note = f" ({api_s/1e6:.1f}M)" if otk != '-' and otk not in _FLOAT and api_s is not None else ''
-            diff_rows.append([dt, f"{otk}{note}", opnl_s, ntk, npnl_s])
-            if opnl is not None: old_diff_pnls.append(opnl)
-            if npnl is not None: new_diff_pnls.append(npnl)
-
-        print()
-        print(tabulate(diff_rows,
-                       headers=['Date', 'OLD pick', 'OLD PnL', 'NEW pick', 'NEW PnL'],
-                       tablefmt='simple', stralign='right'))
-
-        if old_diff_pnls and new_diff_pnls:
-            print(f"\n  On differing days:")
-            print(f"    OLD avg: {np.mean(old_diff_pnls):+.2f}%  "
-                  f"(n={len(old_diff_pnls)}, WR={np.mean(np.array(old_diff_pnls)>0)*100:.0f}%)")
-            print(f"    NEW avg: {np.mean(new_diff_pnls):+.2f}%  "
-                  f"(n={len(new_diff_pnls)}, WR={np.mean(np.array(new_diff_pnls)>0)*100:.0f}%)")
-            print(f"    Δ avg:   {np.mean(new_diff_pnls) - np.mean(old_diff_pnls):+.2f}%")
-
-    # ── Monthly breakdown ──
-    print(f"\n  ── MONTHLY BREAKDOWN ──")
-    months = sorted(set(dt[:7] for dt in dates))
-    month_rows = []
-    for mo_str in months:
-        om = [t['pnl_eod'] for t in res_old['trades']
-              if t['scan_date'].startswith(mo_str) and t.get('pnl_eod') is not None]
-        nm = [t['pnl_eod'] for t in res_new['trades']
-              if t['scan_date'].startswith(mo_str) and t.get('pnl_eod') is not None]
-        md = sum(1 for dt in diff_days if dt.startswith(mo_str))
-        month_rows.append([mo_str, len(om),
-                          f"{np.mean(om):+.2f}%" if om else "—",
-                          len(nm),
-                          f"{np.mean(nm):+.2f}%" if nm else "—",
-                          md])
-    print()
-    print(tabulate(month_rows,
-                   headers=['Month', 'OLD n', 'OLD avg', 'NEW n', 'NEW avg', 'Diff days'],
-                   tablefmt='simple', stralign='right'))
     print()
 
 
@@ -951,146 +1015,241 @@ def plot_results(res, dates, filename='agent1_baseline_bt.png'):
     print(f"\n  Saved: {p1}")
 
 
-def plot_ab_comparison(res_old, res_new, dates, picks_old, picks_new):
-    try:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        BASE_DIR = os.getcwd()
-
-    c_old, c_new = '#e74c3c', '#2980b9'
-
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-    fig.suptitle(
-        f'Agent 1 — Float Filter A/B: {dates[0]} → {dates[-1]}\n'
-        f'OLD (dict only) vs NEW (live match)  |  {len(dates)} trading days',
-        fontsize=12, fontweight='bold')
-
-    # 1. Cumulative P&L overlay
-    ax = axes[0, 0]
-    d_dates = [datetime.strptime(s['date'], '%Y-%m-%d') for s in res_old['daily_stats']]
-    cum_old = [s['cum_pnl'] for s in res_old['daily_stats']]
-    cum_new = [s['cum_pnl'] for s in res_new['daily_stats']]
-    ax.plot(d_dates, cum_old, color=c_old, lw=1.5, alpha=0.8,
-            label=f'OLD ${res_old["cum_nc"]:+,.0f}')
-    ax.plot(d_dates, cum_new, color=c_new, lw=1.5, alpha=0.8,
-            label=f'NEW ${res_new["cum_nc"]:+,.0f}')
-    ax.axhline(0, color='#333', lw=0.8, ls=':')
-    ax.set_title('Cumulative P&L (non-compounding)')
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'${x:,.0f}'))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
-    ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
-
-    # 2. Cumulative delta
-    ax = axes[0, 1]
-    cum_delta = [n - o for o, n in zip(cum_old, cum_new)]
-    ax.fill_between(d_dates, cum_delta, 0,
-                    where=[d >= 0 for d in cum_delta], color=c_new, alpha=0.3)
-    ax.fill_between(d_dates, cum_delta, 0,
-                    where=[d < 0 for d in cum_delta], color=c_old, alpha=0.3)
-    ax.plot(d_dates, cum_delta, color='#2c3e50', lw=1.5)
-    ax.axhline(0, color='#333', lw=1)
-    ax.set_title('Cumulative Δ (NEW − OLD)')
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'${x:+,.0f}'))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%b'))
-    ax.grid(True, alpha=0.3)
-
-    # 3. PnL distributions
-    ax = axes[1, 0]
-    pnl_old = [t['pnl_eod'] for t in res_old['trades']]
-    pnl_new = [t['pnl_eod'] for t in res_new['trades']]
-    lo = min(min(pnl_old, default=0), min(pnl_new, default=0)) - 1
-    hi = max(max(pnl_old, default=0), max(pnl_new, default=0)) + 1
-    bins = np.linspace(lo, hi, 40)
-    if pnl_old:
-        ax.hist(pnl_old, bins=bins, color=c_old, alpha=0.5,
-                label=f'OLD avg={np.mean(pnl_old):+.2f}%')
-        ax.axvline(np.mean(pnl_old), color=c_old, ls='--', lw=2)
-    if pnl_new:
-        ax.hist(pnl_new, bins=bins, color=c_new, alpha=0.5,
-                label=f'NEW avg={np.mean(pnl_new):+.2f}%')
-        ax.axvline(np.mean(pnl_new), color=c_new, ls='--', lw=2)
-    ax.axvline(0, color='#333', lw=1)
-    ax.set_xlabel('EOD PnL (%)')
-    ax.set_title('PnL Distribution')
-    ax.legend(fontsize=9)
-
-    # 4. Monthly avg PnL bars
-    ax = axes[1, 1]
-    months = sorted(set(dt[:7] for dt in dates))
-    old_mo = [np.mean([t['pnl_eod'] for t in res_old['trades']
-              if t['scan_date'].startswith(m) and t.get('pnl_eod') is not None] or [0])
-              for m in months]
-    new_mo = [np.mean([t['pnl_eod'] for t in res_new['trades']
-              if t['scan_date'].startswith(m) and t.get('pnl_eod') is not None] or [0])
-              for m in months]
-    x = np.arange(len(months)); w = 0.35
-    ax.bar(x - w/2, old_mo, w, color=c_old, alpha=0.7, label='OLD')
-    ax.bar(x + w/2, new_mo, w, color=c_new, alpha=0.7, label='NEW')
-    ax.set_xticks(x); ax.set_xticklabels([m[5:] for m in months])
-    ax.axhline(0, color='#333', lw=0.8)
-    ax.set_ylabel('Avg PnL %'); ax.set_title('Monthly Avg PnL')
-    ax.legend(fontsize=9); ax.grid(True, alpha=0.3, axis='y')
-
-    plt.tight_layout(rect=[0, 0, 1, 0.92])
-    p1 = os.path.join(BASE_DIR, 'agent1_baseline_bt_ab.png')
-    plt.savefig(p1, dpi=150, bbox_inches='tight')
-    plt.show()
-    print(f"\n  Saved: {p1}")
-
-    # Scatter plot for diff days
-    diff_days = [dt for dt in dates
-                 if picks_old.get(dt, []) != picks_new.get(dt, [])]
-    if len(diff_days) >= 3:
-        old_map = {t['scan_date']: t['pnl_eod'] for t in res_old['trades']
-                   if t.get('pnl_eod') is not None}
-        new_map = {t['scan_date']: t['pnl_eod'] for t in res_new['trades']
-                   if t.get('pnl_eod') is not None}
-        fig2, ax2 = plt.subplots(figsize=(10, 8))
-        for dt in diff_days:
-            op, np_ = old_map.get(dt), new_map.get(dt)
-            if op is not None and np_ is not None:
-                ax2.scatter(op, np_, color=c_new if np_ > op else c_old,
-                           alpha=0.6, s=40, edgecolors='white', lw=0.5)
-        lims = ax2.get_xlim()
-        ax2.plot(lims, lims, 'k--', alpha=0.3, lw=1)
-        ax2.axhline(0, color='#999', lw=0.5); ax2.axvline(0, color='#999', lw=0.5)
-        ax2.set_xlabel('OLD PnL %'); ax2.set_ylabel('NEW PnL %')
-        ax2.set_title(f'Diff-Day PnL: OLD vs NEW ({len(diff_days)} days)\nAbove diagonal = NEW wins')
-        ax2.set_aspect('equal', adjustable='datalim'); ax2.grid(True, alpha=0.3)
-        plt.tight_layout()
-        p2 = os.path.join(BASE_DIR, 'agent1_baseline_bt_scatter.png')
-        plt.savefig(p2, dpi=150, bbox_inches='tight')
-        plt.show()
-        print(f"  Saved: {p2}")
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
-# RUN
+# RUN — TOP_N SWEEP (9 tradeable strategies × N=1..5)
+#
+# LOOK-AHEAD AUDIT — every strategy verified tradeable:
+#   Early entry (bars 3-11, entry_cache_bl):
+#     E2-A          — baseline, all signals known at scan time
+#     Strategy B    — E2-A minus fallback, no future info needed
+#     C3            — skip T6 gap tier, known at scan time
+#     C5            — PM retrace + red bar, both known before entry
+#     C3+C5         — both filters pre-entry
+#   Late entry (bars 60-72, entry_cache_sd):
+#     E2-B          — SD confirmed at bar 60, entry at 60-72, time-consistent
+#     E2-B+C3       — SD + skip T6, both known before entry
+#     E2-B+C5       — SD + PM+red bar, both known before entry
+#     E2-B+C3+C5    — all three filters, all known before entry
+#
+# EXCLUDED (look-ahead or proven harmful):
+#   B+SD and all combos — SD at bar 60 but entry at bars 3-11 = LOOK-AHEAD
+#   C1 (drift exit)     — tradeable but PROVEN HARMFUL (kills winners)
+#   C2 (accel gate)     — tradeable but PROVEN HARMFUL
+#   C4, C6              — contain C1/C2
 # ═══════════════════════════════════════════════════════════════════════════════
 
-all_candidates, all_bars, pattern_cache, entry_cache, dates, timings, t_total = run_backtest()
+all_candidates, all_bars, pattern_cache, entry_cache_bl, entry_cache_sd, dates, timings, t_total = run_backtest()
 
-if AB_COMPARE:
-    print(f"\n{'='*80}")
-    print(f"  Phase 6: Building trades — OLD vs NEW")
-    print(f"{'='*80}")
-    trades_old, picks_old, _ = build_trades(
-        all_candidates, all_bars, pattern_cache, entry_cache, dates, use_api_float=False)
-    trades_new, picks_new, n_filt = build_trades(
-        all_candidates, all_bars, pattern_cache, entry_cache, dates, use_api_float=True)
+# (mode, short_label, entry_cache_key)
+SWEEP_MODES = [
+    ('e2a',              'E2-A',          'bl'),
+    ('e2a_nofb',         'Strat B',       'bl'),
+    ('e2a_nofb_skip_t6', 'C3: SkipT6',    'bl'),
+    ('e2a_nofb_pm',      'C5: PM+Red',    'bl'),
+    ('e2a_nofb_t6_pm',   'C3+C5',         'bl'),
+    ('e2b',              'E2-B: SD',       'sd'),
+    ('e2b_skip_t6',      'E2-B+C3',       'sd'),
+    ('e2b_pm',           'E2-B+C5',       'sd'),
+    ('e2b_t6_pm',        'E2-B+C3+C5',    'sd'),
+]
+N_VALUES = [1, 2, 3, 4, 5]
+_CACHES = {'bl': entry_cache_bl, 'sd': entry_cache_sd}
 
-    res_old = build_result(trades_old, dates, 'OLD (dict only)')
-    res_new = build_result(trades_new, dates, 'NEW (live match)')
+n_strats = len(SWEEP_MODES)
+n_configs = n_strats * len(N_VALUES)
+print(f"\n  Running {n_strats} strategies × {len(N_VALUES)} TOP_N = {n_configs} configs...")
 
-    print_results(res_old, dates)
-    print_results(res_new, dates)
-    print_ab_comparison(res_old, res_new, dates, picks_old, picks_new)
-    plot_ab_comparison(res_old, res_new, dates, picks_old, picks_new)
-else:
-    trades, picks, _ = build_trades(
-        all_candidates, all_bars, pattern_cache, entry_cache, dates, use_api_float=True)
-    result = build_result(trades, dates, 'CS+SD SHORT 17:00 exit')
-    print_results(result, dates)
-    plot_results(result, dates)
+grid = {}
+for mode, short_lbl, cache_key in SWEEP_MODES:
+    for n in N_VALUES:
+        trades, _ = build_trades(all_candidates, all_bars, pattern_cache,
+                                 _CACHES[cache_key], dates, mode=mode,
+                                 verbose=False, top_n=n)
+        lbl = f"{short_lbl} N={n}"
+        res = build_result(trades, dates, lbl)
+        grid[(mode, n)] = res
+
+# ── Full-period comparison table ──
+print(f"\n\n{'='*140}")
+print(f"  TOP_N SWEEP — {n_strats} Tradeable Strategies × N=1..5 (NO LOOK-AHEAD)")
+print(f"  scan {SCAN_TIME_ET} ET, exit {EXIT_TIME} ET, {dates[0]} → {dates[-1]}")
+print(f"{'='*140}")
+
+for metric_label, fmt_fn in [
+    ('TRADES',   lambda r: f"{r['metrics']['n']}"),
+    ('AVG PNL',  lambda r: f"{r['metrics']['avg']:+.2f}%"),
+    ('SHARPE',   lambda r: f"{r['metrics']['sharpe']:.3f}"),
+    ('WIN RATE', lambda r: f"{r['metrics']['wr']*100:.0f}%"),
+    ('$ NC',     lambda r: f"${r['cum_nc']:+,.0f}"),
+    ('MAX DD',   lambda r: f"{r['max_dd']:.1f}%"),
+    ('PF',       lambda r: f"{r['metrics']['pf']:.2f}"),
+]:
+    print(f"\n  ── {metric_label} ──")
+    header = ['Strategy', 'Entry'] + [f"N={n}" for n in N_VALUES]
+    rows = []
+    for mode, short_lbl, cache_key in SWEEP_MODES:
+        entry_lbl = '3-11' if cache_key == 'bl' else '60-72'
+        row = [short_lbl, entry_lbl]
+        for n in N_VALUES:
+            row.append(fmt_fn(grid[(mode, n)]))
+        rows.append(row)
+    print(tabulate(rows, headers=header, tablefmt='simple', stralign='right'))
+
+# ── Post-Aug 15 breakdown ──
+print(f"\n\n{'='*140}")
+print(f"  POST-AUG 15 — TOP_N SWEEP (Aug 16+ only)")
+print(f"{'='*140}")
+
+def _post_aug_metrics(res):
+    pt = [t for t in res['trades'] if t['scan_date'] >= '2026-08-16']
+    if not pt:
+        return {'n': 0, 'avg': 0, 'wr': 0, 'sharpe': 0, 'pf': 0, 'dollar': 0}
+    pa = np.array([t['pnl_eod'] for t in pt])
+    sh = np.mean(pa) / np.std(pa, ddof=1) if len(pa) > 1 and np.std(pa, ddof=1) > 0 else 0
+    w = pa[pa > 0]; l = pa[pa < 0]
+    pf = float(w.sum() / abs(l.sum())) if len(l) > 0 and l.sum() != 0 else float('inf')
+    return {'n': len(pt), 'avg': float(np.mean(pa)), 'wr': float((pa > 0).mean()),
+            'sharpe': sh, 'pf': pf, 'dollar': float(100000 * np.sum(pa) / 100)}
+
+post_grid = {}
+for mode, short_lbl, _ in SWEEP_MODES:
+    for n in N_VALUES:
+        post_grid[(mode, n)] = _post_aug_metrics(grid[(mode, n)])
+
+for metric_label, fmt_fn in [
+    ('TRADES',   lambda m: f"{m['n']}"),
+    ('AVG PNL',  lambda m: f"{m['avg']:+.2f}%"),
+    ('SHARPE',   lambda m: f"{m['sharpe']:.3f}"),
+    ('WIN RATE', lambda m: f"{m['wr']*100:.0f}%"),
+    ('$ NC',     lambda m: f"${m['dollar']:+,.0f}"),
+    ('PF',       lambda m: f"{m['pf']:.2f}"),
+]:
+    print(f"\n  ── {metric_label} (post-Aug 15) ──")
+    header = ['Strategy', 'Entry'] + [f"N={n}" for n in N_VALUES]
+    rows = []
+    for mode, short_lbl, cache_key in SWEEP_MODES:
+        entry_lbl = '3-11' if cache_key == 'bl' else '60-72'
+        row = [short_lbl, entry_lbl]
+        for n in N_VALUES:
+            row.append(fmt_fn(post_grid[(mode, n)]))
+        rows.append(row)
+    print(tabulate(rows, headers=header, tablefmt='simple', stralign='right'))
+
+# ── Best configs ranked by post-Aug Sharpe ──
+print(f"\n\n{'='*100}")
+print(f"  RANKED BY POST-AUG SHARPE (all {n_configs} configs)")
+print(f"{'='*100}")
+ranked = []
+for mode, short_lbl, cache_key in SWEEP_MODES:
+    entry_lbl = '3-11' if cache_key == 'bl' else '60-72'
+    for n in N_VALUES:
+        pm = post_grid[(mode, n)]
+        fm = grid[(mode, n)]
+        if pm['n'] == 0:
+            continue
+        ranked.append({
+            'label': f"{short_lbl} N={n}",
+            'entry': entry_lbl,
+            'n_post': pm['n'], 'avg_post': pm['avg'],
+            'sharpe_post': pm['sharpe'], 'wr_post': pm['wr'],
+            'dollar_post': pm['dollar'], 'pf_post': pm['pf'],
+            'n_full': fm['metrics']['n'], 'avg_full': fm['metrics']['avg'],
+            'sharpe_full': fm['metrics']['sharpe'],
+            'dollar_full': fm['cum_nc'],
+        })
+ranked.sort(key=lambda x: x['sharpe_post'], reverse=True)
+rank_rows = []
+for i, r in enumerate(ranked[:15], 1):
+    rank_rows.append([
+        i, r['label'], r['entry'],
+        r['n_post'], f"{r['avg_post']:+.2f}%", f"{r['wr_post']*100:.0f}%",
+        f"{r['sharpe_post']:.3f}", f"{r['pf_post']:.2f}",
+        f"${r['dollar_post']:+,.0f}",
+        f"| {r['n_full']}t", f"{r['sharpe_full']:.3f}", f"${r['dollar_full']:+,.0f}",
+    ])
+print()
+print(tabulate(rank_rows,
+               headers=['#', 'Config', 'Entry', 'N(post)', 'Avg', 'WR', 'Sharpe', 'PF',
+                        '$(post)', '| N(full)', 'Sh(full)', '$(full)'],
+               tablefmt='simple', stralign='right'))
+
+# ── Charts ──
+try:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    BASE_DIR = os.getcwd()
+
+colors_9 = ['#2c3e50', '#7f8c8d', '#e74c3c', '#8e44ad', '#9b59b6',
+            '#27ae60', '#3498db', '#e67e22', '#1abc9c']
+
+fig, axes = plt.subplots(2, 2, figsize=(22, 14))
+fig.suptitle(f'Agent 1 — TOP_N Sweep ({n_strats} tradeable strategies × N=1..5)\n'
+             f'{dates[0]} → {dates[-1]}  |  Exit {EXIT_TIME} ET  |  NO LOOK-AHEAD',
+             fontsize=11, fontweight='bold')
+
+# Chart 1: Post-Aug $ NC by strategy and N
+ax = axes[0, 0]
+x_pos = np.arange(len(N_VALUES))
+bar_w = 0.09
+for i, (mode, short_lbl, _) in enumerate(SWEEP_MODES):
+    vals = [post_grid[(mode, n)]['dollar'] for n in N_VALUES]
+    ax.bar(x_pos + i * bar_w, vals, bar_w, label=short_lbl, color=colors_9[i])
+ax.set_xticks(x_pos + bar_w * (n_strats // 2))
+ax.set_xticklabels([f'N={n}' for n in N_VALUES])
+ax.set_title('Post-Aug 15: $ P&L by TOP_N')
+ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'${x:,.0f}'))
+ax.legend(fontsize=6, loc='upper right')
+ax.grid(True, alpha=0.3, axis='y')
+ax.axhline(0, color='#333', lw=0.8, ls=':')
+
+# Chart 2: Post-Aug Sharpe by strategy and N
+ax = axes[0, 1]
+for i, (mode, short_lbl, _) in enumerate(SWEEP_MODES):
+    sharpes = [post_grid[(mode, n)]['sharpe'] for n in N_VALUES]
+    ax.plot(N_VALUES, sharpes, 'o-', color=colors_9[i], label=short_lbl, linewidth=2, markersize=6)
+ax.set_xlabel('TOP_N')
+ax.set_ylabel('Sharpe')
+ax.set_title('Post-Aug 15: Sharpe by TOP_N')
+ax.legend(fontsize=6, loc='upper right')
+ax.grid(True, alpha=0.3)
+ax.set_xticks(N_VALUES)
+
+# Chart 3: Equity curves for best N per strategy (post-Aug Sharpe argmax)
+ax = axes[1, 0]
+origin = datetime.strptime(BACKTEST_START, '%Y-%m-%d')
+for i, (mode, short_lbl, _) in enumerate(SWEEP_MODES):
+    best_n = max(N_VALUES, key=lambda n: post_grid[(mode, n)]['sharpe'])
+    res = grid[(mode, best_n)]
+    d_dates = [datetime.strptime(s['date'], '%Y-%m-%d') for s in res['daily_stats']]
+    ax.plot([origin] + d_dates, [0] + [s['cum_pnl'] for s in res['daily_stats']],
+            color=colors_9[i], linewidth=2,
+            label=f'{short_lbl} N={best_n}: ${res["cum_nc"]:+,.0f}')
+ax.axhline(0, color='#333', lw=0.8, ls=':')
+ax.set_title('Equity Curves (best N per strategy)')
+ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'${x:,.0f}'))
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+ax.legend(fontsize=6)
+ax.grid(True, alpha=0.3)
+
+# Chart 4: Avg PnL vs Trades scatter (post-Aug)
+ax = axes[1, 1]
+for i, (mode, short_lbl, _) in enumerate(SWEEP_MODES):
+    ns = [post_grid[(mode, n)]['n'] for n in N_VALUES]
+    avgs = [post_grid[(mode, n)]['avg'] for n in N_VALUES]
+    ax.plot(ns, avgs, 'o-', color=colors_9[i], label=short_lbl, linewidth=1.5, markersize=6)
+    for j, n in enumerate(N_VALUES):
+        ax.annotate(f'N={n}', (ns[j], avgs[j]), textcoords='offset points',
+                    xytext=(4, 4), fontsize=6, color=colors_9[i])
+ax.set_xlabel('# Trades (post-Aug)')
+ax.set_ylabel('Avg PnL %')
+ax.set_title('Post-Aug: Avg PnL vs Trade Count')
+ax.legend(fontsize=6, loc='upper right')
+ax.grid(True, alpha=0.3)
+
+plt.tight_layout(rect=[0, 0, 1, 0.92])
+p1 = os.path.join(BASE_DIR, 'agent1_topn_sweep.png')
+plt.savefig(p1, dpi=150, bbox_inches='tight')
+plt.show()
+print(f"\n  Saved: {p1}")
 
 print(f"\n  Total runtime: {time.time() - t_total:.0f}s ({(time.time() - t_total)/60:.1f} min)")

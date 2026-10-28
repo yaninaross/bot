@@ -1,0 +1,118 @@
+{
+  "timestamp": "2026-09-26T02:13:19.816563Z",
+  "protocol_version": "1.0",
+  "selection_window": "2021-04-16 to 2025-12-31",
+  "test_window": "2026-01-01 to latest available",
+  "max_hold_days": 10,
+  "position_size_usd": 10000,
+  "cost_model": {
+    "half_spread_bps": 10,
+    "slippage_bps": 7.5,
+    "commission_per_share": 0.005,
+    "short_borrow_annual_pct": 5.0
+  },
+  "decision_rule": {
+    "min_2026_avg_pnl_pct": 1.5,
+    "must_be_in_selection_ci": true,
+    "must_have_positive_total_2026_pnl": true,
+    "must_have_positive_pooled_peer_avg": true,
+    "rxrx_specific_if_peers_fail": "trade at reduced size"
+  },
+  "configurations": [
+    {
+      "family": "S5_short",
+      "config_name": "ARKG_k1.5",
+      "label": "S5_short_ARKG_k1.5",
+      "hedge_factor": "ARKG",
+      "side": "short",
+      "z_entry_threshold": 1.5,
+      "z_exit_threshold": 0.5,
+      "max_hold_days": 10,
+      "stop_loss": "1.5 ATR",
+      "selection_stats": {
+        "n_trades": 30,
+        "avg_pnl_pct": 6.199,
+        "total_pnl_pct": 185.96,
+        "sharpe_daily_mtm": 1.44,
+        "win_rate": 66.7,
+        "avg_hold_days": 7.6
+      }
+    },
+    {
+      "family": "S5_zexit",
+      "config_name": "ARKG_k1.5_ze0.5",
+      "label": "S5_zexit_ARKG_k1.5_ze0.5",
+      "hedge_factor": "ARKG",
+      "side": "combined",
+      "z_entry_threshold": 1.5,
+      "z_exit_threshold": 0.5,
+      "max_hold_days": 10,
+      "stop_loss": "1.5 ATR",
+      "selection_stats": {
+        "n_trades": 61,
+        "avg_pnl_pct": 5.191,
+        "total_pnl_pct": 316.65,
+        "sharpe_daily_mtm": 1.58,
+        "win_rate": 62.3,
+        "avg_hold_days": 8.2
+      }
+    },
+    {
+      "family": "S10_vwap",
+      "config_name": "vwap40_z2",
+      "label": "S10_vwap40_z2_short",
+      "hedge_factor": null,
+      "side": "combined",
+      "z_entry_threshold": null,
+      "z_exit_threshold": null,
+      "max_hold_days": 10,
+      "stop_loss": "1.5 ATR",
+      "selection_stats": {
+        "n_trades": 32,
+        "avg_pnl_pct": 3.22,
+        "total_pnl_pct": 103.04,
+        "sharpe_daily_mtm": 0.85,
+        "win_rate": 56.2,
+        "avg_hold_days": 4.2
+      }
+    },
+    {
+      "family": "S5_sscore",
+      "config_name": "ARKG_t1.5",
+      "label": "S5_sscore_short_t1.5",
+      "hedge_factor": "ARKG",
+      "side": "short",
+      "z_entry_threshold": 1.5,
+      "z_exit_threshold": null,
+      "max_hold_days": 10,
+      "stop_loss": "1.5 ATR",
+      "selection_stats": {
+        "n_trades": 12,
+        "avg_pnl_pct": 3.631,
+        "total_pnl_pct": 43.57,
+        "sharpe_daily_mtm": 0.76,
+        "win_rate": 50.0,
+        "avg_hold_days": 9.9
+      }
+    },
+    {
+      "family": "S11_range",
+      "config_name": "N40_b0.03",
+      "label": "S11_N40_b0.03_short",
+      "hedge_factor": null,
+      "side": "combined",
+      "z_entry_threshold": null,
+      "z_exit_threshold": null,
+      "max_hold_days": 10,
+      "stop_loss": "1.5 ATR",
+      "selection_stats": {
+        "n_trades": 13,
+        "avg_pnl_pct": 1.548,
+        "total_pnl_pct": 20.12,
+        "sharpe_daily_mtm": -0.12,
+        "win_rate": 30.8,
+        "avg_hold_days": 4.5
+      }
+    }
+  ]
+}

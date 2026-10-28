@@ -1,0 +1,94 @@
+{
+  "timestamp": "2026-09-26T02:50:50.024371Z",
+  "protocol": "Phase 4 Stage C pre-registration",
+  "frozen_strategy": {
+    "signal": "60-day rolling OLS residual z-score",
+    "entry": "short z > 1.5, long z < -1.5",
+    "exit": "z crosses \u00b10.5, or 1.5 ATR stop, or 10-day cap",
+    "position_size": "$10,000 per trade",
+    "max_concurrent": 5
+  },
+  "selection_rule": {
+    "min_hedge_r2": 0.376,
+    "ou_halflife_range": [
+      3.0,
+      15.0
+    ],
+    "min_shrunk_trail_avg": 0.0,
+    "description": "hedge_r2 >= 0.376 AND ou_halflife in [3.0, 15.0] AND shrunk_trail_avg > 0.0"
+  },
+  "stage_a_evidence": {
+    "spearman_correlations": {
+      "hedge_r2": {
+        "rho": -0.346,
+        "pval": 0.056
+      },
+      "hedge_corr": {
+        "rho": -0.159,
+        "pval": 0.393
+      },
+      "ou_halflife": {
+        "rho": 0.05,
+        "pval": 0.788
+      },
+      "resid_vol": {
+        "rho": 0.035,
+        "pval": 0.851
+      },
+      "atr_pct": {
+        "rho": -0.222,
+        "pval": 0.23
+      },
+      "trail_n": {
+        "rho": -0.068,
+        "pval": 0.717
+      },
+      "trail_avg_pnl": {
+        "rho": 1.0,
+        "pval": 0.0
+      }
+    },
+    "selected_beat_rejected_by": 3.16
+  },
+  "stage_b_validation": {
+    "selected_avg": -0.42,
+    "rejected_avg": -0.55,
+    "diff": 0.12
+  },
+  "selected_tickers": {
+    "new_primary": [
+      "NUVB"
+    ],
+    "seen_secondary": [
+      "BEAM",
+      "RXRX"
+    ]
+  },
+  "rejected_tickers": [
+    "ADPT",
+    "CRSP",
+    "LCID",
+    "MARA",
+    "NTLA",
+    "RARE",
+    "RIOT",
+    "RIVN",
+    "RUN",
+    "SANA",
+    "TEM",
+    "TGTX",
+    "TWST",
+    "TXG"
+  ],
+  "hedge_assignments": {
+    "BEAM": "ARKG",
+    "NUVB": "XBI",
+    "RXRX": "ARKG"
+  },
+  "decision_rule": {
+    "selected_beats_rejected_B_and_C": true,
+    "pooled_C_avg_gte_1_5_pct": true,
+    "clustered_t_gte_2_BC_combined": true,
+    "portfolio_C_total_positive": true
+  }
+}

@@ -1,17 +1,27 @@
-# %% Agent 1 — Technical Gap-Fade Scanner
+# %% Agent 1 — Technical Gap-Fade Scanner (Dual Variant)
 # Single script: scanner + outcome filler + performance report
-# Run in notebook every morning at 6:15 AM PST (9:15 AM EST)
 #
-# E2 optimal strategy: N=1 CS+SD, SHORT at local high, exit at 17:00 ET (2 PM PST)
-# Shows top 3 candidates for safety; trade #1 only.
-# Backtest: $2.34M on $100K pool, Sharpe 0.589, +14.62% avg, 78% WR (174 days)
+# Two variants, shared pipeline:
+#   E2-A  Agent 1:     CS only, scan 6:31 PST, local_high bars 3-11, fb 15
+#   E2-B  Agent 1-SD:  CS + sustained_drop (confirmed 7:30 PST),
+#                       local_high bars 60-72, fb 75
 #
 # Usage:
-#   MODE = 'scan'           → morning scanner (default)
-#   MODE = 'fill'           → fill T0/T1/T2 outcomes after close
-#   MODE = 'report'         → performance summary
-#   SCAN_DATE = '2026-09-08' → historical backtest (omit for live/today)
-#   DRY_RUN = True          → skip DB writes
+#   MODE = 'scan'                       → morning scanner (default)
+#   MODE = 'fill'                       → fill T0/T1/T2 outcomes after close
+#   MODE = 'report'                     → performance summary
+#   SCAN_TIMESTAMP = '2026-09-11 06:31' → time machine (PST, minute granularity)
+#   SCAN_TIMESTAMP = '2026-09-11 07:30' → runs BOTH E2-A and E2-B
+#   SCAN_TIMESTAMP = None               → live (uses current time)
+#   DRY_RUN = True                      → skip DB writes
+#
+# Time logic (PST):
+#   E2-A runs at any time (no gate)
+#   >= 07:30 → E2-B also runs (reads E2-A pool, checks sustained_drop)
+#
+# Gap freshness: gap is computed vs last AH price on prior trading day,
+# not vs prior close. Filters out M&A / stale gaps where the move
+# happened in after-hours and the stock is already at equilibrium.
 
 import os, sys, json, time, re, logging, sqlite3, asyncio
 from datetime import date, datetime, timedelta
@@ -59,12 +69,14 @@ except: pass
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MODE = 'scan'                # 'scan' | 'fill' | 'report'
-                             # 'scan' does fill-then-scan automatically
-SCAN_DATE = None             # None = today (live), 'YYYY-MM-DD' = historical
+SCAN_TIMESTAMP = None  # PST — 'YYYY-MM-DD HH:MM' or None for live
 DRY_RUN = False              # True = skip DB writes
 REPORT_WEEKS = 4             # for MODE='report'
 
-POLYGON_API_KEY = os.environ["POLYGON_API_KEY"]
+E2A_READY_PST = (6, 31)      # E2-A available at 6:31 AM PST
+E2B_READY_PST = (7, 30)      # E2-B available at 7:30 AM PST
+
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
 POLYGON_BASE = "https://api.polygon.io"
 
 try:
@@ -73,16 +85,27 @@ except NameError:
     BASE_DIR = os.getcwd()
 
 DB_PATH = os.path.join(BASE_DIR, 'data', 'agent1.db')
-FLOAT_CACHE_PATH = os.path.join(BASE_DIR, 'data', 'float_cache.json')
 LOG_PATH = os.path.join(BASE_DIR, 'logs', 'agent1.log')
 
-GAP_MIN = 0.05               # 5% minimum gap
+GAP_MIN = 0.03               # 3% minimum gap
 PRICE_MIN = 10.0             # $10 minimum price
 FLOAT_MIN_SHARES = 10_000_000
-TOP_N = 3
-PM_BAR_WORKERS = 10
+TOP_N = 5
+PRE_FILTER_N = 30            # walk top 30 by gap, take first CS (E2-A) or CS+SD (E2-B)
+STOP_LOSS_PCT = 0.50
+GAP_CONSUMED_MAX = 0.50     # skip if >50% of gap eroded by scan time (low vs open)
+EXIT_TIME_ET = '17:00'       # exit at 17:00 ET (2:00 PM PST)
+SCAN_TIME_ET = '09:31'       # 6:31 AM PST — rank candidates by gap at this bar
+
+PEAK_WINDOW = 3
+E2A_MAX_PEAK_BAR = 12        # search bars 3-11
+E2A_FALLBACK_BAR = 15        # fallback at 09:45 ET
+E2B_MIN_ENTRY_BAR = 60       # SD entry starts bar 60 (10:30 ET)
+E2B_MAX_PEAK_BAR = 72        # search bars 60-71
+E2B_FALLBACK_BAR = 75        # fallback at 10:45 ET
+
+BAR_WORKERS = 10
 TICKER_REGEX = re.compile(r'^[A-Z]{1,5}$')
-# Exclude SPAC units/warrants/rights (ending in U, W, WS, R) and test tickers
 _EXCLUDED_SUFFIXES = ('W', 'WS', 'U', 'R')
 _EXCLUDED_TICKERS = {'SPY', 'QQQ', 'IWM', 'DIA', 'VXX', 'UVXY', 'SQQQ', 'TQQQ',
                      'SPXU', 'SPXL', 'SDOW', 'UDOW', 'SDS', 'SSO', 'SH',
@@ -164,7 +187,7 @@ _EMBEDDED_FLOAT = {
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.1  LOGGING
+# LOGGING
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def setup_logging():
@@ -193,7 +216,7 @@ log = setup_logging()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.2  DATABASE
+# DATABASE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def init_db(db_path=DB_PATH):
@@ -206,6 +229,7 @@ def init_db(db_path=DB_PATH):
         scan_date        TEXT PRIMARY KEY,
         run_timestamp    TEXT,
         mode             TEXT,
+        variant          TEXT,
         n_gap_universe   INTEGER,
         n_t4_t5          INTEGER,
         n_after_price    INTEGER,
@@ -236,9 +260,22 @@ def init_db(db_path=DB_PATH):
         selected         INTEGER
     );
 
+    CREATE TABLE IF NOT EXISTS scan_pool (
+        pool_id          TEXT PRIMARY KEY,
+        scan_date        TEXT,
+        pool_rank        INTEGER,
+        ticker           TEXT,
+        gap_pct          REAL,
+        prior_close      REAL,
+        scan_price       REAL,
+        float_shares     REAL,
+        passed_cs        INTEGER DEFAULT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS selected_trades (
         trade_id         TEXT PRIMARY KEY,
         scan_date        TEXT,
+        variant          TEXT,
         ticker           TEXT,
         selection_rank   INTEGER,
         tier             TEXT,
@@ -247,6 +284,7 @@ def init_db(db_path=DB_PATH):
         open_price       REAL,
         pm_retrace_pct   REAL,
         float_shares     REAL,
+        open_pattern     TEXT DEFAULT NULL,
         t1_date          TEXT,
         t2_date          TEXT,
         entry_price      REAL DEFAULT NULL,
@@ -273,9 +311,24 @@ def init_db(db_path=DB_PATH):
     );
 
     CREATE INDEX IF NOT EXISTS idx_candidates_date ON scan_candidates(scan_date);
+    CREATE INDEX IF NOT EXISTS idx_pool_date ON scan_pool(scan_date);
     CREATE INDEX IF NOT EXISTS idx_trades_date ON selected_trades(scan_date);
+    CREATE INDEX IF NOT EXISTS idx_trades_variant ON selected_trades(variant);
     CREATE INDEX IF NOT EXISTS idx_trades_t2 ON selected_trades(t2_date);
     """)
+
+    # migrate existing tables: add columns if missing
+    for col, tbl, default in [
+        ('variant', 'selected_trades', "'e2a'"),
+        ('variant', 'daily_scans', "'e2a'"),
+        ('open_pattern', 'selected_trades', "NULL"),
+    ]:
+        try:
+            conn.execute(f"SELECT {col} FROM {tbl} LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} TEXT DEFAULT {default}")
+            conn.commit()
+            log.info(f"  Migrated: added {col} to {tbl}")
 
     # populate trading calendar 2026-01-01 through 2030-12-31
     existing = conn.execute("SELECT COUNT(*) FROM trading_calendar").fetchone()[0]
@@ -298,31 +351,7 @@ def init_db(db_path=DB_PATH):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.3  FLOAT CACHE
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def load_float_cache(path=FLOAT_CACHE_PATH):
-    cache = dict(_EMBEDDED_FLOAT)
-    if os.path.exists(path):
-        with open(path) as f:
-            file_cache = json.load(f)
-        for tk, fs in file_cache.items():
-            if isinstance(fs, (int, float)) and fs > 0:
-                cache[tk] = int(fs)
-        log.info(f"Float cache: {len(cache)} tickers ({len(file_cache)} from file, {len(_EMBEDDED_FLOAT)} embedded)")
-    else:
-        log.info(f"Float cache: {len(cache)} tickers (embedded only, no file at {path})")
-    return cache
-
-
-def save_float_cache(cache, path=FLOAT_CACHE_PATH):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump(cache, f, indent=1)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 3.4  TRADING CALENDAR HELPERS
+# TRADING CALENDAR HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_conn():
@@ -373,7 +402,7 @@ def get_t1_t2_dates(scan_date):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.5  POLYGON — GROUPED DAILY
+# POLYGON — GROUPED DAILY
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _polygon_get(url, params=None):
@@ -411,7 +440,7 @@ def fetch_grouped_daily(date_str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.6  POLYGON — SNAPSHOT (LIVE MODE)
+# POLYGON — SNAPSHOT (LIVE MODE)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def fetch_snapshot_all():
@@ -429,7 +458,6 @@ def fetch_snapshot_all():
         else:
             prev_c = None
 
-        # premarket price
         pm = t.get('min', {})
         if pm and pm.get('c') and pm['c'] > 0:
             pm_price = float(pm['c'])
@@ -447,7 +475,7 @@ def fetch_snapshot_all():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.7  GAP COMPUTATION
+# GAP COMPUTATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def compute_gaps(prior_closes, current_prices, mode='historical'):
@@ -499,15 +527,15 @@ def compute_gaps(prior_closes, current_prices, mode='historical'):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.8  FLOAT FILTER
+# FLOAT FILTER — frozen embedded dict only, miss=INCLUDE, hit+<10M=EXCLUDE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def apply_float_filter(candidates, float_cache):
+def apply_float_filter(candidates):
     n_excluded = 0
     n_miss = 0
     for c in candidates:
         tk = c['ticker']
-        fs = float_cache.get(tk)
+        fs = _EMBEDDED_FLOAT.get(tk)
         c['float_shares'] = fs
         if fs is not None and fs < FLOAT_MIN_SHARES:
             c['passed_float'] = False
@@ -518,18 +546,18 @@ def apply_float_filter(candidates, float_cache):
             if fs is None:
                 n_miss += 1
     log.info(f"Float filter: {n_excluded} excluded (<{FLOAT_MIN_SHARES/1e6:.0f}M shares), "
-             f"{n_miss} not in cache (included)")
+             f"{n_miss} not in dict (included)")
     return candidates
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.9  ASYNC PM BAR FETCH
+# ASYNC MINUTE BAR FETCH
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _fetch_one_pm(session, ticker, date_str, semaphore):
+async def _fetch_bars_one(session, ticker, date_str, semaphore):
     url = f"{POLYGON_BASE}/v2/aggs/ticker/{ticker}/range/1/minute/{date_str}/{date_str}"
     params = {
-        "adjusted": "true", "sort": "asc", "limit": "500",
+        "adjusted": "true", "sort": "asc", "limit": "1000",
         "apiKey": POLYGON_API_KEY
     }
 
@@ -555,46 +583,58 @@ async def _fetch_one_pm(session, ticker, date_str, semaphore):
                 return ticker, None
 
             pm_bars = []
+            rth_bars = []
+            ah_bars = []
             for b in bars:
                 ts = pd.Timestamp(b['t'], unit='ms', tz='UTC').tz_convert(ET)
                 t_str = ts.strftime('%H:%M')
+                bar_d = {
+                    'o': float(b.get('o', 0)),
+                    'h': float(b.get('h', 0)),
+                    'l': float(b.get('l', 0)),
+                    'c': float(b.get('c', 0)),
+                    'v': int(b.get('v', 0)),
+                }
                 if '04:00' <= t_str < '09:30':
-                    pm_bars.append({
-                        'time': t_str,
-                        'o': float(b.get('o', 0)),
-                        'h': float(b.get('h', 0)),
-                        'l': float(b.get('l', 0)),
-                        'c': float(b.get('c', 0)),
-                        'v': int(b.get('v', 0)),
-                    })
+                    pm_bars.append((t_str, bar_d))
+                elif '09:30' <= t_str < '16:00':
+                    rth_bars.append((t_str, bar_d))
+                elif '16:00' <= t_str <= '20:00':
+                    ah_bars.append((t_str, bar_d))
 
-            if not pm_bars:
-                return ticker, {'pm_open': None, 'pm_high': None, 'pm_last': None, 'pm_retrace_pct': None}
-
-            pm_open = pm_bars[0]['o']
-            pm_high = max(b['h'] for b in pm_bars)
-            pm_last = pm_bars[-1]['c']
-            total_move = pm_high - pm_open
-            retrace = (pm_high - pm_last) / total_move if total_move > 0 else 0.0
+            # PM summary for backwards compat
+            pm_summary = {'pm_open': None, 'pm_high': None, 'pm_last': None, 'pm_retrace_pct': None}
+            if pm_bars:
+                pm_open = pm_bars[0][1]['o']
+                pm_high = max(b[1]['h'] for b in pm_bars)
+                pm_last = pm_bars[-1][1]['c']
+                total_move = pm_high - pm_open
+                retrace = (pm_high - pm_last) / total_move if total_move > 0 else 0.0
+                pm_summary = {
+                    'pm_open': round(pm_open, 4),
+                    'pm_high': round(pm_high, 4),
+                    'pm_last': round(pm_last, 4),
+                    'pm_retrace_pct': round(retrace, 4),
+                }
 
             return ticker, {
-                'pm_open': round(pm_open, 4),
-                'pm_high': round(pm_high, 4),
-                'pm_last': round(pm_last, 4),
-                'pm_retrace_pct': round(retrace, 4),
+                'pm': pm_bars,
+                'rth': rth_bars,
+                'ah': ah_bars,
+                'pm_summary': pm_summary,
             }
         return ticker, None
 
 
-async def _fetch_all_pm(tickers, date_str):
-    semaphore = asyncio.Semaphore(PM_BAR_WORKERS)
+async def _fetch_bars_batch(tickers, date_str):
+    semaphore = asyncio.Semaphore(BAR_WORKERS)
     async with aiohttp.ClientSession() as session:
-        tasks = [_fetch_one_pm(session, tk, date_str, semaphore) for tk in tickers]
+        tasks = [_fetch_bars_one(session, tk, date_str, semaphore) for tk in tickers]
         results = await asyncio.gather(*tasks)
     return {tk: data for tk, data in results if data is not None}
 
 
-def fetch_pm_bars_async(tickers, date_str):
+def fetch_minute_bars(tickers, date_str):
     if not tickers:
         return {}
     t0 = time.time()
@@ -603,48 +643,104 @@ def fetch_pm_bars_async(tickers, date_str):
         nest_asyncio.apply()
     except RuntimeError:
         pass
-    pm_data = asyncio.run(_fetch_all_pm(tickers, date_str))
+    bar_data = asyncio.run(_fetch_bars_batch(tickers, date_str))
     elapsed = time.time() - t0
-    n_ok = sum(1 for v in pm_data.values() if v.get('pm_retrace_pct') is not None)
-    log.info(f"PM bars: {n_ok}/{len(tickers)} fetched in {elapsed:.1f}s")
-    if elapsed > 120:
-        log.warning(f"PM bar fetch took {elapsed:.0f}s — consider reducing universe or increasing workers")
-    return pm_data
+    n_ok = sum(1 for v in bar_data.values() if v.get('rth'))
+    log.info(f"Minute bars: {n_ok}/{len(tickers)} fetched in {elapsed:.1f}s")
+    return bar_data
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.10  RETRACE FILTER
+# PATTERN CLASSIFICATION (sustained_drop check for E2-B)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def apply_retrace_filter(candidates, pm_data):
-    n_excluded = 0
-    for c in candidates:
-        if not c['passed_all']:
-            continue
-        tk = c['ticker']
-        pm = pm_data.get(tk, {})
-        retrace = pm.get('pm_retrace_pct')
-        c['pm_high'] = pm.get('pm_high')
-        c['pm_last'] = pm.get('pm_last')
-        c['pm_retrace_pct'] = retrace
+def classify_open_pattern(rth_bars):
+    if len(rth_bars) < 60:
+        return 'no_data'
+    open_price = rth_bars[0][1]['o']
+    low_30m = min(b[1]['l'] for b in rth_bars[:30])
+    close_60m = rth_bars[59][1]['c']
+    drop_30m = (low_30m - open_price) / open_price if open_price > 0 else 0
+    recovery_denom = abs(open_price - low_30m)
+    recovery = (close_60m - low_30m) / recovery_denom if recovery_denom > 0 else 0
 
-        if retrace is not None and retrace > PM_RETRACE_MAX:
-            c['passed_retrace'] = False
-            c['passed_all'] = False
-            n_excluded += 1
+    if drop_30m < -0.03 and recovery > 0.5:
+        return 'drop_then_recover'
+    elif drop_30m < -0.03 and recovery <= 0.5:
+        return 'sustained_drop'
+    elif drop_30m >= -0.01:
+        return 'flat_or_bounce'
+    else:
+        return 'mild_drop'
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LOCAL HIGH DETECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def find_local_high(bars, window=PEAK_WINDOW, max_peak_bar=E2A_MAX_PEAK_BAR,
+                    fallback_bar=E2A_FALLBACK_BAR, min_entry_bar=0):
+    if len(bars) < window * 2 + 1:
+        return None
+    start = max(window, min_entry_bar - window)
+    for i in range(start, min(max_peak_bar, len(bars) - window)):
+        ch = bars[i][1]['h']
+        if all(bars[i - j][1]['h'] < ch and bars[i + j][1]['h'] < ch
+               for j in range(1, window + 1)):
+            ci = i + window
+            if ci < len(bars):
+                return {
+                    'entry_price': bars[ci][1]['c'],
+                    'entry_time': bars[ci][0],
+                    'entry_type': 'local_high',
+                    'peak_bar': i,
+                }
+    fb = max(fallback_bar, min_entry_bar) if fallback_bar is not None else None
+    if fb is not None and fb < len(bars):
+        return {
+            'entry_price': bars[fb][1]['c'],
+            'entry_time': bars[fb][0],
+            'entry_type': 'fallback',
+            'peak_bar': None,
+        }
+    return None
+
+
+def get_price_at_T(bar_data, T):
+    if bar_data is None:
+        return None
+    all_bars = (bar_data.get('pm') or []) + (bar_data.get('rth') or [])
+    best = None
+    for t_str, bd in all_bars:
+        if t_str <= T:
+            best = bd['c']
         else:
-            c['passed_retrace'] = True
-
-    log.info(f"Retrace filter: {n_excluded} excluded (retrace > {PM_RETRACE_MAX})")
-    return candidates
+            break
+    return best
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.11  SELECT TOP N
+# AFTER-HOURS REFERENCE PRICE (gap freshness check)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_ah_reference_prices(tickers, prior_date_str):
+    """Fetch prior day minute bars and return last AH price for each ticker.
+    AH = 16:00-20:00 ET. If no AH data, ticker is omitted from result."""
+    bar_data = fetch_minute_bars(tickers, prior_date_str)
+    ah_prices = {}
+    for tk, data in bar_data.items():
+        ah_bars = data.get('ah', [])
+        if ah_bars:
+            ah_prices[tk] = ah_bars[-1][1]['c']
+    log.info(f"  AH reference: {len(ah_prices)}/{len(tickers)} tickers have AH data on {prior_date_str}")
+    return ah_prices
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CS TYPE CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _is_common_stock(ticker):
-    """Check Polygon reference API — returns True for type='CS' (common stock)."""
     try:
         data = _polygon_get(f"{POLYGON_BASE}/v3/reference/tickers/{ticker}")
         tk_type = data.get('results', {}).get('type', '')
@@ -657,6 +753,10 @@ def _is_common_stock(ticker):
         return True
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SELECT TOP N — walk PRE_FILTER_N candidates, CS-verify, take first TOP_N
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def select_top_n(candidates):
     qualified = [c for c in candidates if c.get('passed_all', False)]
     qualified.sort(key=lambda x: -x['gap_pct'])
@@ -665,12 +765,14 @@ def select_top_n(candidates):
         c['rank_by_gap'] = i + 1
 
     selected = []
-    for c in qualified:
+    for c in qualified[:PRE_FILTER_N]:
         if len(selected) >= TOP_N:
             break
         if not _is_common_stock(c['ticker']):
             c['passed_all'] = False
+            c['passed_cs'] = False
             continue
+        c['passed_cs'] = True
         c['selection_rank'] = len(selected) + 1
         c['selected'] = True
         selected.append(c)
@@ -682,16 +784,81 @@ def select_top_n(candidates):
         if 'rank_by_gap' not in c:
             c['rank_by_gap'] = None
 
-    log.info(f"Selection: {len(qualified)} qualified → top {min(TOP_N, len(selected))} selected (CS verified)")
+    log.info(f"Selection: {len(qualified)} qualified → walked top {min(PRE_FILTER_N, len(qualified))}"
+             f" → {len(selected)} selected (CS verified)")
     return selected
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.12  DB WRITE
+# PERSIST / LOAD SCAN POOL (6:31 top-30 for E2-B reuse)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def persist_scan_pool(scan_date_str, candidates):
+    # Pool = all candidates that pass gap+price+float (before CS check)
+    qualified = [c for c in candidates if c.get('passed_float', True)]
+    qualified.sort(key=lambda x: -x['gap_pct'])
+    pool = qualified[:PRE_FILTER_N]
+
+    conn = _get_conn()
+    conn.execute("DELETE FROM scan_pool WHERE scan_date=?", (scan_date_str,))
+    for i, c in enumerate(pool):
+        pid = f"{scan_date_str}_{i+1}_{c['ticker']}"
+        cs_flag = None
+        if 'passed_cs' in c:
+            cs_flag = 1 if c['passed_cs'] else 0
+        conn.execute("""INSERT OR REPLACE INTO scan_pool
+            (pool_id, scan_date, pool_rank, ticker, gap_pct, prior_close,
+             scan_price, float_shares, passed_cs)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+            (pid, scan_date_str, i + 1, c['ticker'], c['gap_pct'],
+             c['prior_close'], c['open_price'], c.get('float_shares'), cs_flag))
+
+    conn.commit()
+    conn.close()
+    log.info(f"Scan pool: persisted {len(pool)} candidates for {scan_date_str}")
+    return pool
+
+
+def load_scan_pool(scan_date_str):
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT pool_rank, ticker, gap_pct, prior_close, scan_price,
+               float_shares, passed_cs
+        FROM scan_pool WHERE scan_date=?
+        ORDER BY pool_rank
+    """, (scan_date_str,)).fetchall()
+    conn.close()
+
+    if not rows:
+        log.warning(f"No scan pool found for {scan_date_str}. Run E2-A first.")
+        return []
+
+    pool = []
+    for r in rows:
+        pool.append({
+            'pool_rank': r[0],
+            'ticker': r[1],
+            'gap_pct': r[2],
+            'prior_close': r[3],
+            'open_price': r[4],
+            'scan_price': r[4],
+            'float_shares': r[5],
+            'passed_cs': r[6],
+            'tier': 'T4' if r[2] <= 0.08 else 'T5',
+            'passed_price': True,
+            'passed_float': True,
+            'passed_all': True,
+        })
+    log.info(f"Scan pool: loaded {len(pool)} candidates for {scan_date_str}")
+    return pool
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DB WRITE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def write_to_db(scan_date_str, candidates, selected, mode, runtime,
-                spy_gap_pct, n_gap_universe):
+                spy_gap_pct, n_gap_universe, variant='e2a'):
     conn = _get_conn()
 
     n_t4_t5 = len(candidates)
@@ -699,51 +866,64 @@ def write_to_db(scan_date_str, candidates, selected, mode, runtime,
     n_after_float = sum(1 for c in candidates if c.get('passed_float', True))
     n_after_retrace = sum(1 for c in candidates if c.get('passed_all', False))
 
-    conn.execute("""INSERT OR REPLACE INTO daily_scans VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                 (scan_date_str, datetime.now(pytz.UTC).isoformat(), mode,
-                  n_gap_universe, n_t4_t5, n_after_price, n_after_float,
-                  n_after_retrace, len(selected), spy_gap_pct, runtime))
+    conn.execute("""INSERT OR REPLACE INTO daily_scans
+        (scan_date, run_timestamp, mode, variant, n_gap_universe, n_t4_t5,
+         n_after_price, n_after_float, n_after_retrace, n_selected,
+         spy_gap_pct, runtime_seconds)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (scan_date_str, datetime.now(pytz.UTC).isoformat(), mode, variant,
+         n_gap_universe, n_t4_t5, n_after_price, n_after_float,
+         n_after_retrace, len(selected), spy_gap_pct, runtime))
 
-    for c in candidates:
-        cid = f"{scan_date_str}_{c['ticker']}"
-        conn.execute("""INSERT OR REPLACE INTO scan_candidates VALUES
-            (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (cid, scan_date_str, c['ticker'], c['gap_pct'], c['tier'],
-             c['prior_close'], c['open_price'], c.get('float_shares'),
-             c.get('pm_high'), c.get('pm_last'), c.get('pm_retrace_pct'),
-             int(c.get('passed_price', True)), int(c.get('passed_float', True)),
-             int(c.get('passed_retrace', True)), int(c.get('passed_all', False)),
-             c.get('rank_by_gap'), int(c.get('selected', False))))
+    if variant == 'e2a':
+        for c in candidates:
+            cid = f"{scan_date_str}_{c['ticker']}"
+            conn.execute("""INSERT OR REPLACE INTO scan_candidates VALUES
+                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (cid, scan_date_str, c['ticker'], c['gap_pct'], c['tier'],
+                 c['prior_close'], c['open_price'], c.get('float_shares'),
+                 c.get('pm_high'), c.get('pm_last'), c.get('pm_retrace_pct'),
+                 int(c.get('passed_price', True)), int(c.get('passed_float', True)),
+                 int(c.get('passed_retrace', True)), int(c.get('passed_all', False)),
+                 c.get('rank_by_gap'), int(c.get('selected', False))))
 
     t1, t2 = get_t1_t2_dates(scan_date_str)
     for s in selected:
-        tid = f"{scan_date_str}_{s['ticker']}"
+        tid = f"{scan_date_str}_{variant}_{s['ticker']}"
         conn.execute("""INSERT OR REPLACE INTO selected_trades
-            (trade_id, scan_date, ticker, selection_rank, tier, gap_pct,
-             prior_close, open_price, pm_retrace_pct, float_shares, t1_date, t2_date)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (tid, scan_date_str, s['ticker'], s['selection_rank'], s['tier'],
-             s['gap_pct'], s['prior_close'], s['open_price'],
-             s.get('pm_retrace_pct'), s.get('float_shares'), t1, t2))
+            (trade_id, scan_date, variant, ticker, selection_rank, tier, gap_pct,
+             prior_close, open_price, pm_retrace_pct, float_shares, open_pattern,
+             t1_date, t2_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (tid, scan_date_str, variant, s['ticker'], s['selection_rank'],
+             s['tier'], s['gap_pct'], s['prior_close'], s['open_price'],
+             s.get('pm_retrace_pct'), s.get('float_shares'),
+             s.get('open_pattern'), t1, t2))
 
     conn.commit()
     conn.close()
-    log.info(f"DB write: {len(candidates)} candidates, {len(selected)} selected trades")
+    log.info(f"DB write ({variant}): {len(candidates)} candidates, {len(selected)} selected trades")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 3.13  PRINT WATCHLIST
+# PRINT WATCHLIST
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def print_watchlist(selected, scan_date_str):
+_VARIANT_LABELS = {
+    'e2a': 'AGENT 1 (E2-A)',
+    'e2b': 'AGENT 1-SD (E2-B)',
+}
+
+def print_watchlist(selected, scan_date_str, variant='e2a'):
     t1, t2 = get_t1_t2_dates(scan_date_str)
     now_str = datetime.now(PT).strftime('%H:%M:%S PST')
+    label = _VARIANT_LABELS.get(variant, variant.upper())
 
     print(f"\n  {'='*62}")
-    print(f"  |{'AGENT 1 WATCHLIST':^60}|")
+    print(f"  |{label + ' WATCHLIST':^60}|")
     print(f"  |{'':^60}|")
     print(f"  |  Date: {scan_date_str:<20}  Run: {now_str:<22} |")
-    print(f"  |  Exit: 17:00 ET (2:00 PM PST)   Trade: #1 only       |")
+    print(f"  |  Exit: {EXIT_TIME_ET} ET (2:00 PM PST)                      |")
     print(f"  {'='*62}")
 
     if not selected:
@@ -764,6 +944,9 @@ def print_watchlist(selected, scan_date_str):
         retrace = s.get('pm_retrace_pct')
         ret_str = f"{retrace:.2f}" if retrace is not None else 'n/a'
 
+        pat = s.get('open_pattern', '')
+        pat_str = pat if pat else ''
+
         rows.append([
             f"#{s['selection_rank']}",
             s['ticker'],
@@ -772,25 +955,35 @@ def print_watchlist(selected, scan_date_str):
             ret_str,
             f"${s['open_price']:.2f}",
             fs_str,
+            pat_str,
         ])
 
     print()
     print(tabulate(rows,
-                   headers=['Rank', 'Ticker', 'Gap%', 'Tier', 'PM Retrace', 'Price', 'Float'],
-                   tablefmt='simple', colalign=('left', 'left', 'right', 'center', 'right', 'right', 'right')))
+                   headers=['Rank', 'Ticker', 'Gap%', 'Tier', 'PM Ret', 'Price', 'Float', 'Pattern'],
+                   tablefmt='simple', colalign=('left', 'left', 'right', 'center',
+                                                 'right', 'right', 'right', 'left')))
 
-    print(f"\n  Strategy: SHORT #1 at local high, exit at 17:00 ET (2:00 PM PST)")
-    print(f"  Action:   Open chart for {selected[0]['ticker']} (top pick)")
-    print(f"            Watch for local high (3-bar window, ~7-8 min after open)")
-    print(f"            Enter SHORT on confirmation, close at 2 PM PST (after-hours)")
-    print(f"            #{2}-{len(selected)} shown for context only")
+    print(f"\n  Strategy: SHORT — {label}")
+    if variant == 'e2a':
+        print(f"  Entry:    Watch for local high (3-bar window, bars 3-11 = ~09:33-09:41 ET)")
+        print(f"            Fallback at bar 15 close (09:45 ET) if no local high found")
+    else:
+        print(f"  Entry:    Watch for local high (3-bar window, bars 60-72 = ~10:30-10:42 ET)")
+        print(f"            Fallback at bar 75 close (10:45 ET) if no local high found")
+    print(f"  Exit:     {EXIT_TIME_ET} ET (2:00 PM PST)")
+    print(f"  SL:       entry × 1.50 (disaster cap)")
     print()
 
-    # per-ticker detail
     for s in selected:
         retrace = s.get('pm_retrace_pct')
+        sl_price = s['open_price'] * (1 + STOP_LOSS_PCT)
         print(f"  #{s['selection_rank']} {s['ticker']}")
-        print(f"     Gap: +{s['gap_pct']*100:.1f}%  |  Prior close: ${s['prior_close']:.2f}  |  PM last: ${s['open_price']:.2f}")
+        print(f"     Gap: +{s['gap_pct']*100:.1f}%  |  Prior close: ${s['prior_close']:.2f}  |  Open: ${s['open_price']:.2f}")
+        print(f"     Stop Loss: ${sl_price:.2f}  (entry × 1.50 — disaster cap)")
+        print(f"     Exit:      {EXIT_TIME_ET} ET (2:00 PM PST)")
+        if s.get('open_pattern'):
+            print(f"     Pattern:   {s['open_pattern']}")
         if retrace is not None:
             if retrace < 0.2:
                 pm_note = "held (bullish PM, caution)"
@@ -811,10 +1004,6 @@ def print_watchlist(selected, scan_date_str):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def run_fill_outcomes(fill_date_str=None):
-    """Fill T0/T1/T2 closing prices for open trades.
-    fill_date_str = the latest date for which closing data is available.
-    At 6:15 AM, yesterday's close is available via grouped daily.
-    So we use get_prior_trading_date(fill_date_str) if fill_date_str is today."""
     if fill_date_str is None:
         fill_date_str = datetime.now(ET).strftime('%Y-%m-%d')
 
@@ -851,8 +1040,6 @@ def run_fill_outcomes(fill_date_str=None):
         except Exception as e:
             log.warning(f"  Failed to fetch {dt}: {e}")
 
-    float_cache = load_float_cache()
-    float_updated = False
     n_filled = 0
 
     for t in trades:
@@ -888,26 +1075,9 @@ def run_fill_outcomes(fill_date_str=None):
                                 for k, v in updates.items())
             log.info(f"  {tid}: {pnl_str}")
 
-        # expand float cache for new tickers
-        if ticker not in float_cache:
-            try:
-                url = f"{POLYGON_BASE}/v3/reference/tickers/{ticker}"
-                data = _polygon_get(url)
-                so = data.get('results', {}).get('share_class_shares_outstanding')
-                if so and so > 0:
-                    float_cache[ticker] = int(so)
-                    float_updated = True
-                time.sleep(0.05)
-            except Exception:
-                pass
-
     conn.commit()
     conn.close()
     log.info(f"  Filled {n_filled}/{len(trades)} trades")
-
-    if float_updated:
-        save_float_cache(float_cache)
-        log.info(f"  Float cache updated: {len(float_cache)} tickers")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -924,10 +1094,10 @@ def run_report(weeks=REPORT_WEEKS):
     """, (cutoff,)).fetchone()
 
     trades = conn.execute("""
-        SELECT ticker, scan_date, tier, gap_pct, open_price,
+        SELECT ticker, scan_date, variant, tier, gap_pct, open_price,
                pnl_eod, pnl_t1, pnl_t2
         FROM selected_trades WHERE scan_date >= ?
-        ORDER BY scan_date
+        ORDER BY scan_date, variant
     """, (cutoff,)).fetchall()
 
     conn.close()
@@ -937,8 +1107,7 @@ def run_report(weeks=REPORT_WEEKS):
     avg_per_day = scans[2] or 0
     avg_runtime = scans[3] or 0
 
-    pnl_t2 = [t[7] for t in trades if t[7] is not None]
-    pnl_eod = [t[5] for t in trades if t[5] is not None]
+    pnl_eod = [t[6] for t in trades if t[6] is not None]
 
     print(f"\n  {'='*62}")
     print(f"  |{'AGENT 1 PERFORMANCE SUMMARY':^60}|")
@@ -948,8 +1117,14 @@ def run_report(weeks=REPORT_WEEKS):
     print(f"  Total selected:     {n_total} (avg {avg_per_day:.1f}/day)")
     print(f"  Avg runtime:        {avg_runtime:.1f}s")
 
-    if pnl_t2:
-        arr = np.array(pnl_t2)
+    for v_label, v_code in [('E2-A (Agent 1)', 'e2a'), ('E2-B (Agent 1-SD)', 'e2b')]:
+        v_trades = [t for t in trades if (t[2] or 'e2a') == v_code]
+        v_pnl_eod = [t[6] for t in v_trades if t[6] is not None]
+
+        if not v_pnl_eod:
+            continue
+
+        arr = np.array(v_pnl_eod)
         n = len(arr)
         avg = float(np.mean(arr))
         med = float(np.median(arr))
@@ -960,61 +1135,46 @@ def run_report(weeks=REPORT_WEEKS):
         ci_lo = avg - 1.96 * se
         ci_hi = avg + 1.96 * se
 
-        best_idx = int(np.argmax(arr))
-        worst_idx = int(np.argmin(arr))
-        best_trade = trades[[i for i, t in enumerate(trades) if t[7] is not None][best_idx]]
-        worst_trade = trades[[i for i, t in enumerate(trades) if t[7] is not None][worst_idx]]
-
-        t4_pnl = [t[7] for t in trades if t[7] is not None and t[2] == 'T4']
-        t5_pnl = [t[7] for t in trades if t[7] is not None and t[2] == 'T5']
-
-        print(f"\n  ── T+2 Performance ({n} trades) ──")
-        print(f"  Avg PnL T+2:        {avg:+.2f}%")
-        print(f"  Median PnL T+2:     {med:+.2f}%")
+        print(f"\n  ── {v_label} — EOD Performance ({n} trades) ──")
+        print(f"  Avg PnL EOD:        {avg:+.2f}%")
+        print(f"  Median PnL EOD:     {med:+.2f}%")
         print(f"  Std Dev:            {std:.2f}%")
         print(f"  Win Rate:           {wr*100:.0f}%")
         print(f"  Sharpe (proxy):     {sharpe:.3f}")
         print(f"  CI 95%:             [{ci_lo:+.2f}%, {ci_hi:+.2f}%]")
-        print(f"  CI > 0:             {'YES' if ci_lo > 0 else 'NO'}")
-        print(f"  Best trade:         {best_trade[0]} {best_trade[7]:+.1f}% ({best_trade[1]})")
-        print(f"  Worst trade:        {worst_trade[0]} {worst_trade[7]:+.1f}% ({worst_trade[1]})")
+
+        t4_pnl = [t[6] for t in v_trades if t[6] is not None and t[3] == 'T4']
+        t5_pnl = [t[6] for t in v_trades if t[6] is not None and t[3] == 'T5']
         if t4_pnl:
-            print(f"  T4 (5-8%):          {np.mean(t4_pnl):+.2f}% avg (n={len(t4_pnl)})")
+            print(f"  T4 (3-8%):          {np.mean(t4_pnl):+.2f}% avg (n={len(t4_pnl)})")
         if t5_pnl:
             print(f"  T5 (>8%):           {np.mean(t5_pnl):+.2f}% avg (n={len(t5_pnl)})")
-    else:
-        print(f"\n  No T+2 outcomes available yet.")
-
-    if pnl_eod:
-        arr_eod = np.array(pnl_eod)
-        print(f"\n  ── EOD Performance ({len(arr_eod)} trades) ──")
-        print(f"  Avg PnL EOD:        {np.mean(arr_eod):+.2f}%")
-        print(f"  Win Rate EOD:       {(arr_eod > 0).mean()*100:.0f}%")
 
     # per-trade table
     if trades:
         print(f"\n  ── Trade Log ──")
         rows = []
         for t in trades:
-            tk, dt, tier, gap, price, pnl_e, pnl_1, pnl_2 = t
+            tk, dt, var, tier, gap, price, pnl_e, pnl_1, pnl_2 = t
+            var_str = var or 'e2a'
             rows.append([
-                dt, tk, tier, f"+{gap*100:.1f}%", f"${price:.2f}",
+                dt, var_str, tk, tier, f"+{gap*100:.1f}%", f"${price:.2f}",
                 f"{pnl_e:+.2f}%" if pnl_e is not None else '—',
                 f"{pnl_1:+.2f}%" if pnl_1 is not None else '—',
                 f"{pnl_2:+.2f}%" if pnl_2 is not None else '—',
             ])
         print()
         print(tabulate(rows,
-                       headers=['Date', 'Ticker', 'Tier', 'Gap', 'Price', 'EOD', 'T+1', 'T+2'],
+                       headers=['Date', 'Var', 'Ticker', 'Tier', 'Gap', 'Price', 'EOD', 'T+1', 'T+2'],
                        tablefmt='simple'))
     print()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MAIN — SCANNER (MODE='scan')
+# SCANNER — E2-A (run at 6:31 PST / 9:31 ET)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def run_scan(scan_date_str=None, dry_run=False):
+def run_scan_e2a(scan_date_str=None, dry_run=False):
     t_start = time.time()
 
     if scan_date_str is None:
@@ -1024,7 +1184,7 @@ def run_scan(scan_date_str=None, dry_run=False):
         mode = 'historical'
 
     log.info(f"{'='*_W}")
-    log.info(f"  AGENT 1 — Technical Gap-Fade Scanner")
+    log.info(f"  AGENT 1 — E2-A Scanner (CS only, 6:31 PST)")
     log.info(f"  Date: {scan_date_str}  |  Mode: {mode}  |  Dry run: {dry_run}")
     log.info(f"{'='*_W}")
 
@@ -1040,21 +1200,26 @@ def run_scan(scan_date_str=None, dry_run=False):
     if mode == 'historical':
         log.warning("HISTORICAL MODE: using open price as PM proxy. Gap calculations are approximate.")
 
-    # 1. DB + float cache
+    # 1. DB init
     init_db()
-    float_cache = load_float_cache()
 
-    # 2. Prior trading day
+    # 2. Prior trading day (24-hour gap: always use immediately prior session)
+    scan_dt = datetime.strptime(scan_date_str, '%Y-%m-%d').date()
     prior_date = get_prior_trading_date(scan_date_str)
     prior_str = prior_date.strftime('%Y-%m-%d')
-    log.info(f"  Prior trading day: {prior_str}")
+    cal_days = (scan_dt - prior_date).days
+    day_name = scan_dt.strftime('%A')
+    log.info(f"  Scan day: {day_name} ({scan_date_str})")
+    log.info(f"  Prior trading day: {prior_str} ({cal_days} calendar day(s) ago)")
+    if cal_days > 4:
+        log.warning(f"  ⚠ Gap spans {cal_days} calendar days (holiday stretch) — gap may be stale")
 
     # 3. Fetch prior closes
     t1 = time.time()
     prior_data = fetch_grouped_daily(prior_str)
     log.info(f"  [1] Grouped daily: {time.time()-t1:.1f}s")
 
-    # 4. Fetch current prices
+    # 4. Fetch current prices (snapshot for live, grouped daily for historical)
     t2 = time.time()
     if mode == 'live':
         current_data = fetch_snapshot_all()
@@ -1071,32 +1236,129 @@ def run_scan(scan_date_str=None, dry_run=False):
             spy_gap = round((spy_cur - spy_prev) / spy_prev * 100, 3)
             log.info(f"  SPY gap: {spy_gap:+.2f}%")
 
-    # 5. Compute gaps
+    # 5. Compute gaps (3% min, $10 price min)
     t3 = time.time()
     candidates = compute_gaps(prior_data, current_data, mode)
     n_gap_universe = len(candidates)
     log.info(f"  [3] Gap computation: {time.time()-t3:.1f}s")
 
-    # 6. Float filter
-    candidates = apply_float_filter(candidates, float_cache)
+    # 6. Float filter (frozen embedded dict, miss=INCLUDE)
+    candidates = apply_float_filter(candidates)
 
-    # 7. Select top N
+    # 6a. Fetch prior day AH bars — gap = price vs last 16h traded price, not prior close
+    qualified = [c for c in candidates if c.get('passed_float', True)]
+    qualified.sort(key=lambda x: -x['gap_pct'])
+    ah_tickers = [c['ticker'] for c in qualified[:PRE_FILTER_N]]
+    ah_prices = {}
+    if ah_tickers:
+        t_ah = time.time()
+        log.info(f"  [3b] Fetching prior day AH bars for {len(ah_tickers)} candidates...")
+        ah_prices = get_ah_reference_prices(ah_tickers, prior_str)
+        log.info(f"  [3b] AH reference: {time.time()-t_ah:.1f}s")
+
+        n_stale = 0
+        for c in candidates:
+            tk = c['ticker']
+            if tk in ah_prices:
+                ah_ref = ah_prices[tk]
+                c['ah_ref_price'] = round(ah_ref, 4)
+                old_gap = c['gap_pct']
+                fresh_gap = (c['open_price'] - ah_ref) / ah_ref
+                c['gap_pct_daily'] = old_gap
+                c['gap_pct'] = round(fresh_gap, 6)
+                if fresh_gap < GAP_MIN:
+                    c['passed_all'] = False
+                    n_stale += 1
+                    log.info(f"    {tk}: STALE gap — daily +{old_gap*100:.1f}% but AH ref ${ah_ref:.2f} "
+                             f"→ fresh gap {fresh_gap*100:+.1f}% < {GAP_MIN*100:.0f}%")
+        if n_stale > 0:
+            log.info(f"  AH filter: {n_stale} candidates excluded (gap happened in prior AH, not fresh)")
+
+    # 6b. Fetch scan-day minute bars, re-rank by gap at SCAN_TIME_ET, check gap erosion
+    qualified = [c for c in candidates if c.get('passed_all', False)]
+    qualified.sort(key=lambda x: -x['gap_pct'])
+    fetch_tickers = [c['ticker'] for c in qualified[:PRE_FILTER_N]]
+    if fetch_tickers:
+        t4 = time.time()
+        log.info(f"  [4] Fetching scan-day minute bars for {len(fetch_tickers)} candidates...")
+        bar_cache = fetch_minute_bars(fetch_tickers, scan_date_str)
+        log.info(f"  [4] Minute bars: {time.time()-t4:.1f}s")
+
+        n_reranked = 0
+        n_dropped = 0
+        n_eroded = 0
+        reranked = []
+        for c in candidates:
+            tk = c['ticker']
+            if not c.get('passed_all', False):
+                continue
+            if tk not in bar_cache:
+                n_dropped += 1
+                continue
+            price_T = get_price_at_T(bar_cache[tk], SCAN_TIME_ET)
+            if price_T is None:
+                n_dropped += 1
+                continue
+            ref_price = c.get('ah_ref_price', c['prior_close'])
+
+            if mode == 'historical':
+                gap_T = (price_T - ref_price) / ref_price
+                if gap_T < GAP_MIN:
+                    continue
+                if price_T < PRICE_MIN:
+                    continue
+                c['gap_pct'] = round(gap_T, 6)
+                c['open_price'] = round(price_T, 4)
+
+            # Gap erosion: if intraday low consumed >50% of gap by scan time, skip
+            rth = bar_cache[tk].get('rth', [])
+            if rth:
+                daily_open = rth[0][1]['o']
+                scan_bars = [b for b in rth if b[0] <= SCAN_TIME_ET]
+                gap_range = daily_open - ref_price
+                if scan_bars and gap_range > 0:
+                    low_to_scan = min(b[1]['l'] for b in scan_bars)
+                    gap_consumed = (daily_open - low_to_scan) / gap_range
+                    c['gap_consumed'] = round(gap_consumed, 4)
+                    if gap_consumed > GAP_CONSUMED_MAX:
+                        n_eroded += 1
+                        log.info(f"    {tk}: gap eroded {gap_consumed*100:.0f}% consumed "
+                                 f"(open ${daily_open:.2f} → low ${low_to_scan:.2f}, "
+                                 f"ref ${ref_price:.2f})")
+                        continue
+
+            reranked.append(c)
+            n_reranked += 1
+
+        reranked.sort(key=lambda x: -x['gap_pct'])
+        candidates = reranked
+        n_gap_universe = len(candidates)
+        drop_msg = f"{n_dropped} no bar"
+        erode_msg = f"{n_eroded} eroded" if n_eroded else ""
+        log.info(f"  Re-ranked {n_reranked} by gap at {SCAN_TIME_ET} ET "
+                 f"({', '.join(m for m in [drop_msg, erode_msg] if m)})")
+
+    # 7. Select top N (walk top 30, CS-verify, take first)
     selected = select_top_n(candidates)
 
-    # 10. Write to DB
+    # 8. Persist scan pool (top 30 after gap+price+float for E2-B reuse)
+    if not dry_run:
+        persist_scan_pool(scan_date_str, candidates)
+
+    # 9. Write to DB
     runtime = time.time() - t_start
     if not dry_run:
         write_to_db(scan_date_str, candidates, selected, mode, runtime,
-                    spy_gap, n_gap_universe)
+                    spy_gap, n_gap_universe, variant='e2a')
     else:
         log.info("  DRY RUN — skipping DB write")
 
-    # 11. Print watchlist
-    print_watchlist(selected, scan_date_str)
+    # 10. Print watchlist
+    print_watchlist(selected, scan_date_str, variant='e2a')
 
-    # 12. Summary
+    # 11. Summary
     n_qualified = sum(1 for c in candidates if c.get('passed_all', False))
-    log.info(f"  Funnel: {n_gap_universe} gap >= 5% → "
+    log.info(f"  Funnel: {n_gap_universe} gap >= {GAP_MIN*100:.0f}% → "
              f"{sum(1 for c in candidates if c.get('passed_float', True))} after float → "
              f"{len(selected)} selected")
     log.info(f"  Total runtime: {runtime:.1f}s")
@@ -1105,15 +1367,177 @@ def run_scan(scan_date_str=None, dry_run=False):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SCANNER — E2-B (run at 7:30 PST / 10:30 ET)
+# Reads persisted 6:31 pool, fetches RTH bars, checks SD, selects
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def run_scan_e2b(scan_date_str=None, dry_run=False):
+    t_start = time.time()
+
+    if scan_date_str is None:
+        scan_date_str = datetime.now(ET).strftime('%Y-%m-%d')
+        mode = 'live'
+    else:
+        mode = 'historical'
+
+    log.info(f"{'='*_W}")
+    log.info(f"  AGENT 1-SD — E2-B Scanner (CS + sustained_drop, 7:30 PST)")
+    log.info(f"  Date: {scan_date_str}  |  Mode: {mode}  |  Dry run: {dry_run}")
+    log.info(f"{'='*_W}")
+
+    if not is_trading_day(scan_date_str):
+        log.info(f"  {scan_date_str} is not a trading day. Exiting.")
+        return
+
+    init_db()
+
+    # 1. Load persisted 6:31 scan pool
+    pool = load_scan_pool(scan_date_str)
+    if not pool:
+        log.error(f"  No scan pool for {scan_date_str}. Run with timestamp >= 06:31 PST first.")
+        return
+
+    # 2. Fetch minute bars for pool candidates (need 60+ RTH bars for SD classification)
+    tickers = [c['ticker'] for c in pool]
+    log.info(f"  Fetching minute bars for {len(tickers)} pool candidates...")
+    bar_data = fetch_minute_bars(tickers, scan_date_str)
+
+    # 3. Classify patterns + check SD + CS + find entry
+    n_sd = 0
+    n_no_sd = 0
+    n_no_data = 0
+    n_no_cs = 0
+
+    selected = []
+    for c in pool:
+        if len(selected) >= TOP_N:
+            break
+
+        tk = c['ticker']
+        bars = bar_data.get(tk)
+        if bars is None:
+            n_no_data += 1
+            continue
+
+        rth_bars = bars.get('rth', [])
+        pattern = classify_open_pattern(rth_bars)
+        c['open_pattern'] = pattern
+
+        if pattern != 'sustained_drop':
+            n_no_sd += 1
+            continue
+
+        # CS check (use cached result from E2-A if available)
+        if c.get('passed_cs') == 0:
+            n_no_cs += 1
+            continue
+        if c.get('passed_cs') is None:
+            if not _is_common_stock(tk):
+                n_no_cs += 1
+                continue
+            time.sleep(0.05)
+
+        n_sd += 1
+
+        # Attach PM summary
+        pm_summary = bars.get('pm_summary', {})
+        c['pm_high'] = pm_summary.get('pm_high')
+        c['pm_last'] = pm_summary.get('pm_last')
+        c['pm_retrace_pct'] = pm_summary.get('pm_retrace_pct')
+
+        c['selection_rank'] = len(selected) + 1
+        c['selected'] = True
+        selected.append(c)
+
+    log.info(f"  SD filter: {n_sd} sustained_drop (selected), "
+             f"{n_no_sd} other pattern, {n_no_cs} non-CS, {n_no_data} no bar data")
+
+    # 4. Write to DB
+    runtime = time.time() - t_start
+    spy_gap = None
+    if not dry_run:
+        write_to_db(scan_date_str, pool, selected, mode, runtime,
+                    spy_gap, len(pool), variant='e2b')
+    else:
+        log.info("  DRY RUN — skipping DB write")
+
+    # 5. Print watchlist
+    print_watchlist(selected, scan_date_str, variant='e2b')
+
+    # 6. Summary
+    log.info(f"  Funnel: {len(pool)} pool → {n_sd} SD+CS → {len(selected)} selected")
+    log.info(f"  Total runtime: {runtime:.1f}s")
+
+    # 7. Print pattern breakdown for all pool candidates
+    pat_counts = defaultdict(int)
+    for c in pool:
+        pat_counts[c.get('open_pattern', 'not_checked')] += 1
+    if pat_counts:
+        print(f"\n  Pattern breakdown (pool of {len(pool)}):")
+        for pat in ['sustained_drop', 'drop_then_recover', 'mild_drop', 'flat_or_bounce', 'no_data', 'not_checked']:
+            if pat_counts.get(pat, 0) > 0:
+                print(f"    {pat:25s}  {pat_counts[pat]:>3d}")
+        print()
+
+    return selected
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DISPATCH
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _parse_scan_timestamp(ts):
+    if ts is None:
+        now_pst = datetime.now(PT)
+        return now_pst.strftime('%Y-%m-%d'), now_pst.hour, now_pst.minute
+    ts = ts.strip()
+    if ' ' in ts:
+        date_part, time_part = ts.split(' ', 1)
+        hh, mm = int(time_part.split(':')[0]), int(time_part.split(':')[1])
+    else:
+        date_part = ts
+        hh, mm = 23, 59
+    return date_part, hh, mm
+
 
 init_db()
 
 if MODE == 'scan':
-    run_scan(scan_date_str=SCAN_DATE, dry_run=DRY_RUN)
+    scan_date_str, pst_hour, pst_min = _parse_scan_timestamp(SCAN_TIMESTAMP)
+    pst_time = (pst_hour, pst_min)
+    is_live = SCAN_TIMESTAMP is None
+
+    print(f"\n  {'='*62}")
+    print(f"  |{'TIME MACHINE':^60}|")
+    print(f"  |{'':^60}|")
+    ts_display = f"{scan_date_str}  {pst_hour:02d}:{pst_min:02d} PST"
+    if is_live:
+        ts_display += '  (LIVE)'
+    print(f"  |  {ts_display:<58}|")
+    print(f"  {'='*62}")
+
+    run_e2b = pst_time >= E2B_READY_PST
+
+    # E2-A always runs (no time gate — data uses SCAN_TIME_ET regardless)
+    scan_date_arg = scan_date_str if not is_live else None
+    run_scan_e2a(scan_date_str=scan_date_arg, dry_run=DRY_RUN)
+
+    if run_e2b:
+        print(f"\n  {'─'*62}")
+        print(f"  E2-B (Agent 1-SD) — sustained_drop confirmed by 10:30 ET")
+        print(f"  {'─'*62}\n")
+        run_scan_e2b(scan_date_str=scan_date_arg, dry_run=DRY_RUN)
+    else:
+        print(f"\n  {'─'*62}")
+        print(f"  E2-B (Agent 1-SD): TOO EARLY — need 7:30 PST (10:30 ET)")
+        print(f"  Current: {pst_hour:02d}:{pst_min:02d} PST. SD requires 60 bars of RTH data.")
+        print(f"  Re-run at 07:30 PST or later to get E2-B output.")
+        print(f"  {'─'*62}\n")
+
 elif MODE == 'fill':
-    run_fill_outcomes(fill_date_str=SCAN_DATE)
+    scan_date_str, _, _ = _parse_scan_timestamp(SCAN_TIMESTAMP)
+    fill_date = scan_date_str if SCAN_TIMESTAMP else None
+    run_fill_outcomes(fill_date_str=fill_date)
 elif MODE == 'report':
     run_report(weeks=REPORT_WEEKS)
 else:

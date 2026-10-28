@@ -1,0 +1,41 @@
+{
+  "id": "H012",
+  "desc": "LONG post-offering stock T+1 to T+5",
+  "direction": "LONG",
+  "catalyst": "secondary_offering",
+  "entry": "T+1_open",
+  "exit": "T+5_close",
+  "filters": {
+    "gap_max": -0.03,
+    "offering_discount": "any"
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H012",
+    "n": 170,
+    "avg": -0.494,
+    "med": 0.765,
+    "std": 12.646,
+    "wr": 0.5294,
+    "sharpe": -0.0391,
+    "pf": 0.895,
+    "ci_lo": -2.368,
+    "ci_hi": 1.393,
+    "trimmed_mean": -0.082,
+    "max_loss": -42.45,
+    "max_gain": 38.001,
+    "max_dd_pct": -70.12
+  },
+  "trades_per_week": 18.48,
+  "avg_hold_hrs": 46.6,
+  "reasons": [
+    "avg=-0.49% <= 2.0%",
+    "Sharpe=-0.039 <= 0.2",
+    "CI_lo=-2.37 <= 0",
+    "maxDD=-70.1% > 35%",
+    "tpw=18.5 > 15"
+  ],
+  "n_trades": 170,
+  "run_date": "2026-10-07 00:14"
+}

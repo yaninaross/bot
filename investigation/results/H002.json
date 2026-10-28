@@ -1,0 +1,40 @@
+{
+  "id": "H002",
+  "desc": "A6 gap-down>=2% open entry T+1 open MOC",
+  "direction": "LONG",
+  "catalyst": "gap_down",
+  "entry": "open_9:30",
+  "exit": "T+1_open",
+  "filters": {
+    "gap_min": 0.02,
+    "pattern": "none"
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H002",
+    "n": 178,
+    "avg": 0.546,
+    "med": 0.406,
+    "std": 6.397,
+    "wr": 0.573,
+    "sharpe": 0.0854,
+    "pf": 1.267,
+    "ci_lo": -0.371,
+    "ci_hi": 1.41,
+    "trimmed_mean": 0.496,
+    "max_loss": -18.919,
+    "max_gain": 22.647,
+    "max_dd_pct": -13.67
+  },
+  "trades_per_week": 19.35,
+  "avg_hold_hrs": 8.9,
+  "reasons": [
+    "avg=0.55% <= 2.0%",
+    "Sharpe=0.085 <= 0.2",
+    "CI_lo=-0.37 <= 0",
+    "tpw=19.3 > 15"
+  ],
+  "n_trades": 178,
+  "run_date": "2026-10-07 00:14"
+}

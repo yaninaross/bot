@@ -11,7 +11,14 @@ the bot-RAG system in the parent directory.
 Changing any of these invalidates all prior backtest comparisons.
 
   Universe:    _FLOAT (217 tickers, float_cache.json)
-  Gap filter:  gap_pct >= 5% (gap-UP from prior close)
+  Gap filter:  gap_pct >= 3% (gap-UP vs AH reference price)
+  Gap calc:    gap = (open - ah_ref) / ah_ref, where ah_ref is
+               the last after-hours price (16:00-20:00 ET) on
+               the prior trading day. Falls back to prior close
+               if no AH data. Filters stale M&A/overnight gaps.
+  Gap erosion: if >50% of gap consumed by scan time, SKIP.
+               gap_consumed = (open - low_to_scan) / (open - ref)
+               Uses intraday LOW (not close) through SCAN_TIME_ET.
   Asset type:  CS only — exclude ETF, ETN, ADRC, FUND, PFD, UNIT
   Pattern:     sustained_drop (classified at bar 60 = 10:30 AM ET)
                rise_30m < -3% AND recovery_at_bar60 < 50%
@@ -48,6 +55,12 @@ Changing any of these invalidates all prior backtest comparisons.
 5. Gap consumed at entry: two separate skip logics exist —
    the 15% absolute drop AND the gap-fill % check.
    Do not merge them.
+6. Gap vs prior close missed stale gaps: M&A stocks (e.g. ACVA)
+   that moved in AH showed huge daily gap but zero fresh gap.
+   Fixed: gap now computed vs last AH price on prior trading day.
+7. Gap erosion not checked: stocks like TANH where gap already
+   faded by scan time were recommended. Fixed: skip if >50% of
+   gap consumed (intraday low vs open) by SCAN_TIME_ET.
 
 ## New Skip Logic Being Tested (E-GAP-FILL)
 In addition to the 15% absolute skip rule, test:
@@ -86,9 +99,35 @@ Every experiment must write a JSON file to results/ containing:
 - If PAVS, WOK, ELAB, VCIG appear in results → guards not working
 - Print entry type breakdown (local_high vs fallback) for every run
 
+## Agent 1 v2 — Multi-Strategy Scanner (agent1_v2.py)
+**Status: ACTIVE — runs alongside agent1.py**
+
+Five filter strategies from feature investigation, all sharing
+the same base pipeline (gap >= 3%, $10+, float 10M+, CS only,
+AH ref price, gap erosion, local high bars 3-11, exit 17:00 ET).
+
+| ID    | Filter                          | N | PostSh | Avg      | Worst  |
+|-------|---------------------------------|---|--------|----------|--------|
+| C5    | PM retrace >= 8% + bar0 red     | 1 | 0.948  | +14.64%  | -3.12% |
+| C3+C5 | C5 + skip T6 gap (15-30%)       | 1 | 0.849  | +14.34%  | -3.12% |
+| C7    | PM close < PM open (after 8:30) | 1 | 0.801  | +12.87%  | -3.12% |
+| C9    | bar1 close < bar0 open          | 2 | 0.628  | +8.33%   | -3.18% |
+| C3    | Skip T6 gap tier only           | 3 | 0.343  | +3.55%   | -24.89%|
+
+Run at 9:33 ET (6:33 PST). Outputs per-strategy picks with
+PRIMARY/BACKUP labels, PM signal metrics, cross-strategy
+agreement table, and action summary.
+
+For N=1 strategies (C5, C3+C5, C7), shows N=2 backup pick.
+No fallback entry — local high or skip.
+No stop loss for C5/C7 (natural tail protection).
+
 ## File Structure
-  agent1.py              main scanner (live trading, 6:10 AM PST)
+  agent1.py              main scanner (live trading, E2-A + E2-B)
+  agent1_v2.py           multi-strategy scanner (5 filters, 2026-10-13)
   agent1_backtest.py     backtest framework
+  agent1_trade_review.py N sweep for top 5 strategies (backtest)
+  agent1_feature_investigation.py  feature/filter ranking analysis
   experiments/           one new .py file per experiment
   results/               JSON results, one per experiment
   data/agent1.db         SQLite trade log

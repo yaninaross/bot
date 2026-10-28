@@ -1,0 +1,40 @@
+{
+  "id": "H016",
+  "desc": "LONG gap-down>=3% on vol_bull days open T+2",
+  "direction": "LONG",
+  "catalyst": "gap_down",
+  "entry": "open_9:30",
+  "exit": "T+2_close",
+  "filters": {
+    "gap_min": 0.03,
+    "regime": "vol_bull",
+    "spy_10d_vol_min": 0.12
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H016",
+    "n": 134,
+    "avg": -0.248,
+    "med": 0.518,
+    "std": 10.312,
+    "wr": 0.5522,
+    "sharpe": -0.024,
+    "pf": 0.936,
+    "ci_lo": -2.06,
+    "ci_hi": 1.446,
+    "trimmed_mean": -0.243,
+    "max_loss": -30.167,
+    "max_gain": 33.962,
+    "max_dd_pct": -31.45
+  },
+  "trades_per_week": 14.57,
+  "avg_hold_hrs": 18.5,
+  "reasons": [
+    "avg=-0.25% <= 2.0%",
+    "Sharpe=-0.024 <= 0.2",
+    "CI_lo=-2.06 <= 0"
+  ],
+  "n_trades": 134,
+  "run_date": "2026-10-07 00:14"
+}

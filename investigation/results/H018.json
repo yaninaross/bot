@@ -1,0 +1,41 @@
+{
+  "id": "H018",
+  "desc": "LONG 5-day loser gap-up>=3% hold T+5",
+  "direction": "LONG",
+  "catalyst": "multi_day_decline_reversal",
+  "entry": "open_9:30",
+  "exit": "T+5_close",
+  "filters": {
+    "lookback_days": 5,
+    "decline_thresh": 0.12,
+    "gap_min": 0.03
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H018",
+    "n": 23,
+    "avg": -5.026,
+    "med": -6.575,
+    "std": 12.961,
+    "wr": 0.3043,
+    "sharpe": -0.3878,
+    "pf": 0.322,
+    "ci_lo": -10.763,
+    "ci_hi": -0.257,
+    "trimmed_mean": -4.573,
+    "max_loss": -46.5,
+    "max_gain": 22.676,
+    "max_dd_pct": -33.97
+  },
+  "trades_per_week": 2.5,
+  "avg_hold_hrs": 45.5,
+  "reasons": [
+    "avg=-5.03% <= 2.0%",
+    "Sharpe=-0.388 <= 0.2",
+    "CI_lo=-10.76 <= 0",
+    "WR=30% < 50%"
+  ],
+  "n_trades": 23,
+  "run_date": "2026-10-07 00:14"
+}

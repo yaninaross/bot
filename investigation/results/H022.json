@@ -1,0 +1,41 @@
+{
+  "id": "H022",
+  "desc": "LONG multi_day_decline_reversal gap>=2% T+3_close",
+  "direction": "LONG",
+  "catalyst": "multi_day_decline_reversal",
+  "entry": "open_9:30",
+  "exit": "T+3_close",
+  "filters": {
+    "lookback_days": 3,
+    "decline_thresh": 0.1,
+    "gap_min": 0.02
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H022",
+    "n": 25,
+    "avg": 1.725,
+    "med": -1.349,
+    "std": 13.44,
+    "wr": 0.48,
+    "sharpe": 0.1284,
+    "pf": 1.409,
+    "ci_lo": -3.165,
+    "ci_hi": 6.993,
+    "trimmed_mean": 0.34,
+    "max_loss": -15.675,
+    "max_gain": 34.359,
+    "max_dd_pct": -9.33
+  },
+  "trades_per_week": 2.72,
+  "avg_hold_hrs": 29.4,
+  "reasons": [
+    "avg=1.73% <= 2.0%",
+    "Sharpe=0.128 <= 0.2",
+    "CI_lo=-3.17 <= 0",
+    "WR=48% < 50%"
+  ],
+  "n_trades": 25,
+  "run_date": "2026-10-07 00:14"
+}

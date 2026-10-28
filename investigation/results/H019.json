@@ -1,0 +1,40 @@
+{
+  "id": "H019",
+  "desc": "SHORT 5-day winner gap-down>=3% hold T+5",
+  "direction": "SHORT",
+  "catalyst": "multi_day_rise_reversal",
+  "entry": "open_9:30",
+  "exit": "T+5_close",
+  "filters": {
+    "lookback_days": 5,
+    "rise_thresh": 0.15,
+    "gap_min": 0.03
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H019",
+    "n": 32,
+    "avg": 1.191,
+    "med": -0.847,
+    "std": 16.984,
+    "wr": 0.5,
+    "sharpe": 0.0701,
+    "pf": 1.196,
+    "ci_lo": -4.697,
+    "ci_hi": 7.055,
+    "trimmed_mean": 0.846,
+    "max_loss": -29.742,
+    "max_gain": 39.245,
+    "max_dd_pct": -14.48
+  },
+  "trades_per_week": 3.48,
+  "avg_hold_hrs": 46.7,
+  "reasons": [
+    "avg=1.19% <= 2.0%",
+    "Sharpe=0.070 <= 0.2",
+    "CI_lo=-4.70 <= 0"
+  ],
+  "n_trades": 32,
+  "run_date": "2026-10-07 00:14"
+}

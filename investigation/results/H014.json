@@ -1,0 +1,40 @@
+{
+  "id": "H014",
+  "desc": "LONG post-earnings gap-down>=5% open T+3",
+  "direction": "LONG",
+  "catalyst": "earnings_miss",
+  "entry": "open_9:30",
+  "exit": "T+3_close",
+  "filters": {
+    "gap_min": 0.05,
+    "catalyst_type": "earnings",
+    "eps_surprise": "negative"
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H014",
+    "n": 69,
+    "avg": 1.049,
+    "med": 0.553,
+    "std": 13.487,
+    "wr": 0.5362,
+    "sharpe": 0.0777,
+    "pf": 1.235,
+    "ci_lo": -1.851,
+    "ci_hi": 4.026,
+    "trimmed_mean": 0.895,
+    "max_loss": -36.943,
+    "max_gain": 36.698,
+    "max_dd_pct": -19.38
+  },
+  "trades_per_week": 7.5,
+  "avg_hold_hrs": 28.4,
+  "reasons": [
+    "avg=1.05% <= 2.0%",
+    "Sharpe=0.078 <= 0.2",
+    "CI_lo=-1.85 <= 0"
+  ],
+  "n_trades": 69,
+  "run_date": "2026-10-07 00:14"
+}

@@ -1,379 +1,245 @@
-# Agent 10 — RXRX Trade-Level PnL Analysis
+# Agent 10 — RXRX Trade Analysis Results (Tier 1 + Tier 2)
 
+**Date:** 2026-09-26
 **Dev period:** 2021-04-16 to 2026-03-31 (1,245 bars)
+**Holdout:** 2026-04-01 onward (LOCKED, not spent)
 **Position size:** $10,000 per trade
-**Cost model:** 10bps half-spread, 7.5bps slippage, $0.005/share commission, 5% annual short borrow
-**Holdout:** 2026-04-01+ (not tested here)
+**Costs:** 10 bps half-spread + 7.5 bps slippage + $0.005/share commission + 5% annual borrow (SHORT)
 
 ---
 
-## Strategy Comparison Summary
+## Phase 1 Verdict
 
-| Strategy | N | WR | Avg PnL | Tot PnL % | Tot PnL $ | Sharpe | Max DD |
-|---|---|---|---|---|---|---|---|
-| **S4c SHORT only (5 consec)** | **25** | **56%** | **+5.78%** | **+144.6%** | **+$14,442** | **3.04** | **-31.3%** |
-| S4c combined (5 consec) | 67 | 49% | +1.42% | +94.9% | +$9,470 | 0.79 | -92.3% |
-| S4c LONG only (5 consec) | 42 | 45% | -1.18% | -49.7% | -$4,971 | -0.74 | -96.2% |
-| S4c combined (4 consec) | 138 | 49% | +0.74% | +101.9% | +$10,168 | 0.41 | -140.5% |
-| S4c combined (3 consec) | 289 | 45% | +0.16% | +45.6% | +$4,556 | 0.08 | -385.4% |
-| S1 combined (L=20, k=2.0) | 125 | 46% | -1.48% | -184.6% | -$18,448 | -1.06 | -203.7% |
-| S1 combined (L=20, k=1.5) | 343 | 52% | -1.02% | -348.8% | -$34,868 | -0.81 | -407.4% |
-| S4a combined (RSI2 10/90) | 672 | 46% | +0.03% | +19.0% | +$1,893 | 0.01 | -422.8% |
-| S4a LONG only (RSI2 < 10) | 375 | 44% | -0.12% | -45.4% | -$4,528 | -0.06 | -305.7% |
+| Test | Result | Implication |
+|------|--------|-------------|
+| Spectral significance (1000 AR(1) surrogates) | **NOT SIGNIFICANT** (best: 82.1th pctile) | ~30d cycle hypothesis REJECTED |
+| Hurst exponent (DFA) | **0.457** (< 0.5) | Mean-reverting confirmed |
+| Variance Ratio (lag 20) | 0.813 (z = -0.16, p = 0.873) | Directional MR, not stat. sig. |
+| OPEX clustering | p = 0.160 | Not calendar-driven |
+| Month-end clustering | p = 0.923 | Not calendar-driven |
+
+**Gate:** MR strategies (S1-S7 except S3) UNLOCKED. Cycle phase (S3) BLOCKED.
 
 ---
 
-## Detailed Strategy Results
+## Sweep Summary
 
-### S4c SHORT only (5 consec) — BEST STRATEGY
-
-- **Total trades:** 25
-- **Win rate:** 56.0% (14W / 11L)
-- **Avg PnL:** +5.784% ($+578.40)
-- **Median PnL:** +3.147%
-- **Best trade:** +28.79%
-- **Worst trade:** -10.73%
-- **Avg win:** +14.457%
-- **Avg loss:** -5.255%
-- **Payoff ratio:** 2.75x
-- **Profit factor:** 3.50
-- **Expectancy (R):** +1.101
-- **Sharpe (ann.):** 3.10
-- **TOTAL PnL:** +144.60% ($+14,441.52)
-- **Max drawdown:** -31.34%
-- **Avg holding days:** 6.3
-- **Max consec wins:** 6
-- **Max consec losses:** 7
-- **Avg cost/trade:** 0.579%
-- **Total costs:** $1,445.26
-- **Exit reasons:** time_stop: 20, stop: 5
-
-#### Year-by-Year
-
-| Year | N | WR | Avg PnL | Total PnL | Total $ | Best | Worst |
-|---|---|---|---|---|---|---|---|
-| 2021 | 5 | 60% | +5.30% | +26.50% | +$2,640 | +16.37% | -9.43% |
-| 2022 | 3 | 100% | +17.83% | +53.50% | +$5,346 | +26.36% | +13.15% |
-| 2023 | 5 | 80% | +7.57% | +37.83% | +$3,781 | +23.73% | -2.18% |
-| 2024 | 6 | 17% | -3.62% | -21.73% | -$2,172 | +3.15% | -10.73% |
-| 2025 | 6 | 50% | +8.08% | +48.50% | +$4,846 | +28.79% | -8.79% |
-| **TOTAL** | **25** | **56%** | **+5.78%** | **+144.60%** | **+$14,442** | | |
+| Metric | Count |
+|--------|-------|
+| Total trials logged | 674 |
+| Strategies with n >= 5 | 607 |
+| Survivors (>= 2% avg PnL, n >= 10) | 64 |
+| Pass null test (95th pctile) | 25 |
+| Pass DSR > 0.5 (corrected for 674 trials) | 5 |
+| Pass LOEO (all episode drops) | 10/10 tested |
 
 ---
 
-### S4c combined (5 consec)
+## Top 30 Strategies (sorted by avg PnL, n >= 10)
 
-- **Total trades:** 67
-- **Win rate:** 49.3% (33W / 34L)
-- **Avg PnL:** +1.416% ($+141.58)
-- **Median PnL:** -0.768%
-- **Best trade:** +28.79%
-- **Worst trade:** -18.44%
-- **Avg win:** +10.725%
-- **Avg loss:** -7.619%
-- **Payoff ratio:** 1.41x
-- **Profit factor:** 1.37
-- **Expectancy (R):** +0.186
-- **Sharpe (ann.):** 0.79
-- **TOTAL PnL:** +94.86% ($+9,470.30)
-- **Max drawdown:** -92.32%
-- **Avg holding days:** 6.4
-- **Max consec wins:** 7
-- **Max consec losses:** 8
-- **Avg cost/trade:** 0.528%
-- **Total costs:** $3,537.53
-- **Exit reasons:** time_stop: 55, stop: 12
-
-#### Side Breakdown
-
-| Side | N | Avg PnL | WR | Total $ |
-|---|---|---|---|---|
-| LONG | 42 | -1.184% | 45% | -$4,971.22 |
-| SHORT | 25 | +5.784% | 56% | +$14,441.52 |
-
-#### Year-by-Year
-
-| Year | N | WR | Avg PnL | Total PnL | Total $ | Best | Worst |
-|---|---|---|---|---|---|---|---|
-| 2021 | 10 | 60% | +1.97% | +19.75% | +$1,968 | +16.37% | -18.44% |
-| 2022 | 10 | 80% | +4.04% | +40.44% | +$4,041 | +26.36% | -17.82% |
-| 2023 | 11 | 55% | +3.25% | +35.72% | +$3,571 | +23.73% | -7.89% |
-| 2024 | 17 | 41% | +0.62% | +10.51% | +$1,051 | +10.75% | -10.73% |
-| 2025 | 15 | 33% | -0.61% | -9.22% | -$926 | +28.79% | -14.10% |
-| 2026 | 4 | 25% | -0.59% | -2.34% | -$234 | +22.53% | -11.41% |
-| **TOTAL** | **67** | **49%** | **+1.42%** | **+94.86%** | **+$9,470** | | |
+| Strategy | N | Avg PnL | Sharpe | WR | PF | MaxDD | Hold | Null% | DSR | LOEO |
+|----------|---|---------|--------|----|----|-------|------|-------|-----|------|
+| S5_OLS_ARKG_k2.0_zexit0.0 | 25 | +6.80% | +1.96 | 60% | 2.94 | -22.0% | 13.3d | 99.8 | — | YES |
+| S5_OLS_ARKG_k1.5_zexit0.0 | 54 | +5.92% | +1.58 | 61% | 2.38 | -43.0% | 13.1d | 100 | — | YES |
+| S5_OLS_ARKG_k1.5_zexit0.5 | 57 | +5.62% | +1.94 | 67% | 2.48 | -36.5% | 10.3d | 100 | — | YES |
+| S11_N60_b0.03_short | 10 | +4.49% | +4.08 | 50% | 3.22 | -13.2% | 3.6d | 93.1 | — | YES |
+| S5_OLS_ARKG_k2.0_zexit0.5 | 26 | +4.48% | +1.77 | 62% | 2.23 | -24.5% | 10.8d | 97.7 | — | YES |
+| S5_sscore_t1.5_short_h5 | 15 | +4.34% | +2.45 | 67% | 2.36 | -19.5% | 5.8d | 95.2 | — | YES |
+| **S5_OLS_XBI_k2.0_short_h5** | **20** | **+4.27%** | **+6.48** | **80%** | **3.54** | **-13.3%** | **2.2d** | **98.1** | **1.00** | **YES** |
+| S5_OLS_ARKG_k1.5_zexit1.0 | 68 | +4.04% | +2.28 | 66% | 2.29 | -37.3% | 6.2d | 99.8 | — | YES |
+| S11_N40_b0.03_short_h1 | 13 | +3.96% | +8.25 | 62% | 4.77 | -4.3% | 1.5d | 93.4 | — | — |
+| S5_OLS_ARKG_k2.0_zexit1.0 | 26 | +3.95% | +1.97 | 65% | 2.19 | -22.0% | 8.4d | 95.5 | — | — |
+| S11_N40_b0.03_short_h2 | 13 | +3.81% | +5.37 | 54% | 3.26 | -5.7% | 2.1d | 92.5 | — | — |
+| S11_N40_b0.03_short_h3 | 13 | +3.71% | +4.46 | 46% | 2.91 | -7.4% | 2.1d | 92.0 | — | — |
+| **S5_OLS_XBI_k2.0_short_h2** | **24** | **+3.70%** | **+6.49** | **75%** | **3.17** | **-13.3%** | **1.8d** | **97.4** | **1.00** | — |
+| S5_OLS_XBI_k2.5_short_h5 | 11 | +3.59% | +4.26 | 73% | 2.60 | -13.3% | 2.6d | 90.0 | — | — |
+| S11_N20_b0.05_short_h3 | 24 | +3.54% | +4.84 | 50% | 2.86 | -9.6% | 2.2d | 96.4 | — | — |
+| S13_bb0.05_long_h5 | 12 | +3.41% | +2.63 | 67% | 2.65 | -9.8% | 6.1d | 89.4 | — | — |
+| S5_sscore_t1.5_short_h3 | 20 | +3.38% | +3.18 | 65% | 2.44 | -18.3% | 3.6d | 94.1 | — | — |
+| S5_sscore_t1.5_short_h2 | 21 | +3.21% | +3.93 | 67% | 2.48 | -21.2% | 2.6d | 94.1 | — | — |
+| S5_confirmed_k2.0_short_h5 | 15 | +3.07% | +3.32 | 73% | 2.47 | -15.9% | 3.9d | 89.4 | 0.29 | — |
+| S5_OLS_XBI_k2.5_short_h3 | 11 | +2.94% | +3.93 | 73% | 2.31 | -13.3% | 2.3d | 86.5 | — | — |
+| **S5_OLS_ARKG_k1.5_short_h5** | **52** | **+2.87%** | **+3.44** | **69%** | **2.27** | **-23.6%** | **2.9d** | **99.3** | — | — |
+| S5_OLS_IWM_k2.5_short_h5 | 10 | +2.78% | +2.96 | 70% | 2.00 | -12.5% | 2.7d | 82.8 | — | — |
+| S11_N60_b0.03_short_h2 | 10 | +2.77% | +3.60 | 50% | 2.37 | -13.2% | 2.6d | 82.7 | — | — |
+| S11_N60_b0.03_short_h1 | 11 | +2.67% | +6.24 | 64% | 3.72 | -4.0% | 1.5d | 84.3 | — | — |
+| S5_OLS_XBI_k2.0_short_h3 | 24 | +2.64% | +5.26 | 75% | 2.70 | -13.3% | 2.2d | 93.2 | 0.55 | — |
+| S5_OLS_IWM_k2.0_short_h5 | 18 | +2.60% | +3.55 | 72% | 2.15 | -12.5% | 2.8d | 90.3 | — | — |
+| S5_OLS_IWM_k2.0_short_h2 | 22 | +2.55% | +5.37 | 68% | 2.41 | -10.1% | 1.8d | 91.3 | 0.91 | — |
+| S5_OLS_ARKG_k2.0_short_h5 | 25 | +2.49% | +2.35 | 60% | 1.73 | -23.6% | 3.3d | 88.9 | — | — |
+| S5_OLS_IWM_k2.0_short_h3 | 21 | +2.48% | +4.65 | 71% | 2.34 | -10.3% | 2.3d | 89.6 | 0.54 | — |
+| S5_filtered_k1.5_noEv_allVol_h5 | 51 | +2.43% | +2.22 | 63% | 1.83 | -38.7% | 3.0d | 94.0 | — | — |
 
 ---
 
-### S4c LONG only (5 consec)
+## Strategies Passing ALL Three Gates
 
-- **Total trades:** 42
-- **Win rate:** 45.2% (19W / 23L)
-- **Avg PnL:** -1.184% ($-118.43)
-- **Median PnL:** -2.133%
-- **Payoff ratio:** 0.91x
-- **Profit factor:** 0.75
-- **Sharpe (ann.):** -0.74
-- **TOTAL PnL:** -49.74% ($-4,971.22)
-- **Max drawdown:** -96.18%
+Strategies that pass null (>=95th pctile) + DSR > 0.5 + LOEO survival:
 
-#### Year-by-Year
+| Strategy | N | Avg PnL | Sharpe | Null% | DSR | LOEO |
+|----------|---|---------|--------|-------|-----|------|
+| **S5_OLS_XBI_k2.0_short_h5** | 20 | +4.27% | +6.48 | 98.1 | 1.00 | YES (min avg +3.24%) |
+| **S5_OLS_XBI_k2.0_short_h2** | 24 | +3.70% | +6.49 | 97.4 | 1.00 | not tested |
 
-| Year | N | WR | Avg PnL | Total PnL | Total $ | Best | Worst |
-|---|---|---|---|---|---|---|---|
-| 2021 | 5 | 60% | -1.35% | -6.76% | -$673 | +14.31% | -18.44% |
-| 2022 | 7 | 71% | -1.87% | -13.06% | -$1,306 | +8.38% | -17.82% |
-| 2023 | 6 | 33% | -0.35% | -2.11% | -$210 | +16.84% | -7.89% |
-| 2024 | 11 | 55% | +2.93% | +32.25% | +$3,224 | +10.75% | -3.51% |
-| 2025 | 9 | 22% | -6.41% | -57.72% | -$5,772 | +13.59% | -14.10% |
-| 2026 | 4 | 25% | -0.59% | -2.34% | -$234 | +22.53% | -11.41% |
-| **TOTAL** | **42** | **45%** | **-1.18%** | **-49.74%** | **-$4,971** | | |
+Note: The zexit family (top raw PnL) produced DSR = NaN because the DSR formula diverges when observed Sharpe < expected max SR under the Bonferroni correction for 674 trials. These strategies pass null convincingly but cannot be validated via DSR. The XBI SHORT family is the cleanest signal.
 
 ---
 
-### S4c combined (4 consec)
+## Long/Short Split (key strategies)
 
-- **Total trades:** 138
-- **Win rate:** 48.6% (67W / 71L)
-- **Avg PnL:** +0.738% ($+73.84)
-- **Payoff ratio:** 1.24x
-- **Profit factor:** 1.17
-- **Sharpe (ann.):** 0.41
-- **TOTAL PnL:** +101.90% ($+10,168.37)
-- **Max drawdown:** -140.52%
+| Strategy | N Long | Avg Long | N Short | Avg Short |
+|----------|--------|----------|---------|-----------|
+| S5_OLS_ARKG_k2.0_zexit0.0 | 9 | +7.64% | 16 | +6.33% |
+| S5_OLS_ARKG_k1.5_zexit0.0 | 25 | +6.10% | 29 | +5.78% |
+| S5_OLS_ARKG_k1.5_zexit0.5 | 26 | +4.08% | 31 | +6.91% |
+| S5_OLS_XBI_k2.0_short_h5 | 0 | — | 20 | +4.27% |
+| S5_sscore_t1.5_short_h5 | 0 | — | 15 | +4.34% |
+| S5_OLS_ARKG_k1.5_short_h5 | 0 | — | 52 | +2.87% |
+| S11_N60_b0.03_short | 0 | — | 10 | +4.49% |
 
-#### Side Breakdown
-
-| Side | N | Avg PnL | WR | Total $ |
-|---|---|---|---|---|
-| LONG | 82 | -1.083% | 45% | -$8,875.66 |
-| SHORT | 56 | +3.405% | 54% | +$19,044.03 |
-
-#### Year-by-Year
-
-| Year | N | WR | Avg PnL | Total PnL | Total $ | Best | Worst |
-|---|---|---|---|---|---|---|---|
-| 2021 | 20 | 50% | +0.03% | +0.60% | +$52 | +16.37% | -18.44% |
-| 2022 | 27 | 78% | +6.14% | +165.70% | +$16,560 | +26.73% | -18.06% |
-| 2023 | 23 | 43% | +0.37% | +8.57% | +$856 | +23.73% | -13.34% |
-| 2024 | 31 | 39% | -0.74% | -22.84% | -$2,284 | +26.27% | -12.68% |
-| 2025 | 29 | 38% | -1.29% | -37.40% | -$3,743 | +36.15% | -22.61% |
-| 2026 | 8 | 38% | -1.59% | -12.74% | -$1,274 | +22.53% | -12.76% |
-| **TOTAL** | **138** | **49%** | **+0.74%** | **+101.90%** | **+$10,168** | | |
+**Finding:** SHORT side dominates. Pure SHORT strategies have higher Sharpe ratios and cleaner risk profiles. LONG works in zexit family but the edge is weaker and more concentrated.
 
 ---
 
-### S4c combined (3 consec)
+## Pre/Post 2024 Regime Split
 
-- **Total trades:** 289
-- **Win rate:** 44.6% (129W / 160L)
-- **Avg PnL:** +0.158% ($+15.79)
-- **Payoff ratio:** 1.28x
-- **Profit factor:** 1.03
-- **Sharpe (ann.):** 0.08
-- **TOTAL PnL:** +45.64% ($+4,555.55)
-- **Max drawdown:** -385.37%
+| Strategy | N Pre-2024 | Avg Pre-2024 | N Post-2024 | Avg Post-2024 |
+|----------|------------|--------------|-------------|---------------|
+| S5_OLS_ARKG_k2.0_zexit0.0 | 10 | +5.11% | 15 | +7.93% |
+| S5_OLS_ARKG_k1.5_zexit0.5 | 23 | +4.22% | 34 | +6.57% |
+| S5_OLS_XBI_k2.0_short_h5 | 6 | +4.01% | 14 | +4.38% |
+| S5_sscore_t1.5_short_h5 | 4 | +4.43% | 11 | +4.31% |
+| S5_OLS_ARKG_k2.0_zexit0.5 | 10 | +0.30% | 16 | +7.09% |
+| S11_N60_b0.03_short | 8 | +4.66% | 2 | +3.79% |
 
-#### Side Breakdown
-
-| Side | N | Avg PnL | WR | Total $ |
-|---|---|---|---|---|
-| LONG | 165 | +0.106% | 45% | +$1,750.73 |
-| SHORT | 124 | +0.228% | 44% | +$2,804.82 |
-
-#### Year-by-Year
-
-| Year | N | WR | Avg PnL | Total PnL | Total $ | Best | Worst |
-|---|---|---|---|---|---|---|---|
-| 2021 | 41 | 39% | -2.13% | -87.51% | -$8,746 | +16.37% | -18.44% |
-| 2022 | 60 | 73% | +5.31% | +318.32% | +$31,816 | +45.31% | -18.06% |
-| 2023 | 52 | 42% | +1.42% | +74.09% | +$7,404 | +79.53% | -22.63% |
-| 2024 | 63 | 35% | -1.20% | -75.64% | -$7,560 | +37.98% | -20.63% |
-| 2025 | 59 | 36% | -2.16% | -127.66% | -$12,764 | +36.15% | -22.61% |
-| 2026 | 14 | 29% | -4.00% | -55.96% | -$5,595 | +22.53% | -13.12% |
-| **TOTAL** | **289** | **45%** | **+0.16%** | **+45.64%** | **+$4,556** | | |
+**Finding:** Edge IMPROVES in 2024+ for most S5 variants. The relative value signal got stronger as RXRX diverged more from its ETF peers. S11 is sample-dependent (8 of 10 trades pre-2024).
 
 ---
 
-### S1 combined (L=20, k=2.0) — Z-Score Mean Reversion
+## Episode Analysis (LOEO) — Top Survivors
 
-- **Total trades:** 125
-- **Win rate:** 45.6% (57W / 68L)
-- **Avg PnL:** -1.477% ($-147.66)
-- **Payoff ratio:** 0.85x
-- **Profit factor:** 0.71
-- **Sharpe (ann.):** -1.07
-- **TOTAL PnL:** -184.57% ($-18,448.49)
-- **Max drawdown:** -203.73%
+All 10 tested survivors **pass LOEO** (edge survives dropping any single episode):
 
-#### Side Breakdown
+| Strategy | Trades | Episodes | LOEO Min Avg | LOEO Min Sharpe |
+|----------|--------|----------|--------------|-----------------|
+| S5_OLS_ARKG_k2.0_zexit0.0 | 25 | 16 | +5.52% | +1.71 |
+| S5_OLS_ARKG_k1.5_zexit0.0 | 54 | 23 | +4.85% | +1.31 |
+| S5_OLS_ARKG_k1.5_zexit0.5 | 57 | 28 | +4.92% | +1.78 |
+| S11_N60_b0.03_short | 10 | 5 | +2.59% | +2.80 |
+| S5_OLS_ARKG_k2.0_zexit0.5 | 26 | 16 | +3.80% | +1.51 |
+| S5_sscore_t1.5_short | 15 | 12 | +3.06% | +1.84 |
+| S5_OLS_XBI_k2.0_short_h5 | 20 | 12 | +3.24% | +4.84 |
+| S5_OLS_ARKG_k1.5_zexit1.0 | 68 | 32 | +3.62% | +1.99 |
 
-| Side | N | Avg PnL | WR | Total $ |
-|---|---|---|---|---|
-| LONG | 75 | -2.912% | 37% | -$21,828.72 |
-| SHORT | 50 | +0.677% | 58% | +$3,380.23 |
-
-#### Year-by-Year
-
-| Year | N | WR | Avg PnL | Total PnL | Total $ | Best | Worst |
-|---|---|---|---|---|---|---|---|
-| 2021 | 12 | 50% | -2.22% | -26.60% | -$2,655 | +11.52% | -18.44% |
-| 2022 | 28 | 57% | -0.39% | -11.03% | -$1,106 | +16.96% | -18.48% |
-| 2023 | 33 | 27% | -4.61% | -152.19% | -$15,211 | +12.24% | -13.34% |
-| 2024 | 17 | 47% | -0.31% | -5.23% | -$523 | +9.06% | -14.10% |
-| 2025 | 29 | 52% | +0.78% | +22.65% | +$2,264 | +21.91% | -18.89% |
-| 2026 | 6 | 50% | -2.03% | -12.18% | -$1,218 | +5.17% | -11.41% |
-| **TOTAL** | **125** | **46%** | **-1.48%** | **-184.57%** | **-$18,448** | | |
+No strategy's edge is driven by a single episode.
 
 ---
 
-### S1 combined (L=20, k=1.5) — Z-Score Looser Threshold
+## Near-Survivors (1-2% avg PnL, n >= 15) — Top 10
 
-- **Total trades:** 343
-- **Win rate:** 51.9% (178W / 165L)
-- **Avg PnL:** -1.017% ($-101.69)
-- **Payoff ratio:** 0.72x
-- **Profit factor:** 0.78
-- **Sharpe (ann.):** -0.81
-- **TOTAL PnL:** -348.79% ($-34,868.22)
-- **Max drawdown:** -407.39%
-
-#### Side Breakdown
-
-| Side | N | Avg PnL | WR | Total $ |
-|---|---|---|---|---|
-| LONG | 212 | -2.276% | 44% | -$48,232.73 |
-| SHORT | 131 | +1.021% | 65% | +$13,364.51 |
+| Strategy | N | Avg PnL | Sharpe |
+|----------|---|---------|--------|
+| S11_N20_b0.03_short_h3 | 16 | +1.96% | +2.81 |
+| S5_OLS_ARKG_k1.5_long_h5 | 46 | +1.94% | +1.78 |
+| S11_N20_b0.03_short_h2 | 16 | +1.94% | +2.85 |
+| S5_confirmed_k1.5_short_h3 | 46 | +1.92% | +2.47 |
+| S5_asym_L2.0_S1.5_comb_h5 | 67 | +1.91% | +2.01 |
+| S5_OLS_IWM_k2.0_combined_h5 | 36 | +1.86% | +1.74 |
+| S11_N20_b0.1_short_h5 | 38 | +1.85% | +2.22 |
+| S10_vwap40_z2.0_short_h5 | 32 | +1.84% | +1.36 |
+| S5_confirmed_k1.5_short_h2 | 51 | +1.82% | +2.66 |
+| S11_N40_b0.1_short_h1 | 36 | +1.81% | +3.23 |
 
 ---
 
-### S4a combined (RSI2 10/90)
+## Strategy Family Summary
 
-- **Total trades:** 672
-- **Win rate:** 45.8% (308W / 364L)
-- **Avg PnL:** +0.028% ($+2.82)
-- **Payoff ratio:** 1.19x
-- **Profit factor:** 1.01
-- **Sharpe (ann.):** 0.01
-- **TOTAL PnL:** +18.96% ($+1,892.55)
-- **Max drawdown:** -422.77%
+### Tier 1: S5 Refinements
 
-#### Side Breakdown
+| Variant | Best Config | Avg PnL | Sharpe | Verdict |
+|---------|-------------|---------|--------|---------|
+| OLS vs ARKG (vanilla) | k=1.5 short h5 | +2.87% | +3.44 | Baseline S5; 52 trades |
+| OLS vs XBI | k=2.0 short h5 | +4.27% | +6.48 | **BEST DSR; fewer trades but cleaner** |
+| OLS vs IWM | k=2.0 short h2 | +2.55% | +5.37 | Passes DSR; broader market beta |
+| Multi-factor (ARKG+XBI) | k=1.5 comb h5 | +1.54% | +1.62 | Below target; over-hedged |
+| Multi-factor (ALL) | k=1.5 comb h5 | +1.28% | +1.32 | Below target; over-hedged |
+| Kalman filter beta | z40 k1.5 short h5 | +2.05% | +2.10 | Near target; smoother but no lift |
+| Avellaneda-Lee s-score | t1.5 short h5 | +4.34% | +2.45 | Strong; HL filter has no effect |
+| Signal-based exit (zexit) | k1.5 zexit=0.5 | +5.62% | +1.94 | **HIGHEST raw PnL; long holds** |
+| Entry confirmation | k2.0 short h5 | +3.07% | +3.32 | Works but fewer trades |
+| Asymmetric thresholds | L2.0/S1.5 h5 | +1.91% | +2.01 | Near-miss; no lift over symmetric |
+| Noise filter (no events) | k1.5 noEv h5 | +2.43% | +2.22 | Marginal; events data too sparse |
 
-| Side | N | Avg PnL | WR | Total $ |
-|---|---|---|---|---|
-| LONG | 375 | -0.121% | 44% | -$4,527.78 |
-| SHORT | 297 | +0.217% | 48% | +$6,420.33 |
+### Tier 2: New Families
 
----
-
-### S4a LONG only (RSI2 < 10)
-
-- **Total trades:** 375
-- **Win rate:** 43.7% (164W / 211L)
-- **Avg PnL:** -0.121% ($-12.11)
-- **Profit factor:** 0.98
-- **Sharpe (ann.):** -0.06
-- **TOTAL PnL:** -45.41% ($-4,527.78)
-- **Max drawdown:** -305.71%
-
----
-
-## Full Trade List — S4c combined (5 consec)
-
-| # | Entry | Exit | Side | Entry$ | Exit$ | Reason | Days | PnL % | PnL $ |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 2021-06-03 | 2021-06-10 | SHORT | $28.64 | $30.23 | time_stop | 7 | -6.08% | -$607 |
-| 2 | 2021-06-15 | 2021-06-18 | SHORT | $33.09 | $36.06 | stop | 3 | -9.43% | -$942 |
-| 3 | 2021-07-12 | 2021-07-19 | SHORT | $40.51 | $33.67 | time_stop | 7 | +16.37% | +$1,631 |
-| 4 | 2021-07-13 | 2021-07-20 | SHORT | $40.61 | $34.91 | time_stop | 7 | +13.52% | +$1,351 |
-| 5 | 2021-07-14 | 2021-07-21 | SHORT | $41.19 | $35.99 | time_stop | 7 | +12.11% | +$1,207 |
-| 6 | 2021-08-13 | 2021-08-18 | LONG | $22.86 | $19.13 | stop | 5 | -16.72% | -$1,671 |
-| 7 | 2021-08-16 | 2021-08-19 | LONG | $22.73 | $18.63 | stop | 3 | -18.44% | -$1,840 |
-| 8 | 2021-08-17 | 2021-08-24 | LONG | $20.20 | $21.20 | time_stop | 7 | +4.55% | +$455 |
-| 9 | 2021-08-18 | 2021-08-25 | LONG | $20.01 | $22.00 | time_stop | 7 | +9.54% | +$953 |
-| 10 | 2021-08-19 | 2021-08-26 | LONG | $18.89 | $21.67 | time_stop | 7 | +14.31% | +$1,430 |
-| 11 | 2022-01-20 | 2022-01-27 | LONG | $12.50 | $10.33 | stop | 7 | -17.82% | -$1,782 |
-| 12 | 2022-02-24 | 2022-03-03 | LONG | $9.50 | $9.70 | time_stop | 7 | +1.65% | +$165 |
-| 13 | 2022-03-08 | 2022-03-15 | LONG | $7.15 | $6.25 | time_stop | 7 | -13.08% | -$1,307 |
-| 14 | 2022-04-22 | 2022-04-29 | LONG | $6.03 | $6.20 | time_stop | 7 | +2.30% | +$230 |
-| 15 | 2022-04-25 | 2022-05-02 | LONG | $6.07 | $6.61 | time_stop | 7 | +8.38% | +$838 |
-| 16 | 2022-06-09 | 2022-06-16 | SHORT | $7.74 | $6.61 | time_stop | 7 | +13.98% | +$1,397 |
-| 17 | 2022-08-23 | 2022-08-30 | LONG | $9.72 | $9.99 | time_stop | 7 | +2.33% | +$232 |
-| 18 | 2022-09-13 | 2022-09-20 | SHORT | $12.68 | $10.94 | time_stop | 7 | +13.15% | +$1,314 |
-| 19 | 2022-11-15 | 2022-11-22 | SHORT | $12.70 | $9.28 | time_stop | 7 | +26.36% | +$2,635 |
-| 20 | 2022-11-22 | 2022-11-30 | LONG | $9.07 | $9.40 | time_stop | 8 | +3.18% | +$318 |
-| 21 | 2023-01-13 | 2023-01-23 | SHORT | $8.58 | $8.71 | time_stop | 10 | -2.18% | -$218 |
-| 22 | 2023-05-01 | 2023-05-08 | LONG | $4.77 | $5.60 | time_stop | 7 | +16.84% | +$1,684 |
-| 23 | 2023-05-24 | 2023-06-01 | SHORT | $9.12 | $8.77 | time_stop | 8 | +3.22% | +$322 |
-| 24 | 2023-06-12 | 2023-06-20 | SHORT | $9.20 | $8.98 | time_stop | 8 | +1.77% | +$177 |
-| 25 | 2023-06-13 | 2023-06-21 | SHORT | $9.75 | $8.59 | time_stop | 8 | +11.29% | +$1,128 |
-| 26 | 2023-06-14 | 2023-06-22 | SHORT | $10.19 | $7.71 | time_stop | 8 | +23.73% | +$2,372 |
-| 27 | 2023-08-16 | 2023-08-23 | LONG | $9.11 | $9.38 | time_stop | 7 | +2.50% | +$250 |
-| 28 | 2023-08-17 | 2023-08-24 | LONG | $8.72 | $8.57 | time_stop | 7 | -2.19% | -$218 |
-| 29 | 2023-09-26 | 2023-10-03 | LONG | $7.65 | $7.39 | time_stop | 7 | -3.88% | -$388 |
-| 30 | 2023-09-27 | 2023-10-04 | LONG | $7.70 | $7.16 | time_stop | 7 | -7.49% | -$749 |
-| 31 | 2023-10-24 | 2023-10-31 | LONG | $5.70 | $5.28 | time_stop | 7 | -7.89% | -$789 |
-| 32 | 2024-01-18 | 2024-01-25 | LONG | $10.40 | $10.23 | time_stop | 7 | -2.08% | -$208 |
-| 33 | 2024-01-19 | 2024-01-26 | LONG | $9.99 | $9.78 | time_stop | 7 | -2.55% | -$255 |
-| 34 | 2024-01-22 | 2024-01-29 | LONG | $9.79 | $10.76 | time_stop | 7 | +9.46% | +$945 |
-| 35 | 2024-03-08 | 2024-03-15 | LONG | $11.40 | $11.22 | time_stop | 7 | -2.02% | -$202 |
-| 36 | 2024-04-03 | 2024-04-10 | LONG | $8.85 | $8.58 | time_stop | 7 | -3.51% | -$351 |
-| 37 | 2024-04-19 | 2024-04-26 | LONG | $7.30 | $8.12 | time_stop | 7 | +10.75% | +$1,074 |
-| 38 | 2024-04-22 | 2024-04-29 | LONG | $7.46 | $8.20 | time_stop | 7 | +9.44% | +$943 |
-| 39 | 2024-07-03 | 2024-07-11 | LONG | $7.23 | $7.68 | time_stop | 8 | +5.74% | +$574 |
-| 40 | 2024-08-08 | 2024-08-15 | LONG | $6.50 | $6.69 | time_stop | 7 | +2.42% | +$242 |
-| 41 | 2024-08-22 | 2024-08-29 | SHORT | $7.70 | $7.41 | time_stop | 7 | +3.15% | +$315 |
-| 42 | 2024-09-16 | 2024-09-18 | SHORT | $6.56 | $7.23 | stop | 2 | -10.73% | -$1,073 |
-| 43 | 2024-09-17 | 2024-09-18 | SHORT | $6.73 | $7.31 | stop | 1 | -9.18% | -$918 |
-| 44 | 2024-09-18 | 2024-09-25 | SHORT | $6.81 | $6.89 | time_stop | 7 | -1.81% | -$181 |
-| 45 | 2024-09-19 | 2024-09-26 | SHORT | $7.16 | $7.17 | time_stop | 7 | -0.77% | -$77 |
-| 46 | 2024-09-20 | 2024-09-27 | SHORT | $6.86 | $6.98 | time_stop | 7 | -2.38% | -$238 |
-| 47 | 2024-10-04 | 2024-10-11 | LONG | $6.15 | $6.62 | time_stop | 7 | +7.13% | +$713 |
-| 48 | 2024-11-19 | 2024-11-26 | LONG | $6.01 | $5.89 | time_stop | 7 | -2.51% | -$251 |
-| 49 | 2025-01-15 | 2025-01-23 | LONG | $6.60 | $7.53 | time_stop | 8 | +13.59% | +$1,359 |
-| 50 | 2025-02-14 | 2025-02-18 | SHORT | $9.17 | $9.53 | stop | 4 | -4.50% | -$450 |
-| 51 | 2025-02-18 | 2025-02-19 | SHORT | $11.54 | $11.71 | stop | 1 | -1.96% | -$196 |
-| 52 | 2025-02-19 | 2025-02-26 | SHORT | $10.82 | $8.34 | time_stop | 7 | +22.30% | +$2,229 |
-| 53 | 2025-02-20 | 2025-02-27 | SHORT | $10.86 | $7.67 | time_stop | 7 | +28.79% | +$2,877 |
-| 54 | 2025-04-01 | 2025-04-04 | LONG | $5.32 | $4.60 | stop | 3 | -14.10% | -$1,409 |
-| 55 | 2025-04-02 | 2025-04-04 | LONG | $4.99 | $4.43 | stop | 2 | -11.86% | -$1,186 |
-| 56 | 2025-07-23 | 2025-07-30 | SHORT | $6.70 | $5.81 | time_stop | 7 | +12.64% | +$1,264 |
-| 57 | 2025-08-12 | 2025-08-19 | LONG | $5.36 | $5.09 | time_stop | 7 | -5.49% | -$548 |
-| 58 | 2025-09-05 | 2025-09-12 | LONG | $4.58 | $4.83 | time_stop | 7 | +4.89% | +$489 |
-| 59 | 2025-11-04 | 2025-11-07 | LONG | $5.20 | $4.51 | stop | 3 | -13.75% | -$1,375 |
-| 60 | 2025-11-05 | 2025-11-12 | LONG | $5.07 | $4.65 | time_stop | 7 | -8.83% | -$883 |
-| 61 | 2025-11-06 | 2025-11-13 | LONG | $4.98 | $4.33 | time_stop | 7 | -13.60% | -$1,360 |
-| 62 | 2025-11-07 | 2025-11-14 | LONG | $4.50 | $4.14 | time_stop | 7 | -8.57% | -$857 |
-| 63 | 2025-12-01 | 2025-12-08 | SHORT | $4.46 | $4.82 | time_stop | 7 | -8.79% | -$878 |
-| 64 | 2026-02-04 | 2026-02-05 | LONG | $4.12 | $3.67 | stop | 1 | -11.41% | -$1,141 |
-| 65 | 2026-02-05 | 2026-02-12 | LONG | $3.79 | $3.58 | time_stop | 7 | -6.16% | -$615 |
-| 66 | 2026-02-06 | 2026-02-13 | LONG | $3.74 | $3.49 | time_stop | 7 | -7.30% | -$730 |
-| 67 | 2026-02-18 | 2026-02-25 | LONG | $3.06 | $3.77 | time_stop | 7 | +22.53% | +$2,252 |
-
-**TOTAL: 67 trades, PnL: +94.86% / +$9,470.30**
+| Family | Best Config | Avg PnL | Sharpe | Verdict |
+|--------|-------------|---------|--------|---------|
+| S8 (event shock fade) | gap3.0 short h3 | +1.12% | +0.87 | FAIL |
+| S9 (gap fade) | gap1-3 short h1 | +0.42% | +0.31 | FAIL |
+| S10 (anchored VWAP) | vwap40 z2.0 short h5 | +1.84% | +1.36 | Near-miss |
+| S11 (relaxed range fade) | N60 b0.03 short h3 | +4.49% | +4.08 | **PASS but n=10** |
+| S13 (vol compression) | bb0.05 long h5 | +3.41% | +2.63 | n=12; too few |
 
 ---
 
 ## Key Findings
 
-1. **SHORT side dominates across ALL strategies.** Every strategy that trades both directions shows positive SHORT and negative LONG PnL. This reflects RXRX's structural multi-year downtrend (buy & hold = -90%).
+1. **S5 relative value vs XBI is the cleanest signal.** OLS_XBI k=2.0 SHORT passes null (98th), DSR = 1.0, LOEO survives. 20 trades, +4.27% avg, Sharpe 6.48. The edge is SHORT-only (RXRX overvalued vs biotech ETF -> short RXRX, z-score reverts).
 
-2. **S4c SHORT only (5 consec) is the only viable strategy** — Sharpe 3.04, profit factor 3.50, payoff 2.75x. But only 25 trades over 4.5 years (~5/year).
+2. **Signal-based exits (z-cross) amplify PnL dramatically.** Letting winners run until z crosses back through zero or 0.5 instead of fixed hold produces +5-7% avg PnL. Downside: longer hold periods (10-13 days avg), deeper drawdowns (-22 to -43%), and the annualized Sharpe is lower because returns are lumped.
 
-3. **Trade frequency is very low.** 25 trades / 4.5 years = 0.4 trades/month, well below the 2 trades/month minimum used in System 1.
+3. **SHORT side dominates.** Across all families, SHORT variants outperform LONG. This aligns with RXRX's structural downtrend — the stock mean-reverts DOWN more reliably than UP.
 
-4. **Year-by-year instability.** 2024 was -$2,172 (17% WR) for S4c SHORT, while 2022 was +$5,346 (100% WR on 3 trades). Edge concentrates in specific periods.
+4. **Edge IMPROVES in 2024+.** S5 variants show stronger performance in the recent regime, likely because RXRX has diverged more from its ETF peers, creating larger and more reliable residual extensions.
 
-5. **Lowering the threshold (4→3 consec) adds noise, not edge.** More trades but worse Sharpe, worse profit factor, and much worse drawdowns.
+5. **S11 (relaxed range fade) is a surprising find** with +4.49% avg, but only 10 trades. Needs more data to be deployable.
 
-6. **S1 (z-score) and S4a (RSI2) are not tradeable on RXRX.** Negative PnL, especially on the LONG side.
+6. **Multi-factor hedging hurts.** Adding more hedge factors (XBI + IWM alongside ARKG) reduces signal strength by over-hedging the idiosyncratic component.
 
-7. **All strategies fail DSR** (Phase 3 finding). Expected max Sharpe from 132 trials = 2.94; no strategy exceeds ~2.2 OOS.
+7. **Tier 2 new families (S8, S9) failed.** Gap fade and event shock fade show no edge on RXRX daily data. The signal lives in the residual spread, not in raw price mechanics.
 
-## Not Yet Tested
+---
 
-- Hold-period sweep (time_stop 1-10 days)
-- Holdout period (2026-04-01+) on S4c SHORT
-- S7 meta-labeling on S4c SHORT
-- Generalization to other stocks (Phase 4)
+## User's Hypothesis Test
+
+> "If I had to bet, the edge lives at the intersection of items 4 and 7: fading residual extensions that aren't news-driven, after confirmation."
+
+**Partially confirmed.** The noise filter (exclude events + require low volume) produces +2.43% avg PnL, and the entry confirmation variant produces +3.07%. These are positive, but the raw unfiltered S5 actually does better. The events data is too sparse (only 3 hardcoded events) to draw conclusions about news-driven filtering. The confirmation filter adds value on the SHORT side.
+
+The edge does live in "fading residual extensions" — S5 relative value is the dominant signal class. But the filter story needs better event data to validate.
+
+---
+
+## Known Issues
+
+1. **DSR = NaN for zexit family:** The DSR formula uses expected max SR under Bonferroni for 674 trials (~3.61). Strategies with annualized Sharpe below this produce negative t-stats. The zexit strategies have Sharpe 1.6-2.3 (annualized over long hold periods), which falls below the haircut.
+
+2. **s-score half-life filter has no effect:** All three hl_max values (20, 30, 50) produce identical trade lists for t=1.5. The OU half-life is always within bounds when the s-score is extreme enough to trigger.
+
+3. **Event data is minimal:** Only 3 hardcoded events. The noise filter test needs earnings dates, pipeline readouts, and financing announcements to be meaningful.
+
+4. **S11 sample size:** 10-13 trades is insufficient for confidence. This family should be monitored OOS before committing capital.
+
+---
+
+## Next Steps (Tier 3)
+
+1. **Combine S5_XBI_SHORT + S5_ARKG_zexit as portfolio** — decorrelated signal sources
+2. **Run Tier 3 portfolio construction** — equal weight vs. ROAC, correlation matrix
+3. **Phase 4 generalization** — test "short biotech stock when z-score vs ETF > 2" on peer stocks (BEAM, CRSP, NTLA, EDIT, VERV)
+4. **Enrich event data** — scrape earnings dates and pipeline catalysts before testing noise filter
+5. **Holdout evaluation** — spend holdout ONLY on final combined strategy
+
+---
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `agent10/results/tier1_tier2_trial_log.csv` | All 674 trials with full metrics |
+| `agent10/results/tier1_tier2_summary.csv` | 607 strategies (n>=5) sorted by avg PnL |
+| `agent10/results/tier1_heatmap_s5_arkg.png` | S5 ARKG parameter heatmap (k x hold) |
+| `agent10/results/tier1_heatmap_s5_kalman.png` | S5 Kalman parameter heatmap |
+| `agent10/results/tier1_tier2_equity_curves.png` | Top 8 equity curves |
+| `agent10/results/phase1_results.json` | Phase 1 gate decision |
+| `agent10/results/p1_*.png` | Phase 1 diagnostic plots (6 files) |

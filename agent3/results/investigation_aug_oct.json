@@ -1,0 +1,401 @@
+{
+  "R1": {
+    "label": "A6 Revalidation Aug-Oct",
+    "metrics": {
+      "label": "A6_AugOct",
+      "n": 11,
+      "avg": 0.31609090909090914,
+      "med": -1.929,
+      "std": 8.625697832112431,
+      "wr": 0.45454545454545453,
+      "sharpe": 0.03664525644686287,
+      "pf": 1.11177548461761,
+      "ci_lo": -4.781370763421261,
+      "ci_hi": 5.41355258160308,
+      "trimmed_mean": -0.7746666666666664,
+      "max_loss": -9.684,
+      "max_gain": 20.133
+    },
+    "phase1_ref": {
+      "n": 71,
+      "avg": 4.27,
+      "sharpe": 0.365
+    },
+    "delta_n": -60,
+    "delta_avg": -3.954,
+    "delta_sharpe": -0.328
+  },
+  "R2": {
+    "label": "C1 Revalidation Aug-Oct",
+    "metrics": {
+      "label": "C1_AugOct",
+      "n": 10,
+      "avg": 0.4254999999999999,
+      "med": -3.607,
+      "std": 12.978230758123818,
+      "wr": 0.4,
+      "sharpe": 0.03278567070736164,
+      "pf": 1.115208621016435,
+      "ci_lo": -7.618490762205315,
+      "ci_hi": 8.469490762205314,
+      "trimmed_mean": -2.009,
+      "max_loss": -14.032,
+      "max_gain": 34.359
+    },
+    "phase1_ref": {
+      "n": 176,
+      "avg": 6.41,
+      "sharpe": 0.454
+    },
+    "delta_n": -166,
+    "delta_avg": -5.985,
+    "delta_sharpe": -0.421,
+    "wedthu_metrics": {
+      "label": "C1_WedThu_AugOct",
+      "n": 1,
+      "avg": 34.359,
+      "med": 34.359,
+      "std": 0,
+      "wr": 1.0,
+      "sharpe": 0,
+      "pf": Infinity,
+      "ci_lo": 34.359,
+      "ci_hi": 34.359,
+      "trimmed_mean": 34.359,
+      "max_loss": 34.359,
+      "max_gain": 34.359
+    },
+    "wedthu_ref": {
+      "avg": 13.13,
+      "sharpe": 0.848
+    },
+    "wedthu_delta_avg": 21.229,
+    "wedthu_delta_sharpe": -0.848
+  },
+  "E1": {
+    "label": "SPY Regime Gate Calibration",
+    "rows": [
+      {
+        "threshold": "+1.0%",
+        "excluded_pct": 26.1,
+        "a6_n": 7,
+        "a6_avg": 0.09,
+        "c1_n": 8,
+        "c1_avg": 0.87
+      },
+      {
+        "threshold": "+1.5%",
+        "excluded_pct": 19.6,
+        "a6_n": 7,
+        "a6_avg": 0.09,
+        "c1_n": 9,
+        "c1_avg": 0.84
+      },
+      {
+        "threshold": "+2.0%",
+        "excluded_pct": 15.2,
+        "a6_n": 7,
+        "a6_avg": 0.09,
+        "c1_n": 9,
+        "c1_avg": 0.84
+      },
+      {
+        "threshold": "+3.0%",
+        "excluded_pct": 8.7,
+        "a6_n": 8,
+        "a6_avg": 1.46,
+        "c1_n": 9,
+        "c1_avg": 0.84
+      }
+    ],
+    "baseline_a6": {
+      "n": 11,
+      "avg": 0.32
+    },
+    "baseline_c1": {
+      "n": 10,
+      "avg": 0.43
+    }
+  },
+  "E2": {
+    "label": "Vol Regime Gate",
+    "rows": [
+      {
+        "vol_gate": "<10.0%",
+        "excluded_pct": 52.2,
+        "a6_n": 2,
+        "a6_avg": 11.02,
+        "c1_n": 4,
+        "c1_avg": 2.48
+      },
+      {
+        "vol_gate": "<11.9%",
+        "excluded_pct": 30.4,
+        "a6_n": 7,
+        "a6_avg": 0.09,
+        "c1_n": 8,
+        "c1_avg": 1.61
+      },
+      {
+        "vol_gate": "<14.0%",
+        "excluded_pct": 15.2,
+        "a6_n": 7,
+        "a6_avg": 0.09,
+        "c1_n": 8,
+        "c1_avg": 1.61
+      },
+      {
+        "vol_gate": "<16.0%",
+        "excluded_pct": 15.2,
+        "a6_n": 7,
+        "a6_avg": 0.09,
+        "c1_n": 8,
+        "c1_avg": 1.61
+      }
+    ],
+    "median_vol": 10.3,
+    "baseline_a6": {
+      "n": 11,
+      "avg": 0.32
+    },
+    "baseline_c1": {
+      "n": 10,
+      "avg": 0.43
+    }
+  },
+  "E3": {
+    "label": "C1 Decline Threshold Sensitivity",
+    "rows": [
+      {
+        "decline": ">=15%",
+        "n": 10,
+        "avg": 0.43,
+        "sharpe": 0.033,
+        "wr": 40.0,
+        "ci": "[-7.62, +8.47]"
+      },
+      {
+        "decline": ">=20%",
+        "n": 4,
+        "avg": -3.54,
+        "sharpe": -0.417,
+        "wr": 50.0,
+        "ci": "[-11.86, +4.78]"
+      },
+      {
+        "decline": ">=25%",
+        "n": 1,
+        "avg": 0.93,
+        "sharpe": 0,
+        "wr": 100.0,
+        "ci": "[+0.93, +0.93]"
+      }
+    ]
+  },
+  "E4": {
+    "label": "C1 Gap Magnitude Buckets",
+    "rows": [
+      {
+        "bucket": "3%-5%",
+        "n": 8,
+        "avg": 0.53,
+        "sharpe": 0.037,
+        "wr": 38.0
+      },
+      {
+        "bucket": "5%-8%",
+        "n": 2,
+        "avg": 0.0,
+        "sharpe": 0.0,
+        "wr": 50.0
+      },
+      {
+        "bucket": "8%-12%",
+        "n": 0,
+        "avg": 0,
+        "sharpe": 0,
+        "wr": 0
+      },
+      {
+        "bucket": "12%+",
+        "n": 0,
+        "avg": 0,
+        "sharpe": 0,
+        "wr": 0
+      }
+    ]
+  },
+  "E5": {
+    "label": "Wed/Thu Effect Stability",
+    "rows": [
+      {
+        "day": "Monday",
+        "n": 2,
+        "avg": 3.12,
+        "sharpe": 1.008,
+        "wr": 100.0,
+        "ci": "[-1.17, +7.40]"
+      },
+      {
+        "day": "Tuesday",
+        "n": 4,
+        "avg": -6.81,
+        "sharpe": -1.404,
+        "wr": 0.0,
+        "ci": "[-11.57, -2.06]"
+      },
+      {
+        "day": "Wednesday",
+        "n": 1,
+        "avg": 34.36,
+        "sharpe": 0,
+        "wr": 100.0,
+        "ci": "[+34.36, +34.36]"
+      },
+      {
+        "day": "Thursday",
+        "n": 0,
+        "avg": 0,
+        "sharpe": 0,
+        "wr": 0,
+        "ci": "[+0.00, +0.00]"
+      },
+      {
+        "day": "Friday",
+        "n": 3,
+        "avg": -3.03,
+        "sharpe": -0.868,
+        "wr": 33.0,
+        "ci": "[-6.97, +0.92]"
+      }
+    ]
+  },
+  "E6": {
+    "label": "Open Entry vs Local Low",
+    "open": {
+      "n": 21,
+      "avg": 6.88,
+      "sharpe": 0.832
+    },
+    "local_low": {
+      "n": 11,
+      "avg": 0.32,
+      "sharpe": 0.037
+    }
+  },
+  "N3": {
+    "label": "Reduced Gap Threshold (A6)",
+    "rows": [
+      {
+        "gap_thr": ">=2%",
+        "n": 34,
+        "avg": 3.13,
+        "sharpe": 0.409,
+        "wr": 62.0,
+        "ci": "[+0.56, +5.70]"
+      },
+      {
+        "gap_thr": ">=3%",
+        "n": 24,
+        "avg": 2.79,
+        "sharpe": 0.336,
+        "wr": 58.0,
+        "ci": "[-0.53, +6.10]"
+      },
+      {
+        "gap_thr": ">=4%",
+        "n": 17,
+        "avg": 0.43,
+        "sharpe": 0.061,
+        "wr": 47.0,
+        "ci": "[-2.98, +3.84]"
+      },
+      {
+        "gap_thr": ">=5%",
+        "n": 11,
+        "avg": 0.32,
+        "sharpe": 0.037,
+        "wr": 45.0,
+        "ci": "[-4.78, +5.41]"
+      }
+    ]
+  },
+  "N4": {
+    "label": "Shorter Lookback for C1",
+    "rows": [
+      {
+        "lookback": "2d >= 7%",
+        "n": 6,
+        "avg": 5.31,
+        "sharpe": 0.298,
+        "wr": 50.0,
+        "ci": "[-8.95, +19.56]"
+      },
+      {
+        "lookback": "3d >= 10%",
+        "n": 10,
+        "avg": 8.19,
+        "sharpe": 0.465,
+        "wr": 60.0,
+        "ci": "[-2.74, +19.11]"
+      },
+      {
+        "lookback": "5d >= 15%",
+        "n": 10,
+        "avg": 0.43,
+        "sharpe": 0.033,
+        "wr": 40.0,
+        "ci": "[-7.62, +8.47]"
+      }
+    ]
+  },
+  "N7": {
+    "label": "T+1 Gap-Up Prediction",
+    "overnight": {
+      "n": 11,
+      "avg": 1.1
+    },
+    "intraday": {
+      "n": 11,
+      "avg": -0.91
+    },
+    "total": {
+      "n": 11,
+      "avg": 0.32
+    }
+  },
+  "N8": {
+    "label": "Intraday Window (LONG)",
+    "entry": "09:45",
+    "rows": [
+      {
+        "exit_time": "10:30",
+        "n": 26,
+        "avg": 2.48,
+        "sharpe": 0.95,
+        "wr": 92.0
+      },
+      {
+        "exit_time": "11:00",
+        "n": 26,
+        "avg": 2.34,
+        "sharpe": 0.572,
+        "wr": 69.0
+      },
+      {
+        "exit_time": "11:30",
+        "n": 26,
+        "avg": 2.63,
+        "sharpe": 0.712,
+        "wr": 81.0
+      },
+      {
+        "exit_time": "12:00",
+        "n": 25,
+        "avg": 2.11,
+        "sharpe": 0.53,
+        "wr": 60.0
+      }
+    ]
+  }
+}

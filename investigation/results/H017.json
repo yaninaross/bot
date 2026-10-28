@@ -1,0 +1,40 @@
+{
+  "id": "H017",
+  "desc": "SHORT gap-up>=5% on calm_bull days LH T+1",
+  "direction": "SHORT",
+  "catalyst": "gap_up",
+  "entry": "local_high",
+  "exit": "T+1_close",
+  "filters": {
+    "gap_min": 0.05,
+    "regime": "calm_bull",
+    "spy_10d_vol_max": 0.1
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H017",
+    "n": 97,
+    "avg": 1.032,
+    "med": 1.077,
+    "std": 7.81,
+    "wr": 0.5567,
+    "sharpe": 0.1322,
+    "pf": 1.419,
+    "ci_lo": -0.579,
+    "ci_hi": 2.564,
+    "trimmed_mean": 0.745,
+    "max_loss": -16.888,
+    "max_gain": 29.792,
+    "max_dd_pct": -6.87
+  },
+  "trades_per_week": 10.54,
+  "avg_hold_hrs": 8.8,
+  "reasons": [
+    "avg=1.03% <= 2.0%",
+    "Sharpe=0.132 <= 0.2",
+    "CI_lo=-0.58 <= 0"
+  ],
+  "n_trades": 97,
+  "run_date": "2026-10-07 00:14"
+}

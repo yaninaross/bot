@@ -1,0 +1,41 @@
+{
+  "id": "H015",
+  "desc": "SHORT analyst downgrade gap-up>=3% same day",
+  "direction": "SHORT",
+  "catalyst": "analyst_upgrade",
+  "entry": "open_9:30",
+  "exit": "17:00",
+  "filters": {
+    "gap_min": 0.03,
+    "catalyst_type": "analyst_upgrade",
+    "named_firm": true
+  },
+  "passed": false,
+  "beats_baseline": false,
+  "metrics": {
+    "label": "H015",
+    "n": 172,
+    "avg": 0.117,
+    "med": 0.107,
+    "std": 5.678,
+    "wr": 0.5174,
+    "sharpe": 0.0207,
+    "pf": 1.058,
+    "ci_lo": -0.689,
+    "ci_hi": 0.944,
+    "trimmed_mean": 0.088,
+    "max_loss": -21.986,
+    "max_gain": 19.612,
+    "max_dd_pct": -7.66
+  },
+  "trades_per_week": 18.7,
+  "avg_hold_hrs": 7.5,
+  "reasons": [
+    "avg=0.12% <= 2.0%",
+    "Sharpe=0.021 <= 0.2",
+    "CI_lo=-0.69 <= 0",
+    "tpw=18.7 > 15"
+  ],
+  "n_trades": 172,
+  "run_date": "2026-10-07 00:14"
+}
