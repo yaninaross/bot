@@ -106,3 +106,36 @@ showed Sharpe improvement 0.547→0.624.
 | D1c: Gap erosion filter | LOW | Live more conservative (excludes faded gaps) |
 | D4: Exit at daily close vs 17:00 AH | MEDIUM | Live misses AH fade capture |
 | D5: SL not in BT PnL | LOW | Consistent — both manual |
+
+---
+
+# Part 2: Agent 1 v2 (`agent1_v2.py` vs `agent1_v2_backtest.py`) Audit & Resolution
+
+**Date:** 2026-10-28
+**Files Compared & Aligned:**
+- Live / Single-Day Scanner: `agent1/agent1_v2.py`
+- Multi-Month Backtest: `agent1/agent1_v2_backtest.py`
+- Comparison Backtest: `agent1/agent1_v2_bt_comparison.py`
+
+## 1. Seven Pipeline Divergences / Leakage Bugs Resolved (2026-10-28)
+
+| # | Bug / Divergence | Prior State (Before 2026-10-28 Fix) | Resolution Implemented (100% Aligned) |
+|---|---|---|---|
+| **V2-D1** | **Float Cache Time-Travel Bias** | `agent1_v2.py` merged growing `data/float_cache.json` (`1,182` tickers populated by `v1`) on top of `_FLOAT_DATA` (`217` tickers), while `agent1_v2_backtest.py` used only `_FLOAT_DATA`. | Removed `float_cache.json` loading from `agent1_v2.py`. Both live and backtest strictly use the frozen 217-ticker `_FLOAT_DATA` dict (`<10M` = EXCLUDE, miss = INCLUDE). |
+| **V2-D2** | **`PRE_FILTER_N = 30` Slicing Before `CS` Filtering** | Both scripts sliced `candidates[:30]` **before** filtering out leveraged single-stock ETFs/ETNs (`VRTL`, `SKHX`, `HYNX`, etc.) and non-CS tickers. On `2026-10-28`, 17 of 26 non-stale Top-30 slots (`65.4%`) were wasted on 2x/3x ETFs, truncating valid CS gappers. | Both `agent1_v2.py` and `agent1_v2_backtest.py` now filter `_EXCLUDE`, `_LEV_ETF`, suffix `W/WS/U/R`, and cached non-CS tickers in `data/ticker_type_cache.json` **before** slicing `candidates[:30]`, and persist newly discovered Polygon `type` lookups to `ticker_type_cache.json`. |
+| **V2-D3** | **Array-Index vs. Clock-Timestamp Drift in `find_local_high`** | `find_local_high` checked array indices `3..11` assuming 1 bar per minute. On thin stocks with missing zero-volume bars, index `11 + 3` triggered as late as `10:08 ET` (`MB`, `RDAC`, `TBN`). | Enforced strict clock-timestamp bounds in `find_local_high`: `peak_bar["time_str"] <= "09:41"` and `entry_bar["time_str"] <= "09:44"`. |
+| **V2-D4** | **Entry-Time Gap Erosion Blind Spot (`09:32–09:44 ET`)** | `gap_consumed <= 0.50` was only checked at `09:31 ET`. Stocks that flushed `>50%` of their gap between `09:32` and `09:36 ET` before forming a low-level bounce still triggered short entries after the gap was gone. | Added `ah_ref_price` check inside `find_local_high`: requires `(open_price - entry_price) / (open_price - ah_ref_price) <= 0.50` at the confirmation bar close. |
+| **V2-D5** | **`raw_open_gap` Compression Bypass** | `VRT` (`2026-10-28`) opened at `+16.51%` vs prior close (`T6` institutional earnings zone), which compressed to `+12.05%` vs `ah_ref_price`, bypassing `15–30%` gap exclusion. | `check_s6`, `check_s1`, and `check_s12` now enforce gap-band exclusions on **both** `gap_pct` (vs AH ref) and `raw_open_gap` (vs prior close). |
+| **V2-D6** | **Hardcoded `capital / 3` Sizing in Backtest** | `agent1_v2_backtest.py` divided daily capital by `3` (`MAX_SLOTS`) for all strategies regardless of `strat["optimal_n"]`. | Fixed `agent1_v2_backtest.py` to allocate `capital / strat["optimal_n"]` per slot (`N=3` for `S6`/`S1`, `N=2` for `S12`). |
+| **V2-D7** | **Unconditional BigQuery Write in `agent1_v2.py`** | `log_scan_to_bq()` ran unconditionally at the bottom of `agent1_v2.py`, even when `DRY_RUN = True`. | Guarded `log_scan_to_bq()` with `if not DRY_RUN:`. |
+
+## 2. Live Execution vs. 17:00 ET Backtest Reconciliation (`Oct 13–28, 2026`)
+
+| Metric | Live Executed Trades (`Oct 13–28`, excl. RXRX) | Same 24 Trades Held to `17:00 ET` (BT Exit) | Old 5-Strategy Combined BT (`Oct 13–28`) | **New v2.1 `S6` (`Oct 13–28`)** | **New v2.1 `S1` (`Oct 13–28`)** |
+|---|---:|---:|---:|---:|---:|
+| **Trades** | `24` | `24` | `21` | **`10`** | **`11`** |
+| **Win Rate** | `41.7%` (`10W / 14L`) | `33.3%` (`8W / 16L`) | `47.6%` (`10W / 11L`) | **`80.0%` (`8W / 2L`)** | **`81.8%` (`9W / 2L`)** |
+| **Avg PnL / Trade** | **`+0.82%`** | **`+0.09%`** | **`+0.87%`** | **`+4.13%`** | **`+3.86%`** |
+| **Total Sum PnL %** | **`+19.65%`** | **`+2.15%`** | **`+18.37%`** | **`+41.34%`** | **`+42.44%`** |
+| **Realized / Sim Dollar PnL** | **`+$4,159.41`** | **`-$8,402.82`** (at live sizes) | `+$5,680` (`$100k` pool) | **`+$14,475` (`$100k` pool)** | **`+$14,893` (`$100k` pool)** |
+

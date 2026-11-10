@@ -314,3 +314,32 @@ R2 picks the same stock 99% of the time — it's gap_pct with a small sector adj
 - **SL=-50% is a free upgrade** — saves 3 disasters, +$53K, Sharpe 0.435→0.510
 - **No skip rule helps** — every drop bucket and gap-consumed level makes money
 - **Config is locked** at v1.2: N=1, CS+SD, SOFT float, exit 17:00, SL=-50%
+
+---
+
+## Addendum (2026-10-28): 360° Audit of `v1` & `v2` Deterioration and `S6 / S1 / S12` Resolution
+
+Following mixed out-of-sample performance in `Oct 13–28, 2026` (`21` backtest trades across `C5, C3+C5, C7, C9, C3` averaging `+0.87%` with `47.6% WR`), a 4-agent 360° forensic audit was conducted across `2026-07-01` → `2026-10-28` (`84` trading days):
+
+### 1. Four Root Causes Identified
+1. **Why `v1` Reported `+14.71%` in H1 & Broke in August:**
+   - `+7.4pp` to `+8.5pp` of `v1`'s `+14.71%` return in `E2` came from **Bar-60 (`10:30 ET`) `sustained_drop` Look-Ahead Bias** (conditioning on `10:30 ET` pattern while entering at `09:36–09:45 ET`). Without look-ahead (`E2-A`), true H1 average PnL was **`+4.46%`**.
+   - In mid-July/August (`2026-07-13` break), **Bar-15 (`09:45 ET`) `fallback` entries collapsed by `-6.80pp`** (`+6.37%` Pre-Aug → `-0.43%` Post-Aug, `-11.4%` for `N=1`), while **RTH `local_high` entries (`bars 3–11`) had ZERO degradation (`+3.52%` Pre-Aug vs `+3.48%` Post-Aug, `-0.04pp` delta)**.
+2. **Why `v2`'s `C5`, `C3+C5`, `C7`, and `C9` Failed in `Oct 13–28` ("Dip-and-Rip" Anti-Synergy):**
+   - `C5` (`bar0` red + PM retrace `>= 8%`), `C7` (`PM trend < 0`), and `C9` (`2-bar drop < 0`) were overfitted on `6–7` Post-Aug trades (`Aug 16 – Oct 9`).
+   - Structurally, requiring a stock to sell off at `09:30–09:31 ET` (`bar0` red) **and then** rally to form a 3-bar `local_high` at `09:33–09:41 ET` selects **Dip-and-Rip V-bottom accumulation** (`AXGN -7.77%`, `IRON -4.46%`, `KNSA -3.40%`, `VRT -2.98%`, `KVYO -1.89%`), while **rejecting** genuine opening blow-off spikes that push green at `09:30–09:35 ET` into an exhaustion peak (`AIOK +19.83%`, `BHVN +8.20%`, `MED +7.58%`, `SIGI +3.23%`).
+3. **Why Both August (Q2 Earnings) and `Oct 13–28` (Q3 Earnings) Suffered:**
+   - During peak corporate earnings weeks, the **`12%–30%` gap zone** and **`>$100` large-cap tier** are flooded by institutional earnings beaters (`VRT $236`, `WING $251`, `PAG $211`, `KNSA $86`, `IRON $74`, `AXGN $45`) that drift higher all day via Post-Earnings Announcement Drift (PEAD).
+   - Meanwhile, **`$10–$100` stocks outside the `12%–30%` / `15%–30%` institutional earnings gap zone** continued fading with `72%–82%` win rates!
+4. **Flat Bull-Flag Local Highs:**
+   - Several losing trades (`EFXT -2.72%`, `KNSA -3.40%`, `PAG -0.36%`, `BRZE -0.26%`) triggered `find_local_high` where the confirmation bar (`i+3`) closed barely `0.05%–0.40%` below the peak high `high[i]` (a tight bull-flag pause rather than a true rejection). Requiring **`pullback_pct >= 0.5%`** (`(peak_high - entry_price) / peak_high * 100 >= 0.5%`) cleanly filters out bull-flag pauses.
+
+### 2. Resolution: Adoption of `S6`, `S1`, and `S12` in `agent1_v2.py` (v2.1)
+
+| Strategy | Last 2 Weeks OOS (`Oct 13–28`) | Last 3 Months (`Jul 28–Oct 28`) | Post-Aug (`Aug 16–Oct 28`) | Full 84 Days (`Jul 01–Oct 28`) |
+|---|---|---|---|---|
+| *Old 5-Strategy Combined (`C5..C3`)* | `21t` \| `47.6% WR` \| `+0.87%` avg | `128t` \| `53.9% WR` \| `+1.84%` avg (Sh `0.181`) | `98t` \| `54.1% WR` \| `+1.82%` avg | `166t` \| `58.4% WR` \| `+4.55%` avg (Sh `0.289`) |
+| **`S6: Skip12-30+P<=100+PB0.5 (N=3)`** | **`10t` \| `80.0% WR` \| `+4.13%` avg (`+41.34%` sum)** | **`45t` \| `73.3% WR` \| `+4.92%` avg (Sh `0.444`)** | **`32t` \| `71.9% WR` \| `+4.90%` avg (Sh `0.415`)** | **`58t` \| `72.4% WR` \| `+8.56%` avg (Sh `0.471`)** |
+| **`S1: Skip15-30+P<=100+PB0.5 (N=3)`** | **`11t` \| `81.8% WR` \| `+3.86%` avg (`+42.44%` sum)** | **`56t` \| `67.9% WR` \| `+3.64%` avg (Sh `0.349`)** | **`40t` \| `67.5% WR` \| `+3.69%` avg (Sh `0.333`)** | **`72t` \| `69.4% WR` \| `+7.29%` avg (Sh `0.428`)** |
+| **`S12: Skip15-30+P<=100+PB0.5 (N=2)`** | **`10t` \| `80.0% WR` \| `+3.97%` avg (`+39.73%` sum)** | **`50t` \| `68.0% WR` \| `+3.99%` avg (Sh `0.365`)** | **`37t` \| `67.6% WR` \| `+3.81%` avg (Sh `0.334`)** | **`63t` \| `68.3% WR` \| `+7.78%` avg (Sh `0.431`)** |
+

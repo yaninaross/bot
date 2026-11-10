@@ -8,29 +8,35 @@ None of these are part of the daily scoring pipeline (see `pipeline/` and `scori
 All data lives on GCS: `gs://<GCS_BUCKET>/`
 
 ```
-Data/Inference/          ← raw 1-min OHLCV parquets ({TICKER}_1m_full_historical_data.parquet)
-Data/Inference_v2/       ← master_inference parquets ({TICKER}_master_inference.parquet)
-Data/Microstructure/     ← microstructure feature parquets ({TICKER}_microstructure.parquet)
-Data/TradesQuotes/       ← raw T&Q from Polygon ({TICKER}/{TICKER}_trades_{DATE}.parquet)
+Data/Inference/                        ← raw 1-min OHLCV parquets ({TICKER}_1m_full_historical_data.parquet)
+Data/Inference_v2/                     ← master_inference parquets ({TICKER}_master_inference.parquet)
+Data/Microstructure/                   ← base microstructure feature parquets ({TICKER}_1m_microstructure.parquet)
+Data/Inference/Microstructure_Advanced/← 16-col advanced Lee-Ready & tick microstructure ({TICKER}_1m_advanced_micro.parquet)
+Data/Trades/ & Data/Quotes/            ← raw tick-level Trades & Quotes parquets ({TICKER}/YYYY-MM-DD.parquet)
 ```
 
-Pipeline per ticker: **OHLCV → T&Q → Microstructure → Master Inference**
+Pipeline per ticker: **OHLCV → T&Q → Base Microstructure + 16-Col Advanced Microstructure → Master Inference v2**
 
-Master inference = OHLCV joined with microstructure features (Spread, OBI, Volume_Delta, etc.).
+Master inference = OHLCV joined with base microstructure (`Spread, OBI, bsize, asize, Total_Vol, Volume_Delta, Trade_Count, Delta_Pct`) and 16-column `Microstructure_Advanced`:
+- **Original 12 Advanced Columns:** `LR_OFI`, `LR_VPIN`, `LR_Buy_Ratio`, `LR_Size_Imbalance`, `PE`, `LZC`, `Tick_Volatility`, `Shock_Persist`, `Trade_Size_CV`, `Trade_Intensity`, `Quote_Intensity`, `Spread_CV`.
+- **4 New Sub-Minute Tick/Quote Columns (Added 2026-11-09):** `Odd_Lot_OFI` (`<100` sh retail flow), `Block_OFI` (`>=1,000` sh or `>=$20K` inst flow), `Signed_Semivariance` (`(RV_up - RV_down) / (RV_up + RV_down)`), and `Ask_Step_Down_Rate` (`(ask_down - ask_up) / n_quotes`).
 Context assets (SPY, VIX, TLT, IWM) get OHLCV-only masters (no T&Q needed).
 
 ## Authentication
 
 - **Colab / interactive**: `gcloud auth application-default login` — expires after ~1 hour in non-interactive sessions.
+- **Local Mac Service Account**: Uses `/Users/yaninaso/Downloads/ys-time-series-sa-key.json` automatically if present (never expires).
 - **VM long-running**: Use `--sa` flag or `USE_SERVICE_ACCOUNT=1` env var. Uses VM compute service account (`compute_engine.Credentials()`) which auto-refreshes via metadata server, never expires.
 - **Never use GCS FUSE mount** — unreliable. Always use `google.cloud.storage` API.
 
 ## Key Scripts
 
-### Bulk Refresh (primary)
+### Bulk Refresh & Prioritized T&Q Pipeline (Primary)
 
 | Script | Purpose |
 |--------|---------|
+| `bulk_priority_pos_events_tq.py` | **Prioritized Positive-Events T&Q Downloader & 16-Col Advanced Builder.** Ranks tickers by positive spike count, downloads missing `Data/Trades/` & `Data/Quotes/` days, builds `Master_Inference_v2` and 16-column `Microstructure_Advanced`. Supports `--top=50 --mode=full --workers=8`. |
+| `gcp_parallel_tq_worker.py` | **Shardable GCP VM / Cloud Run Parallel Worker.** Uses atomic GCS lock blobs (`Data/Locks/tq_v1/{TICKER}.lock`) so multiple VMs and local Mac workers can process tickers concurrently with zero duplicate work (`--shard=0 --num-shards=1 --workers=12`). |
 | `bulk_micro_all.py` | **Main refresh pipeline.** Downloads missing T&Q from Polygon, rebuilds micro + master_inference. Auto-detects stale tickers, prioritizes most-stale first. Skips dead tickers (SMLR, BITF, MIGI, XLE). |
 | `run_bulk_refresh.sh` | Launcher for `bulk_micro_all.py --sa` with timestamped logging to `/tmp/`. |
 

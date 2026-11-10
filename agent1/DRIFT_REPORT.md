@@ -88,3 +88,33 @@ E2-B: runs at 7:30 PST (10:30 ET) or later
 1. **Brief trader on 17:00 ET exit** — the AH hour is load-bearing
 
 These recommendations are for discussion only.
+
+---
+
+# Part 2: Agent 1 v2.1 Drift Report (`agent1_v2.py` vs `agent1_v2_backtest.py`)
+
+**Date:** 2026-10-28
+**Live Scanner:** `agent1/agent1_v2.py`
+**Backtest:** `agent1/agent1_v2_backtest.py`
+
+## Parameter-by-Parameter Alignment (`16 MATCH, 0 DRIFT`)
+
+| # | Parameter | `agent1_v2.py` (Live / Single-Day) | `agent1_v2_backtest.py` (Multi-Month BT) | Status |
+|---|---|---|---|---|
+| 1 | Direction | SHORT | SHORT | **MATCH** |
+| 2 | Price Bounds | `$10.00 <= open_price <= $100.00` (`PRICE_MIN=10.0`, `PRICE_MAX=100.0`) | `$10.00 <= open_price <= $100.00` (`PRICE_MIN=10.0`, `PRICE_MAX=100.0`) | **MATCH** |
+| 3 | Float Filter | Frozen 217-ticker `_FLOAT_DATA` (`<10M` = EXCLUDE, miss = INCLUDE) | Frozen 217-ticker `_FLOAT_DATA` (`<10M` = EXCLUDE, miss = INCLUDE) | **MATCH** |
+| 4 | Pre-Slice Hygiene | Filter `_EXCLUDE`, `_LEV_ETF`, `W/WS/U/R`, and `ticker_type_cache.json` non-CS **before** `[:30]` | Filter `_EXCLUDE`, `_LEV_ETF`, `W/WS/U/R`, and `ticker_type_cache.json` non-CS **before** `[:30]` | **MATCH** |
+| 5 | Asset Type | `type == 'CS'` via Polygon + `ticker_type_cache.json` | `type == 'CS'` via Polygon + `ticker_type_cache.json` | **MATCH** |
+| 6 | Gap Calculation | Recomputed vs last AH bar (`16:00–20:00 ET`) on prior day (`>= 3.0%`) | Recomputed vs last AH bar (`16:00–20:00 ET`) on prior day (`>= 3.0%`) | **MATCH** |
+| 7 | Scan-Time Erosion | `gap_consumed <= 0.50` by `09:31 ET` (intraday low vs `ah_ref_price`) | `gap_consumed <= 0.50` by `09:31 ET` (intraday low vs `ah_ref_price`) | **MATCH** |
+| 8 | Liquidity Gate | `>= 2` bars and `>= 5,000` shares in `09:30–09:31 ET` | `>= 2` bars and `>= 5,000` shares in `09:30–09:31 ET` | **MATCH** |
+| 9 | Entry Window | `find_local_high` (`window=3`, `bars 3..11`, `peak <= 09:41 ET`, `entry <= 09:44 ET`, no fallback) | `find_local_high` (`window=3`, `bars 3..11`, `peak <= 09:41 ET`, `entry <= 09:44 ET`, no fallback) | **MATCH** |
+| 10 | Entry-Time Erosion | `(open_price - entry_price) / (open_price - ah_ref_price) <= 0.50` | `(open_price - entry_price) / (open_price - ah_ref_price) <= 0.50` | **MATCH** |
+| 11 | Pullback Confirmation | `MIN_PULLBACK_PCT = 0.5%` (`(peak_high - entry_price) / peak_high * 100 >= 0.5%`) | `MIN_PULLBACK_PCT = 0.5%` (`(peak_high - entry_price) / peak_high * 100 >= 0.5%`) | **MATCH** |
+| 12 | Strategy `S6` | `Skip 12–30%` on both `gap_pct` & `raw_open_gap`, `open <= $100`, `PB >= 0.5%`, `N=3` | `Skip 12–30%` on both `gap_pct` & `raw_open_gap`, `open <= $100`, `PB >= 0.5%`, `N=3` | **MATCH** |
+| 13 | Strategy `S1` | `Skip 15–30%` on both `gap_pct` & `raw_open_gap`, `open <= $100`, `PB >= 0.5%`, `N=3` | `Skip 15–30%` on both `gap_pct` & `raw_open_gap`, `open <= $100`, `PB >= 0.5%`, `N=3` | **MATCH** |
+| 14 | Strategy `S12` | `Skip 15–30%` on both `gap_pct` & `raw_open_gap`, `open <= $100`, `PB >= 0.5%`, `N=2` | `Skip 15–30%` on both `gap_pct` & `raw_open_gap`, `open <= $100`, `PB >= 0.5%`, `N=2` | **MATCH** |
+| 15 | Slot Capital Sizing | `1 / optimal_n` (`1/3` for `S6/S1`, `1/2` for `S12`) | `capital / strat["optimal_n"]` (`1/3` for `S6/S1`, `1/2` for `S12`) | **MATCH** |
+| 16 | Exit | `17:00 ET` (after-hours close) | `17:00 ET` (after-hours close) | **MATCH** |
+
