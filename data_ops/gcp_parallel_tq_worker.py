@@ -1,17 +1,18 @@
-# %% ── Standalone GCP Parallel T&Q Downloader + Single-Pass Lee-Ready Builder ──
+# %% ── Standalone GCP Parallel T&Q Downloader + Single-Pass 16-Col Lee-Ready Builder ──
 #
-# Designed to run in parallel with the local Mac downloader without collisions:
+# Designed to run in parallel with the local Mac downloader (Ranks #56 -> #155) without collisions:
 #   - Auto-fetches the prioritized ticker manifest from gs://time-series-bucket-ys/Data/Config/priority_missing_tq_tickers.json
-#   - Starts at Rank #16 -> #150 (while the Mac works on Ranks #1 -> #15), then refreshes
-#     the 26 existing tickers (Sep 9 - Nov 9, 2026), then sweeps Ranks #15 -> #1 in reverse.
+#   - Starts at Rank #106 -> #255 (150 priority tickers), then sweeps Ranks #105 -> #56 in reverse
+#     (meeting the Mac worker in the middle), then refreshes existing tickers.
 #   - Uses GCS distributed lock blobs (Data/Locks/{TICKER}.lock) so two workers never process
 #     the same ticker simultaneously.
-#   - SINGLE-PASS IN-MEMORY ENGINE: Computes 1-min Base Microstructure + 12 Lee-Ready Advanced
-#     Microstructure features in RAM as each day's T&Q downloads from Polygon, eliminating
-#     the second GCS read-back pass!
+#   - SINGLE-PASS IN-MEMORY ENGINE: Computes 1-min Base Microstructure + 16-column Lee-Ready &
+#     Sub-Minute Tick Microstructure features in RAM as each day's T&Q downloads from Polygon,
+#     eliminating the second GCS read-back pass!
 #
 # Works directly inside a GCP Notebook cell OR from a GCP VM terminal:
 #   python3 -u gcp_parallel_tq_worker.py
+#   python3 -u gcp_parallel_tq_worker.py --start-rank=106 --end-rank=255 --workers=16
 
 import os
 import io
@@ -49,7 +50,7 @@ except Exception:
     pass
 
 # ==============================================================================
-# CONFIGURATION
+# CONFIGURATION & CLI FLAGS
 # ==============================================================================
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
 BUCKET_NAME     = os.environ.get("GCS_BUCKET", "time-series-bucket-ys")
@@ -68,9 +69,20 @@ MIN_TRADES_PER_BAR = 6
 POLYGON_SLEEP      = 0.02
 
 # Default concurrency for an 8-16 vCPU, 32GB RAM GCP instance
+# Ranks #1..#55 are 100% DONE. Mac runs Ranks #56..#155 forward.
+# GCP starts at Rank #106 -> #255 forward, then sweeps #105 -> #56 in reverse!
 DAY_WORKERS = int(os.environ.get("TQ_WORKERS", "16"))
-START_RANK  = int(os.environ.get("START_RANK", "16"))
-END_RANK    = int(os.environ.get("END_RANK", "150"))
+START_RANK  = int(os.environ.get("START_RANK", "106"))
+END_RANK    = int(os.environ.get("END_RANK", "255"))
+MAC_START_RANK = int(os.environ.get("MAC_START_RANK", "56"))
+
+for arg in sys.argv[1:]:
+    if arg.startswith("--start-rank="):
+        START_RANK = int(arg.split("=", 1)[1].strip())
+    elif arg.startswith("--end-rank="):
+        END_RANK = int(arg.split("=", 1)[1].strip())
+    elif arg.startswith("--workers="):
+        DAY_WORKERS = int(arg.split("=", 1)[1].strip())
 
 ADVANCED_MICRO_COLS = [
     "LR_OFI", "LR_VPIN", "LR_Buy_Ratio", "LR_Size_Imbalance",
@@ -78,6 +90,7 @@ ADVANCED_MICRO_COLS = [
     "Trade_Size_CV", "Trade_Intensity", "Quote_Intensity", "Spread_CV",
     "Odd_Lot_OFI", "Block_OFI", "Signed_Semivariance", "Ask_Step_Down_Rate",
 ]
+
 
 def _release_memory():
     gc.collect()
@@ -518,20 +531,21 @@ missing_list = manifest_data["missing_prioritized"]
 existing_refresh_list = manifest_data["existing_needing_post_sep8_refresh"]
 
 # Build non-colliding queue:
-# 1) Ranks START_RANK (16) -> END_RANK (150) forward
-# 2) Existing 26 tickers needing Sep 9 - Nov 9 refresh
-# 3) Ranks 15 -> 1 in reverse (skipping any ticker already finished or locked by the Mac)
+# 1) Ranks START_RANK (106) -> END_RANK (255) forward (150 tickers)
+# 2) Ranks (START_RANK - 1) (105) -> MAC_START_RANK (56) in reverse (meets Mac worker in the middle!)
+# 3) Existing 26 tickers needing Sep 9 - Nov 9 refresh & 16-column upgrade
 queue = (
     missing_list[max(0, START_RANK - 1):END_RANK] +
-    existing_refresh_list +
-    list(reversed(missing_list[:max(0, START_RANK - 1)]))
+    list(reversed(missing_list[max(0, MAC_START_RANK - 1):max(0, START_RANK - 1)])) +
+    existing_refresh_list
 )
 
 full_bdays = [d.strftime("%Y-%m-%d") for d in pd.bdate_range(HISTORY_START, datetime.now(pytz.UTC).strftime("%Y-%m-%d"))]
 
 print("=" * 95, flush=True)
-print(f"GCP PARALLEL SINGLE-PASS T&Q WORKER  |  Workers: {DAY_WORKERS}  |  Queue: {len(queue)} Tickers (Ranks #{START_RANK}->#{END_RANK} first)", flush=True)
+print(f"GCP PARALLEL SINGLE-PASS T&Q WORKER  |  Workers: {DAY_WORKERS}  |  Queue: {len(queue)} Tickers (Ranks #{START_RANK}->#{END_RANK} first, then #{START_RANK-1}->#{MAC_START_RANK} rev)", flush=True)
 print("=" * 95, flush=True)
+
 
 for idx, item in enumerate(queue, 1):
     _refresh_bucket()

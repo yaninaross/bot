@@ -556,13 +556,18 @@ for idx, item in enumerate(queue, 1):
         print(f"[{idx}/{len(queue)}] {tk} already has Master_Inference_v2 & Microstructure_Advanced on GCS — skipping!", flush=True)
         continue
     lock_blob = bucket.blob(f"Data/Locks/{tk}.lock")
+    if lock_blob.exists():
+        lock_blob.reload()
+        if lock_blob.updated and (datetime.now(pytz.UTC) - lock_blob.updated).total_seconds() < 2700:
+            print(f"[{idx}/{len(queue)}] {tk} is actively locked by GCP worker ({lock_blob.updated}) — skipping!", flush=True)
+            continue
     lock_blob.upload_from_string(f"claimed_by_mac_{datetime.now(pytz.UTC).isoformat()}")
     try:
         target_dates = item.get("tq_window_dates", []) if (MODE == "events" and item.get("tq_window_dates")) else full_bdays
         print(f"\n[{idx}/{len(queue)}] Processing {tk} (Rank #{item.get('priority_rank', '-')}, Score {item.get('priority_score', 0):.1f}, {len(target_dates)} target T&Q days)...", flush=True)
         ensure_ohlcv_parquet(tk, HISTORY_START)
         dl_new, tot_cached = download_tq_for_ticker(tk, target_dates)
-        if dl_new > 0 or not bucket.blob(f"{GCS_MASTER_DIR}/{tk}_master_inference.parquet").exists():
+        if dl_new > 0 or not bucket.blob(f"{GCS_MASTER_DIR}/{tk}_master_inference.parquet").exists() or not bucket.blob(f"{GCS_ADV_MICRO_DIR}/{tk}_1m_advanced_micro.parquet").exists():
             rebuild_all_micro_and_master(tk)
     finally:
         try:
@@ -570,3 +575,4 @@ for idx, item in enumerate(queue, 1):
                 lock_blob.delete()
         except Exception:
             pass
+
