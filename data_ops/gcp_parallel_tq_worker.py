@@ -19,8 +19,10 @@ import gc
 import sys
 import json
 import time
+import socket
 import ctypes
 import warnings
+import itertools
 import requests
 import pytz
 import numpy as np
@@ -30,6 +32,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+socket.setdefaulttimeout(45)
 warnings.filterwarnings("ignore")
 
 try:
@@ -67,13 +70,14 @@ FRESH_CUTOFF_DATE  = "2026-11-07"
 PE_ORDER           = 5
 MIN_TRADES_PER_BAR = 6
 POLYGON_SLEEP      = 0.02
+MAX_TICKS_PER_DAY  = 200000  # Hard-caps Polygon auto-pagination so mega-volume days never OOM Colab RAM
 
 # Worker role: "gcp" (reverse stale sweep + #106->#255) or "mac" (forward stale sweep + #56->#155)
 WORKER_ROLE    = os.environ.get("WORKER_ROLE", "gcp").lower()
-DAY_WORKERS    = int(os.environ.get("TQ_WORKERS", "16" if WORKER_ROLE == "gcp" else "8"))
-START_RANK     = int(os.environ.get("START_RANK", "106" if WORKER_ROLE == "gcp" else "56"))
-END_RANK       = int(os.environ.get("END_RANK", "255" if WORKER_ROLE == "gcp" else "155"))
-MAC_START_RANK = int(os.environ.get("MAC_START_RANK", "56"))
+DAY_WORKERS    = int(os.environ.get("TQ_WORKERS", "6" if WORKER_ROLE == "gcp" else "8"))
+START_RANK     = int(os.environ.get("START_RANK", "581" if WORKER_ROLE == "gcp" else "435"))
+END_RANK       = int(os.environ.get("END_RANK", "758" if WORKER_ROLE == "gcp" else "580"))
+MAC_START_RANK = int(os.environ.get("MAC_START_RANK", "435"))
 
 for arg in sys.argv[1:]:
     if arg.startswith("--role="):
@@ -85,7 +89,12 @@ for arg in sys.argv[1:]:
     elif arg.startswith("--workers="):
         DAY_WORKERS = int(arg.split("=", 1)[1].strip())
 
-SKIP_SYMBOLS = {"SMLR", "BITF", "MIGI", "XLE", "SPY", "QQQ", "IWM", "VIX", "TLT", "BTCUSD", "ETHUSD"}
+# Exclude dead tickers, ETFs, and >$150 S&P 500 mega-cap tick-monsters (NVDA has 195MB parquet & 15M quotes/day)
+SKIP_SYMBOLS = {
+    "SMLR", "BITF", "MIGI", "XLE", "SPY", "QQQ", "IWM", "VIX", "TLT", "BTCUSD", "ETHUSD", "ITA",
+    "NVDA", "NOC", "LMT", "LHX", "LIN", "NEE", "MSTR", "TSLA", "AMZN", "AMD", "CAT", "GE", "GD"
+}
+
 
 ADVANCED_MICRO_COLS = [
     "LR_OFI", "LR_VPIN", "LR_Buy_Ratio", "LR_Size_Imbalance",
@@ -450,14 +459,15 @@ def process_one_day_single_pass(ticker, date_str, is_cached):
             day_end = day_start + timedelta(days=1)
             trades = [
                 {"timestamp": pd.to_datetime(t.sip_timestamp, unit="ns", utc=True), "price": t.price, "size": t.size}
-                for t in poly.list_trades(ticker, timestamp_gte=day_start, timestamp_lte=day_end, limit=50000)
+                for t in itertools.islice(poly.list_trades(ticker, timestamp_gte=day_start, timestamp_lte=day_end, limit=50000), MAX_TICKS_PER_DAY)
             ]
             quotes = [
                 {"timestamp": pd.to_datetime(q.sip_timestamp, unit="ns", utc=True),
                  "ask_price": q.ask_price, "ask_size": q.ask_size,
                  "bid_price": q.bid_price, "bid_size": q.bid_size}
-                for q in poly.list_quotes(ticker, timestamp_gte=day_start, timestamp_lte=day_end, limit=50000)
+                for q in itertools.islice(poly.list_quotes(ticker, timestamp_gte=day_start, timestamp_lte=day_end, limit=50000), MAX_TICKS_PER_DAY)
             ]
+
             if POLYGON_SLEEP > 0:
                 time.sleep(POLYGON_SLEEP)
             dt = pd.DataFrame(trades) if trades else pd.DataFrame()
@@ -517,8 +527,11 @@ def run_ticker_incremental_or_full(ticker, full_bdays):
     done_cnt = 0
     base_chunks = [old_base_df] if old_base_df is not None else []
     adv_chunks  = [old_adv_df]  if old_adv_df is not None else []
+    eff_workers = min(DAY_WORKERS, 6) if old_base_df is not None else min(DAY_WORKERS, 10)
+    del old_base_df, old_adv_df
+    _release_memory()
 
-    with ThreadPoolExecutor(max_workers=DAY_WORKERS) as pool:
+    with ThreadPoolExecutor(max_workers=eff_workers) as pool:
         futs = {pool.submit(process_one_day_single_pass, ticker, d, d in existing): d for d in target_dates}
         for fut in as_completed(futs):
             status, b_df, a_df = fut.result()
@@ -535,20 +548,34 @@ def run_ticker_incremental_or_full(ticker, full_bdays):
                 base_chunks.append(b_df)
             if a_df is not None and not a_df.empty:
                 adv_chunks.append(a_df)
+            if done_cnt % 25 == 0:
+                _release_memory()
             if done_cnt % 50 == 0 or done_cnt == len(target_dates):
                 print(f"  [{ticker:6s}]   {done_cnt}/{len(target_dates)} days -> +{dl_ok} new, {cached_ok} cached, {empty_cnt} empty, {err_cnt} err", flush=True)
+
+    if err_cnt > 50:
+        del base_chunks, adv_chunks
+        _release_memory()
+        raise RuntimeError(f"Network/sleep drop detected ({err_cnt} day errors on {ticker}); skipping upload so ticker can be retried cleanly.")
 
     if base_chunks:
         df_base = pd.concat(base_chunks).sort_index()
         df_base = df_base[~df_base.index.duplicated(keep="last")]
-        buf = io.BytesIO()
-        df_base.to_parquet(buf, engine="pyarrow")
-        buf.seek(0)
-        base_blob.upload_from_file(buf)
+        for attempt in range(3):
+            try:
+                buf = io.BytesIO()
+                df_base.to_parquet(buf, engine="pyarrow")
+                buf.seek(0)
+                base_blob.upload_from_file(buf, timeout=300)
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                time.sleep(5 * (attempt + 1))
 
         ohlcv_blob = bucket.blob(f"{GCS_OHLCV_DIR}/{ticker}_1m_full_historical_data.parquet")
         if ohlcv_blob.exists():
-            df_ohlcv = pd.read_parquet(io.BytesIO(ohlcv_blob.download_as_bytes()))
+            df_ohlcv = pd.read_parquet(io.BytesIO(ohlcv_blob.download_as_bytes(timeout=300)))
             if df_ohlcv.index.tz is None:
                 df_ohlcv.index = df_ohlcv.index.tz_localize("UTC")
             df_master = df_ohlcv.join(df_base, how="left")
@@ -558,10 +585,17 @@ def run_ticker_incremental_or_full(ticker, full_bdays):
             for c in ["Volume", "Total_Vol", "Volume_Delta", "Trade_Count", "Delta_Pct", "Spread", "OBI", "bsize", "asize"]:
                 if c in df_master.columns:
                     df_master[c] = df_master[c].fillna(0)
-            buf_m = io.BytesIO()
-            df_master.to_parquet(buf_m, engine="pyarrow")
-            buf_m.seek(0)
-            bucket.blob(f"{GCS_MASTER_DIR}/{ticker}_master_inference.parquet").upload_from_file(buf_m)
+            for attempt in range(3):
+                try:
+                    buf_m = io.BytesIO()
+                    df_master.to_parquet(buf_m, engine="pyarrow")
+                    buf_m.seek(0)
+                    bucket.blob(f"{GCS_MASTER_DIR}/{ticker}_master_inference.parquet").upload_from_file(buf_m, timeout=300)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    time.sleep(5 * (attempt + 1))
             print(f"  [{ticker:6s}] Saved Master_Inference_v2 ({len(df_master):,} rows, max={df_master.index.max().strftime('%Y-%m-%d')})", flush=True)
             del df_ohlcv, df_master
 
@@ -572,14 +606,22 @@ def run_ticker_incremental_or_full(ticker, full_bdays):
             if c not in df_adv.columns:
                 df_adv[c] = 0.0
         df_adv = df_adv[ADVANCED_MICRO_COLS]
-        buf_a = io.BytesIO()
-        df_adv.to_parquet(buf_a, engine="pyarrow")
-        buf_a.seek(0)
-        adv_blob.upload_from_file(buf_a)
+        for attempt in range(3):
+            try:
+                buf_a = io.BytesIO()
+                df_adv.to_parquet(buf_a, engine="pyarrow")
+                buf_a.seek(0)
+                adv_blob.upload_from_file(buf_a, timeout=300)
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(5 * (attempt + 1))
         print(f"  [{ticker:6s}] Saved 16-Col Microstructure_Advanced ({len(df_adv):,} rows, max={df_adv.index.max().strftime('%Y-%m-%d')})", flush=True)
 
-    del base_chunks, adv_chunks, old_base_df, old_adv_df
+    del base_chunks, adv_chunks
     _release_memory()
+
 
 # ==============================================================================
 # MAIN EXECUTION: PHASE 1 (REFRESH ALL 113 STALE STOCKS) + PHASE 2 (NEW STOCKS)
@@ -609,17 +651,12 @@ manifest_data = json.loads(manifest_bytes.decode("utf-8"))
 missing_list = manifest_data["missing_prioritized"]
 
 if WORKER_ROLE == "gcp":
-    # Phase 1: Stale Existing (Reverse: ZETA -> ACHR)
-    # Phase 2: Ranks #106 -> #255 forward, then #105 -> #56 reverse
     queue = (
         stale_existing +
-        missing_list[max(0, START_RANK - 1):END_RANK] +
-        list(reversed(missing_list[max(0, MAC_START_RANK - 1):max(0, START_RANK - 1)]))
+        list(reversed(missing_list[max(0, MAC_START_RANK - 1):max(0, START_RANK - 1)])) +
+        missing_list[max(0, START_RANK - 1):END_RANK]
     )
 else:
-    # Mac Role:
-    # Phase 1: Stale Existing (Forward: ACHR -> ZETA)
-    # Phase 2: Ranks #56 -> #155 forward
     queue = (
         stale_existing +
         missing_list[max(0, START_RANK - 1):END_RANK]
@@ -630,20 +667,29 @@ full_bdays = [d.strftime("%Y-%m-%d") for d in pd.bdate_range(HISTORY_START, date
 print("=" * 100, flush=True)
 print(f"PARALLEL INCREMENTAL REFRESH + SINGLE-PASS T&Q WORKER ({WORKER_ROLE.upper()}) | Workers: {DAY_WORKERS} | Queue: {len(queue)} Tickers", flush=True)
 print(f"  - Phase 1: {len(stale_existing)} Stale Existing Stocks ({'Reverse Z->A' if WORKER_ROLE=='gcp' else 'Forward A->Z'})", flush=True)
-print(f"  - Phase 2: New Priority Stocks (Ranks #{START_RANK}->#{END_RANK})", flush=True)
+if WORKER_ROLE == "gcp":
+    print(f"  - Phase 2A: Priority Batch 3 Reverse Sweep (Ranks #{START_RANK-1}->#{MAC_START_RANK}, meeting Mac in middle)", flush=True)
+    print(f"  - Phase 2B: Priority Batch 4 Forward Sweep (Ranks #{START_RANK}->#{END_RANK})", flush=True)
+else:
+    print(f"  - Phase 2: New Priority Stocks (Ranks #{START_RANK}->#{END_RANK})", flush=True)
 print("=" * 100, flush=True)
 
 for idx, item in enumerate(queue, 1):
     _refresh_bucket()
     tk = item["ticker"]
-    if not try_claim_ticker(tk):
-        print(f"[{idx}/{len(queue)}] Skipping {tk} (Already fresh >= {FRESH_CUTOFF_DATE} or locked by other worker)", flush=True)
-        continue
     try:
+        if not try_claim_ticker(tk):
+            print(f"[{idx}/{len(queue)}] Skipping {tk} (Already fresh >= {FRESH_CUTOFF_DATE} or locked by other worker)", flush=True)
+            continue
         t0 = time.time()
         print(f"\n[{idx}/{len(queue)}] Claimed {tk} (Rank: {item.get('priority_rank', '-')}, Score: {item.get('priority_score', 0):.1f})...", flush=True)
         ensure_ohlcv_parquet(tk, HISTORY_START)
         run_ticker_incremental_or_full(tk, full_bdays)
         print(f"  [{tk:6s}] Done in {(time.time() - t0):.1f}s ({(time.time() - t0)/60:.1f}m)!", flush=True)
+    except Exception as e:
+        print(f"  [{tk:6s}] ERROR on ticker {tk}: {e} — continuing to next ticker!", flush=True)
+        _last_refresh = 0
+        _refresh_bucket()
     finally:
         release_ticker_lock(tk)
+

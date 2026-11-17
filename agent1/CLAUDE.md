@@ -99,8 +99,11 @@ Every experiment must write a JSON file to results/ containing:
 - If PAVS, WOK, ELAB, VCIG appear in results → guards not working
 - Print entry type breakdown (local_high vs fallback) for every run
 
-## Agent 1 v2.4 — Multi-Strategy Hybrid SHORT Scanner (`agent1_v2.py`)
-**Status: ACTIVE — Upgraded 2026-11-06 (`Deployed C2 (Tier1→Tier2)`, `Combo C1`, `Combo C3` + 3-Tier RTH Exits + Priority Tier Ranking)**
+## Agent 1 v2.7 — `T&Q`-Gated Multi-Strategy `SHORT` Scanner (`agent1_v2.py`) & Standalone `LONG-ONLY` Scanner (`agent1_long_live.py`)
+**Status: ACTIVE — Upgraded 2026-11-17 (`Deployed C2 (Tier1→Tier2)`, `Combo C1`, `Combo C3` + Live `T&Q` Order-Flow Gate `_fetch_live_short_tq` + `-5.0%` Hard Stop + IBKR ETB Locate `short_locate_etb.py` + Standalone `LONG-ONLY` Scanner `agent1_long_live.py`)**
+
+- **Live `Trades & Quotes` (`T&Q`) Order-Flow Gate in `agent1_v2.py` (`ENABLE_TQ_SHORT_GATE = True`, `SHORT_HARD_STOP_PCT = 0.05`):** Computes live Polygon `v3/trades` & `v3/quotes` Lee-Ready `LR_OFI`, `Block_OFI`, `Odd_Lot_OFI`, `Ask_Step_Down_Rate`, and `MASTER_SYN` (`msyn`) up to the exact entry minute (`09:30 ET → entry_time`). Vetoes `<15%` moderate-gap shorts when `entry_type == 'local_high'` has `msyn < 0.0` (net institutional buying on the morning tape) or `entry_type == 'bar0_flush'` has `msyn < -0.50`, and enforces a `-5.0%` hard stop.
+- **Standalone `LONG-ONLY` Live Scanner (`agent1/agent1_long_live.py`):** 100% standalone, Colab-cell-ready scanner combining **Engine 1 (`C1_CRASH_REV_T3` / `C1_FRI_CAT_T3`:** Wed/Thu/Fri `06:30 PST` Open -> `T+3` Close, `$20–$100`, `ret_5d <= -15%`, `ret_2d <= +5%` no-double-dip guard, `-12%` stop), **Engine 2 (`TQ_CONT_10_30_B`:** `10–30%` continuation-gap `T&Q` longs at `06:44 PST` -> `13:00 PST` Close with `07:35 PST` time-stop and `-5.5%` stop, gated on `morn_short_cnt <= 1` or `$25+/$25M+` deep institutional buying `MSYN <= -0.55 & OFI >= +0.20`), and **Engine 3 (`TQ_INST_ACCUM_A`:** `$25+` & `$25M+` institutional accumulation `T&Q` longs on low short-breadth mornings `morn_short_cnt <= 1`).
 
 Three high-grossing hybrid multi-trigger SHORT strategies sharing a strictly
 leak-free, causal base pipeline:

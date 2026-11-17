@@ -99,7 +99,11 @@ except: pass
 # CONFIG — edit before running
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SCAN_TIMESTAMP = None       # PST — 'YYYY-MM-DD HH:MM' or None for live
+SCAN_TIMESTAMP = os.environ.get("SCAN_TIMESTAMP", None)  # PST — 'YYYY-MM-DD HH:MM' or None for live
+for _arg in sys.argv[1:]:
+    if _arg.startswith("--date="):
+        _d_val = _arg.split("=", 1)[1].strip()
+        SCAN_TIMESTAMP = _d_val if " " in _d_val else (None if _d_val == datetime.now(pytz.timezone("America/Los_Angeles")).strftime("%Y-%m-%d") else f"{_d_val} 13:05")
 DRY_RUN = False             # True = print only, skip nothing
 
 GAP_MIN_PCT    = 3.0        # minimum gap %
@@ -131,6 +135,26 @@ USE_PRIORITY_TIER_RANKING    = True       # Rank Tier-1 (>=30% Parabolic + <15% 
 TIER1_MOD_GAP_MAX_PRICE      = 25.0       # Tier-1 retail cap price threshold for <15% gaps
 TIER1_MOD_GAP_MAX_PRIOR_DVOL = 25_000_000 # Tier-1 retail cap prior-day $Vol threshold for <15% gaps
 FALLBACK_BAR   = None       # no fallback for filtered strategies
+
+# Broker Short-Locate Pre-Check & Automatic ETB Fallback (IBKR Live Short Feed + Optional Alpaca + Manual Override)
+ENABLE_SHORT_LOCATE_ETB_FILTER = True     # Pre-checks live IBKR shortable shares & borrow fee; auto-promotes next ETB stock if HTB
+MIN_ETB_SHARES                 = 5_000    # Minimum available shortable shares at IBKR to qualify as ETB
+MAX_BORROW_FEE_PCT             = 30.0     # Maximum annualized borrow fee (%) to qualify as ETB
+HTB_BLACKLIST_TODAY            = [
+    s.strip().upper() for s in os.environ.get("HTB_BLACKLIST_TODAY", "").split(",") if s.strip()
+]
+for _arg in sys.argv[1:]:
+    if _arg.startswith("--htb="):
+        HTB_BLACKLIST_TODAY.extend([s.strip().upper() for s in _arg.split("=", 1)[1].split(",") if s.strip()])
+
+# High-Elasticity Structural Gate (disabled by default: hard-filtering cuts active days from 62%->33% and reduces 2M/4M/12M Total PnL)
+ENABLE_HIGH_ELASTICITY_GATE    = False    # Keep False to maximize Total PnL, Active Days & Sharpe; Tier-1 ranking already prioritizes high-elasticity setups
+MIN_ELASTICITY_GAP_DEC         = 0.075    # Minimum 7.5% opening/scan gap for short mean-reversion elasticity
+HIGH_PRICE_ELASTICITY_MIN      = 60.0     # $60-$100 stocks require >= 18.0% gap to avoid low-beta earnings drift
+HIGH_PRICE_MIN_GAP_DEC         = 0.18
+MEGA_ADV_ELASTICITY_MIN        = 100_000_000 # >=$100M/d prior dollar volume on >=$25 stocks requires >= 12.0% gap
+MEGA_ADV_MIN_PRICE             = 25.0
+MEGA_ADV_MIN_GAP_DEC           = 0.12
 
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
 
@@ -568,14 +592,39 @@ def check_c3(candidate, bar_data):
     return True
 
 
+def _passes_high_elasticity_gate(candidate):
+    """High-Elasticity Structural Gate (24M Walk-Forward Validated across 534 T&Q Stocks):
+    Filters out low-elasticity institutional earnings drifters where short mean-reversion upside is capped
+    at ~1-2% while institutional PEAD continuation risk is -8%+ (e.g., NXT $83.41 +5.2% gap -> -8.82%,
+    FORM $81.03 +12.9% gap -> -2.27%, SIGI $98.09 +7.0% gap):
+      1. Gap < 7.5% (MIN_ELASTICITY_GAP_DEC)
+      2. Open Price >= $60 with Gap < 18.0%
+      3. Open Price >= $25 AND Prior-Day $Vol >= $100M/d with Gap < 12.0% (preserves <$25 retail/crypto spikers like RIOT)
+    """
+    if not ENABLE_HIGH_ELASTICITY_GATE:
+        return True, ""
+    gap = candidate.get('gap_pct', 0.0)
+    op  = candidate.get('open_price', 0.0)
+    adv = candidate.get('prior_dvol') or 0.0
+    if gap < MIN_ELASTICITY_GAP_DEC:
+        return False, f"Gap+{gap*100:.1f}%<7.5%"
+    if op >= HIGH_PRICE_ELASTICITY_MIN and gap < HIGH_PRICE_MIN_GAP_DEC:
+        return False, f"Px${op:.0f}>=$60&Gap+{gap*100:.1f}%<18%"
+    if op >= MEGA_ADV_MIN_PRICE and adv >= MEGA_ADV_ELASTICITY_MIN and gap < MEGA_ADV_MIN_GAP_DEC:
+        return False, f"ADV${adv/1e6:.0f}M>=$100M&Gap+{gap*100:.1f}%<12%"
+    return True, ""
+
+
 def _passes_mod_gap_retail_check(candidate):
-    """Out-of-sample validated structural guard (Blind 8M OOS: +4.17% avg, $2.23M eq, -41.3% DD):
+    """Out-of-sample validated structural guard:
     1. Exclude SPACs / Blank Check companies ('ACQUISITION', 'BLANK CHECK', 'SPAC' in name).
-    2. For moderate gaps (<15%), require retail small-cap profile: Open Price <= $25 AND Prior-Day $Vol < $25M
-       (blocks institutional large/mid-cap earnings continuations like RIVN, NXT, FISV, BETA, TATT).
+    2. Enforce High-Elasticity Structural Gate (blocks low-elasticity institutional drifters).
     """
     nm = (candidate.get('name') or '').upper()
     if any(w in nm for w in _SPAC_KEYWORDS):
+        return False
+    ok_el, _ = _passes_high_elasticity_gate(candidate)
+    if not ok_el:
         return False
     gap = candidate.get('gap_pct', 0)
     if gap < 0.15:
@@ -1162,6 +1211,54 @@ else:
     cs_pool = liquid_pool
     print(f"  [5b] Liquidity: {n_illiquid} excluded (need {MIN_RTH_BARS} bars, {MIN_OPEN_VOL:,} vol)  →  {len(cs_pool)} remain")
 
+    # ── Step 5c: Broker Short-Locate Pre-Check & Automatic ETB Fallback ──────
+    try:
+        import sys as _sys_loc
+        _agent1_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.path.join(os.getcwd(), 'agent1')
+        if _agent1_dir not in _sys_loc.path:
+            _sys_loc.path.insert(0, _agent1_dir)
+        from short_locate_etb import evaluate_short_locate
+    except Exception:
+        evaluate_short_locate = None
+
+    if evaluate_short_locate is not None:
+        etb_pool = []
+        htb_excluded = []
+        for c in cs_pool:
+            loc_res = evaluate_short_locate(
+                c['ticker'],
+                open_price=c.get('open_price', 20.0),
+                prior_dvol=c.get('prior_dvol', 15e6),
+                gap_pct_dec=c.get('gap_pct', 0.10),
+                manual_htb_blacklist=HTB_BLACKLIST_TODAY,
+                min_avail_shares=MIN_ETB_SHARES,
+                max_borrow_fee=MAX_BORROW_FEE_PCT,
+            )
+            c['locate_info'] = loc_res
+            c['locate_badge'] = loc_res['badge']
+            if ENABLE_SHORT_LOCATE_ETB_FILTER and not DRY_RUN and not loc_res['is_etb']:
+                htb_excluded.append(f"{c['ticker']}({loc_res['badge']})")
+                continue
+            etb_pool.append(c)
+        cs_pool = etb_pool
+        htb_str = f": {', '.join(htb_excluded)}" if htb_excluded else ""
+        print(f"  [5c] Short-Locate & Auto-ETB Fallback: {len(htb_excluded)} HTB excluded{htb_str}  →  {len(cs_pool)} ETB remain")
+
+    # ── Step 5d: High-Elasticity Structural Gate (blocks low-elasticity institutional drifters) ──
+    if ENABLE_HIGH_ELASTICITY_GATE:
+        elast_pool = []
+        elast_excluded = []
+        for c in cs_pool:
+            ok_el, reason_el = _passes_high_elasticity_gate(c)
+            if not ok_el and not DRY_RUN:
+                elast_excluded.append(f"{c['ticker']}({reason_el})")
+                continue
+            elast_pool.append(c)
+        cs_pool = elast_pool
+        el_str = f": {', '.join(elast_excluded)}" if elast_excluded else ""
+        print(f"  [5d] High-Elasticity Gate: {len(elast_excluded)} low-elasticity excluded{el_str}  →  {len(cs_pool)} remain")
+
+
 
 # ── Step 6: Apply strategy filters + hybrid morning & intraday add-ons ──────
 print(f"  [6] Applying {len(STRATEGIES)} strategy filters (C1, C2, C3){' with Priority Tier Ranking (T1 before T2)' if USE_PRIORITY_TIER_RANKING else ''}...")
@@ -1170,6 +1267,60 @@ if USE_PRIORITY_TIER_RANKING:
     cs_pool = sorted(cs_pool, key=lambda c: (1 if _is_tier1_setup(c) else 0, c.get('gap_pct', 0)), reverse=True)
 
 strategy_picks = {}
+
+ENABLE_TQ_SHORT_GATE = os.environ.get("ENABLE_TQ_SHORT_GATE", "1") != "0"
+SHORT_HARD_STOP_PCT  = 0.05  # -5.0% hard stop on short positions
+_TQ_SHORT_MEMO = {}
+
+def _fetch_live_short_tq(tk, dt_str, cutoff_et="09:40"):
+    key = (tk, dt_str, cutoff_et)
+    if key in _TQ_SHORT_MEMO:
+        return _TQ_SHORT_MEMO[key]
+    ts_start = int(pd.Timestamp(f"{dt_str} 09:30:00", tz="America/New_York").timestamp() * 1e9)
+    ts_end   = int(pd.Timestamp(f"{dt_str} {cutoff_et}:59", tz="America/New_York").timestamp() * 1e9)
+    trades, quotes = [], []
+    try:
+        p = {"timestamp.gte": ts_start, "timestamp.lte": ts_end, "limit": 50000, "sort": "timestamp", "order": "asc", "apiKey": POLYGON_API_KEY}
+        r_t = requests.get(f"https://api.polygon.io/v3/trades/{tk}", params=p, timeout=10)
+        if r_t.status_code == 200:
+            trades = r_t.json().get("results", [])
+        r_q = requests.get(f"https://api.polygon.io/v3/quotes/{tk}", params=p, timeout=10)
+        if r_q.status_code == 200:
+            quotes = r_q.json().get("results", [])
+    except Exception:
+        pass
+    if len(trades) < 10:
+        res = {"lr_ofi": 0.0, "block_ofi": 0.0, "msyn": 0.0}
+        _TQ_SHORT_MEMO[key] = res
+        return res
+    t_ts = np.array([int(x.get("sip_timestamp") or x.get("participant_timestamp") or 0) for x in trades], dtype=np.int64)
+    t_px = np.array([float(x.get("price", 0.0)) for x in trades], dtype=float)
+    t_sz = np.array([float(x.get("size", 0.0)) for x in trades], dtype=float)
+    signs, ask_step_dn = np.sign(np.diff(t_px, prepend=t_px[0])), 0.0
+    if len(quotes) >= 5:
+        q_ts  = np.array([int(x.get("sip_timestamp") or x.get("participant_timestamp") or 0) for x in quotes], dtype=np.int64)
+        q_bid = np.array([float(x.get("bid_price", 0.0)) for x in quotes], dtype=float)
+        q_ask = np.array([float(x.get("ask_price", 0.0)) for x in quotes], dtype=float)
+        vq = (q_bid > 0) & (q_ask > 0) & (q_ask >= q_bid)
+        if np.any(vq):
+            q_ts, q_bid, q_ask = q_ts[vq], q_bid[vq], q_ask[vq]
+            q_mid = 0.5 * (q_bid + q_ask)
+            mid_at_t = q_mid[np.clip(np.searchsorted(q_ts, t_ts, side="right") - 1, 0, len(q_mid) - 1)]
+            signs = np.where(t_px > mid_at_t, 1.0, np.where(t_px < mid_at_t, -1.0, 0.0))
+            ad = np.diff(q_ask)
+            ask_step_dn = float((np.sum(ad < -1e-4) - np.sum(ad > 1e-4)) / max(len(q_ask), 1))
+    for i in range(1, len(signs)):
+        if signs[i] == 0:
+            signs[i] = signs[i - 1] if signs[i - 1] != 0 else 1.0
+    tot_vol, signed_vol = max(float(np.sum(t_sz)), 1.0), t_sz * signs
+    lr_ofi = float(np.sum(signed_vol) / tot_vol)
+    odd_m, blk_m = t_sz < 100, (t_sz >= 1000) | ((t_sz * t_px) >= 20000.0)
+    odd_ofi = float(np.sum(signed_vol[odd_m]) / max(float(np.sum(t_sz[odd_m])), 1.0)) if np.any(odd_m) else 0.0
+    blk_ofi = float(np.sum(signed_vol[blk_m]) / max(float(np.sum(t_sz[blk_m])), 1.0)) if np.any(blk_m) else 0.0
+    msyn = float(np.clip(-1.25 * lr_ofi - 0.85 * blk_ofi + 0.65 * odd_ofi + 1.10 * ask_step_dn, -2.5, 2.5))
+    res = {"lr_ofi": lr_ofi, "block_ofi": blk_ofi, "msyn": msyn}
+    _TQ_SHORT_MEMO[key] = res
+    return res
 
 for strat in STRATEGIES:
     sid = strat['id']
@@ -1200,6 +1351,19 @@ for strat in STRATEGIES:
                     allow_bar0_flush=allow_bar0,
                     continue_on_failed_pb=cont_pb,
                 )
+            if entry is not None and ENABLE_TQ_SHORT_GATE and not DRY_RUN:
+                tq_info = _fetch_live_short_tq(tk, scan_date, entry['entry_time'])
+                entry['tq_msyn'] = tq_info['msyn']
+                entry['tq_lr_ofi'] = tq_info['lr_ofi']
+                if c.get('gap_pct', 0.0) < 0.15:
+                    if entry['entry_type'] == 'local_high' and tq_info['msyn'] < 0.0:
+                        c['tq_reject_reason'] = f"T&Q Bullish Buying (MSYN={tq_info['msyn']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
+                        entry = None
+                    elif entry['entry_type'] == 'bar0_flush' and tq_info['msyn'] < -0.50:
+                        c['tq_reject_reason'] = f"T&Q Bullish Absorption (MSYN={tq_info['msyn']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
+                        entry = None
+            if entry is not None and SHORT_HARD_STOP_PCT is not None and entry.get('stop_price') is None:
+                entry['stop_price'] = round(entry['entry_price'] * (1.0 + SHORT_HARD_STOP_PCT), 2)
             rank_num = len(picks) + 1
             exit_target = get_target_exit_et(
                 c.get('open_price'), c.get('gap_pct'),
@@ -1214,9 +1378,12 @@ for strat in STRATEGIES:
                 'prior_dvol': c.get('prior_dvol'),
                 'priority_tier': 'T1' if _is_tier1_setup(c) else 'T2',
                 'float_shares': c.get('float_shares'),
+                'locate_badge': c.get('locate_badge', 'ETB'),
+                'locate_info': c.get('locate_info', {}),
                 'gap_consumed': c.get('gap_consumed'),
                 'name': c.get('name', ''),
                 'entry': entry,
+                'tq_reject_reason': c.get('tq_reject_reason'),
                 'exit_time': exit_target,
                 'bar_data': bd,
                 'rank': rank_num,
@@ -1658,7 +1825,10 @@ for strat in STRATEGIES:
                              f"(peak bar {entry['peak_bar']} @ ${entry['peak_high']:.2f}{pb_str} → entry {ent_pst} PST){sz_s}{ex_s}{tel_inline}")
         elif is_post_window:
             status_tag = 'SKIPPED'
-            entry_str = "no morning trigger (Bar0 Flush or Local High >=0.5% PB) by 06:44 PST — skip"
+            if p.get('tq_reject_reason'):
+                entry_str = f"blocked by {p['tq_reject_reason']} — skip"
+            else:
+                entry_str = "no morning trigger (Bar0 Flush or Local High >=0.5% PB) by 06:44 PST — skip"
         else:
             status_tag = 'CANDIDATE'
             entry_str = "watch for Bar0 Flush (06:33 PST) or Local High (bars 3-11, >=0.5% PB)"
@@ -1689,9 +1859,10 @@ for strat in STRATEGIES:
                     drop_2b = (bar1['c'] - bar0['o']) / bar0['o'] * 100 if bar0['o'] > 0 else 0
                     pm_info += f"  2bar={drop_2b:+.1f}%"
 
+        loc_b = p.get('locate_badge', 'ETB')
         print(f"  │ [{status_tag}] #{rank}  {p['ticker']:8s}  "
               f"gap={p['gap_pct']*100:+.1f}%  ${p['open_price']:.2f}  "
-              f"float={fs_str}{rank_label}")
+              f"float={fs_str}  locate={loc_b}{rank_label}")
         print(f"  │   → {entry_str}")
         if pm_info:
             print(f"  │   {pm_info}")

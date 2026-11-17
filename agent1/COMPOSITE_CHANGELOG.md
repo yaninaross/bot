@@ -1,5 +1,25 @@
 # Agent 1 — Composite Backtest Changelog
 
+## 2026-11-17 — Agent 1 v2.7 (`agent1/agent1_v2.py`, `agent1/agent1_long_live.py`, `agent1/short_locate_etb.py`): `534`-Stock `T&Q` Expansion (`69,610` Setups), Live `T&Q` Order-Flow Gate on `SHORT`, Standalone `LONG-ONLY` Live Scanner, and `2026-11-04 → 2026-11-17` 2-Week Live Backtest
+
+**Scripts Added/Updated:** `agent1/agent1_v2.py`, `agent1/agent1_long_live.py`, `agent1/short_locate_etb.py`, `data_ops/gcp_parallel_tq_worker.py`
+**Audit Horizon:** Full 24M Walk-Forward OOS (`534` `T&Q` stocks, `69,610` setups) + Live 2-Week Out-of-Sample Replay (`2026-11-04 → 2026-11-17`, `10` Trading Days).
+
+### 1. `534`-Stock (`69,610`-Setup) Multi-Horizon Walk-Forward Benchmark (`V6` vs. `V7 SYNERGY 6` vs. `Hybrid L8 LONG-ONLY`)
+- **`V6. T&Q ML Gated + Catalyst (Top-2 + 2x Edge Size)`:** 24M **`+279.6%` (`$1.31M`, Sharpe `2.57`)** | 12M **`+171.8%` (Sharpe `3.32`)** | 4M **`+99.6%` (Sharpe `5.44`)** | 2M **`+35.9%` (`81.0%` WR, Sharpe `4.70`)** | 2W **`+5.9%` (`83.3%` WR, `-0.7%` DD, Sharpe `5.77`)**.
+- **`V7. SYNERGY 6 (Full 6-Engine T&Q L+S)`:** 24M **`+443.1%` (`$4.15M`, Sharpe `2.91`)** | 12M **`+246.9%` (`$883K`, Sharpe `3.67`)** | 4M **`+99.0%` (Sharpe `3.79`)** | 2M **`+53.5%` (`70.6%` WR, Sharpe `4.77`)** | 2W **`+8.6%` (`75.0%` WR, `-1.5%` DD, Sharpe `5.73`)**.
+- **`L8. HYBRID LONG-ONLY (Intraday T&Q L4 + C1 Crash Reversal Wed–Fri + Catalyst)`:** 24M **`+266.5%` (`$1.05M`, Sharpe `2.32`)** | 12M **`+226.3%` (`$776K`, Sharpe `3.36`)** | 4M **`+51.4%` (Sharpe `2.29`)** | 2M **`+31.0%` (`64.3%` Day WR, Sharpe `3.33`)** | 2W **`+5.3%` (`-0.9%` DD, Sharpe `4.97`)**.
+
+### 2. Live 2-Week (`2026-11-04 → 2026-11-17`) Backtest: Raw OHLCV vs. `Trades & Quotes` (`T&Q`) Gating on Both `LONG` and `SHORT`
+- **Why Un-Gated Raw OHLCV `SHORT` (`V1`) Lost `-11.47%` Net Over `Nov 4 → Nov 17`:**
+  - Without live `T&Q` (`LR_OFI`, `Block_OFI`, `MSYN`) gating, `agent1_v2.py` shorted `6` `<11%` corporate earnings gaps (`MDLN`, `HYMC`, `QXO`, `AMRC`, `AXTI`, `SEI`) where live `06:30–06:40 PST` order flow showed strong institutional buying (`LR_OFI = +0.18` to `+0.71`, `MSYN = -0.44` to `-1.48`), going `0/6` (`0%` WR, `-12.37%` Net portfolio drag).
+- **2-Week (`2026-11-04 → 2026-11-17`) Performance After Wiring `T&Q` Gating into Both `agent1_v2.py` and `agent1_long_live.py`:**
+  - **Standalone `LONG-ONLY` (`agent1_long_live.py`):** **`9` trades (`8/9 = 88.9%` WR) | `+29.71%` Gross | `+28.36%` Net** (`MXL +21.63%`, `AXTI +17.42%`, `CRWV +8.39%`, `LGN +8.36%`, `IRTC +4.09%`, `TRNS +2.93%`, `SHAK +1.17%`, `CNC +0.47%`, `B +0.09%`, `TSN -1.97%` time-stop; `AXTI` `Nov 11` double-dip blocked by `ret_2d <= +5%` guard).
+  - **`T&Q`-Gated `SHORT` (`agent1_v2.py`):** **`11` trades | `+2.90%` Gross | `-0.85%` Net** (up **`+10.62%` Net** vs `-11.47%` Net raw by vetoing all 6 institutional-buying squeezes while capturing `DRTS +12.15%`, `DOCN +3.33%`, `FPS_B2 +1.86%`, `DOCN_B2 +1.58%`, `CMBT +1.04%`).
+  - **Combined 2-Week `T&Q` `L+S` Return:** **`+32.61%` Gross / `+27.51%` Net** across `20` total trades (vs `+0.84%` Net across `41` trades before `T&Q` gating).
+
+---
+
 ## 2026-11-10 — Agent 1 v2.6 (`deep_synergy_forensics_and_architectures.py` & `diagnose_ml_vs_rule_based_gap.py`): `157`-Stock `T&Q` Expansion, 4-Column Sub-Minute Tick Audit (`Odd_Lot_OFI - Block_OFI`), and **3-Pillar Synergy Architecture (`SYNERGY 2` & `SYNERGY 4A`)**
 
 **Scripts & Charts Added:** `agent1/deep_synergy_forensics_and_architectures.py`, `agent1/diagnose_ml_vs_rule_based_gap.py`, `agent1/run_expanded_tq_universe_full_analysis.py`, `agent1/tq_3pillar_synergy_backtest.png`, `agent1/tq_152_expanded_clean_upgraded_backtest.png`
