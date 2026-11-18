@@ -1272,11 +1272,11 @@ ENABLE_TQ_SHORT_GATE = os.environ.get("ENABLE_TQ_SHORT_GATE", "1") != "0"
 SHORT_HARD_STOP_PCT  = 0.05  # -5.0% hard stop on short positions
 _TQ_SHORT_MEMO = {}
 
-def _fetch_live_short_tq(tk, dt_str, cutoff_et="09:40"):
-    key = (tk, dt_str, cutoff_et)
+def _fetch_live_short_tq(tk, dt_str, cutoff_et="09:40", start_et="09:30"):
+    key = (tk, dt_str, start_et, cutoff_et)
     if key in _TQ_SHORT_MEMO:
         return _TQ_SHORT_MEMO[key]
-    ts_start = int(pd.Timestamp(f"{dt_str} 09:30:00", tz="America/New_York").timestamp() * 1e9)
+    ts_start = int(pd.Timestamp(f"{dt_str} {start_et}:00", tz="America/New_York").timestamp() * 1e9)
     ts_end   = int(pd.Timestamp(f"{dt_str} {cutoff_et}:59", tz="America/New_York").timestamp() * 1e9)
     trades, quotes = [], []
     try:
@@ -1290,7 +1290,7 @@ def _fetch_live_short_tq(tk, dt_str, cutoff_et="09:40"):
     except Exception:
         pass
     if len(trades) < 10:
-        res = {"lr_ofi": 0.0, "block_ofi": 0.0, "msyn": 0.0}
+        res = {"lr_ofi": 0.0, "block_ofi": 0.0, "odd_ofi": 0.0, "msyn": 0.0}
         _TQ_SHORT_MEMO[key] = res
         return res
     t_ts = np.array([int(x.get("sip_timestamp") or x.get("participant_timestamp") or 0) for x in trades], dtype=np.int64)
@@ -1318,7 +1318,7 @@ def _fetch_live_short_tq(tk, dt_str, cutoff_et="09:40"):
     odd_ofi = float(np.sum(signed_vol[odd_m]) / max(float(np.sum(t_sz[odd_m])), 1.0)) if np.any(odd_m) else 0.0
     blk_ofi = float(np.sum(signed_vol[blk_m]) / max(float(np.sum(t_sz[blk_m])), 1.0)) if np.any(blk_m) else 0.0
     msyn = float(np.clip(-1.25 * lr_ofi - 0.85 * blk_ofi + 0.65 * odd_ofi + 1.10 * ask_step_dn, -2.5, 2.5))
-    res = {"lr_ofi": lr_ofi, "block_ofi": blk_ofi, "msyn": msyn}
+    res = {"lr_ofi": lr_ofi, "block_ofi": blk_ofi, "odd_ofi": odd_ofi, "msyn": msyn}
     _TQ_SHORT_MEMO[key] = res
     return res
 
@@ -1352,15 +1352,18 @@ for strat in STRATEGIES:
                     continue_on_failed_pb=cont_pb,
                 )
             if entry is not None and ENABLE_TQ_SHORT_GATE and not DRY_RUN:
-                tq_info = _fetch_live_short_tq(tk, scan_date, entry['entry_time'])
+                tq_start_et = entry.get('peak_time', '09:30') if entry['entry_type'] == 'local_high' else '09:30'
+                tq_info = _fetch_live_short_tq(tk, scan_date, entry['entry_time'], start_et=tq_start_et)
                 entry['tq_msyn'] = tq_info['msyn']
                 entry['tq_lr_ofi'] = tq_info['lr_ofi']
+                entry['tq_blk_ofi'] = tq_info['block_ofi']
+                entry['tq_odd_ofi'] = tq_info['odd_ofi']
                 if c.get('gap_pct', 0.0) < 0.15:
                     if entry['entry_type'] == 'local_high' and tq_info['msyn'] < 0.0:
-                        c['tq_reject_reason'] = f"T&Q Bullish Buying (MSYN={tq_info['msyn']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
+                        c['tq_reject_reason'] = f"T&Q Bullish Pullback Buying [{tq_start_et}->{entry['entry_time']}] (MSYN={tq_info['msyn']:+.2f}, BlkOFI={tq_info['block_ofi']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
                         entry = None
                     elif entry['entry_type'] == 'bar0_flush' and tq_info['msyn'] < -0.50:
-                        c['tq_reject_reason'] = f"T&Q Bullish Absorption (MSYN={tq_info['msyn']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
+                        c['tq_reject_reason'] = f"T&Q Bullish Absorption (MSYN={tq_info['msyn']:+.2f}, BlkOFI={tq_info['block_ofi']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
                         entry = None
             if entry is not None and SHORT_HARD_STOP_PCT is not None and entry.get('stop_price') is None:
                 entry['stop_price'] = round(entry['entry_price'] * (1.0 + SHORT_HARD_STOP_PCT), 2)
