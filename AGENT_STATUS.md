@@ -1,13 +1,34 @@
-# Agent Status — Last Updated: 2026-11-17
+# Agent Status — Last Updated: 2026-11-19
 
 ## Currently Active Work
-- **Agent 1 Standalone `LONG-ONLY` Live Scanner (`agent1/agent1_long_live.py`):** DEPLOYED (100% standalone & Colab single-cell compatible). Combines **Engine 1 (`C1_CRASH_REV_T3` / `C1_FRI_CAT_T3`:** Wed/Thu/Fri `06:30 PST` Open -> `T+3` Close on `$20–$100` stocks down `<= -15%` over 5d with `ret_2d <= +5%` no-double-dip guard and `-12%` stop), **Engine 2 (`TQ_CONT_10_30_B`:** `10%–30%` continuation-gap `T&Q` longs at `06:44 PST` -> `13:00 PST` Close with `07:35 PST` time-stop and `-5.5%` stop, gated on `morn_short_cnt <= 1` or `$25+/$25M+` deep institutional accumulation `MSYN <= -0.55 & OFI >= +0.20`), and **Engine 3 (`TQ_INST_ACCUM_A`:** `$25+` & `$25M+` institutional accumulation `T&Q` longs on Low Short-Trigger Mornings `morn_short_cnt <= 1`).
-- **Agent 1 v2.7 `T&Q`-Gated Multi-Strategy `SHORT` Scanner (`agent1/agent1_v2.py` & `agent1/short_locate_etb.py`):** DEPLOYED (`Deployed C2 (Tier1→Tier2)`, `Combo C1`, `Combo C3` + **Live `Trades & Quotes` (`T&Q`) Order-Flow Gate `_fetch_live_short_tq` (`MSYN >= 0.0` on `<15%` `local_high`, `MSYN >= -0.50` on `bar0_flush`)** + **`-5.0%` Intraday Hard Stop** + **IBKR Live Short-Locate ETB Pre-Check** + 3-Tier RTH Exit Schedule `08:30 / 09:30 / 11:00 PST`).
-- **Continuous Background `T&Q` Data Expansion (`data_ops/gcp_parallel_tq_worker.py`):** Expanded completed `T&Q` (`Master_Inference_v2` + `16-Col Microstructure_Advanced`) universe from `157 → 600+` priority stocks (`534` synced in local walk-forward dataset = `69,610` setups; `Ranks #435 → #580` completed `147/147` with `0` errors; `Ranks #581 → #730` currently running in background).
-- **Agent 1 (`agent1/agent1.py`):** E2-A + E2-B live scanner
+- **Agent 1 Official **`V8.2`** Combined L+S Live Production Suite (`Choice 1: Max Profit`, 100% Split-Proof & Zero-Look-Ahead Verified across 263 Trading Days: `2025-11-03 → 2026-11-18`):**
+  - **`V8.2-S` SHORT Bot ([`agent1/agent1_v2.py`](file:///Users/yaninaso/.gemini/jetski/scratch/bot/agent1/agent1_v2.py) & `agent1/short_locate_etb.py`):** DEPLOYED (single-strategy clean default, Colab-proof inline IBKR ETB fallback). Includes:
+    1. **IBKR Easy-to-Borrow Locate (`+101%` 12.5M lift)** with structural fallback (`$20M/$15`).
+    2. **Pre-Open Catalyst Veto (`<= 06:30 PST`, `+9%` lift):** Blocks `M&A/Buyout/Takeover` on ALL gaps & `Analyst Upgrades` on `<15%` gaps before selecting Top 3 watchlist.
+    3. **NO `_B2` Midday Bounce Re-Shorts (`+26%` lift, cuts Max DD nearly in half):** Short each qualified stock ONCE (`06:33–06:44 PST`).
+    4. **Unlock `15%–30%` Gaps ONLY w/ Bearish Peak→Entry `T&Q` (`+40%` lift):** Requires `MSYN >= +0.35` AND `Block_OFI <= -0.15` on the reversal window.
+    5. **NO `<15%` `T&Q` Veto (`Choice 1: Max Profit`; optional `--picky` flag for `Choice 2`).**
+    6. **Hard Stop `-10.0%` from entry & NO Trailing Profit Lock** *(reverted `-5%` tight stop & disabled blanket `+5%` profit lock, which cost `-56%` Net over 12.5M by chopping parabolic winners)*.
+    7. **Exits (PST):** `08:30 PST` (`<15%` gaps & `$50+ local_high`), `09:30 PST` (`<$50 local_high >=15%`), `11:00 PST` (`bar0_flush >=15%`, 100% flat).
+  - **`V8.2-L` LONG Bot ([`agent1/agent1_long_live.py`](file:///Users/yaninaso/.gemini/jetski/scratch/bot/agent1/agent1_long_live.py)):** DEPLOYED (100% standalone & compact single-cell Colab ready). Includes **`Engine C1` (`Wed/Thu/Fri` Crash Reversal `T+3`, `$20–$100` unadj, `-15%` 5d crash, `ret_2d <= +5%`, `-12%` GTC stop)** + **NEW Automatic Causal `No-Duplicate-Open-Position` Guard** (replays last 3 trading days, tracks `-12%` stop-outs, displays active open `T+3` carries, and blocks duplicate re-buys like `Nov 11 AXTI`), plus Intraday `Engine B` & `Engine A`.
+- **Continuous Background `T&Q` Data Expansion (`data_ops/gcp_parallel_tq_worker.py`):** **Ranks `#581 → #730` (`151/151` stocks) COMPLETED (`0` errors, exit `0`)** — total GCS `T&Q` universe now exceeds **`730` priority stocks**!
+- **Agent 1 (`agent1/agent1.py`):** Legacy E2-A + E2-B scanner
 - **Agent 3 (`agent3/`):** C1-E01 (WedThu formal backtest)
 
-## Last Session Summary (2026-11-14 to 2026-11-17 — `534`-Stock Walk-Forward Benchmark, Standalone `LONG-ONLY` Isolation, Live `T&Q` Gating in `agent1_v2.py`, and `Nov 4 → Nov 17` 2-Week Live Backtest)
+## Last Session Summary (2026-11-18 to 2026-11-19 — Official **`V8.2`** Deployment After Full 12.5M Split-Proof Orthogonal Ablation)
+- **Full 12.5-Month Split-Proof, Zero-Look-Ahead Ablation (`263` Trading Days: `2025-11-03 → 2026-11-18`, `218` reverse-split penny stocks excluded, `-0.75%` SHORT slip + real IBKR borrow / `-0.30%` LONG slip):**
+  - **Retired scratch names (`V11/V12`) & standardized version ladder on `V8` (`SYNERGY 6-ETB`) → Official `V8.2` (`Choice 1`).**
+  - **Caught huge recency-bias trap:** Blanket `+5%` trailing profit lock + `-5%` tight stop looked `#1` over the choppy Last 2W/2M, but **lost `-55.7%` Net over 12.5M** (`+13.8%` vs `+69.5%` / `+86.7%`) across EVERY gap tier (`>=30%` parabolics turned `+20.4% → -32.5%`). `-10.0%` hard stop sits at the center of a broad Sharpe plateau (`-7.5%` to `-15%` all earn `+57%` to `+75%` Net).
+  - **Official **`V8.2`** Verified 12.5M Performance (`$100K` Starting Capital):**
+    - **`V8.2-S` SHORT Bot alone (`233` trades):** **`+86.7%` Sum Net (`$100K → $212,105`), Sharpe `1.76`, MaxDD `-26.5%`** (vs Raw `V8.0-Base` `-88.6%` / `$32K` / `Sh -1.23`!).
+    - **`V8.2-L` LONG Bot (`Engine C1`, `39` trades):** **`+186.3%` Sum Net (`$100K → $527,426`), `69.2%` Net WR, `PF 6.90x`, Sharpe `2.74`, MaxDD `-19.6%`** (`No-Dup` saved `+6.1%` Net in Last 2W by blocking `Nov 11 AXTI -12.3%`).
+    - **Combined `V8.2` (`$100K` Unleveraged 50/50 Cash Split: `$50K` Short + `$50K` Long):** **`$100K → $361,151` (`+261%` real compounded profit), MaxDD `-13.9%`, Sharpe `3.32`, `12/13` profitable months** (only `2026-06: -1.9%`). *(2x parallel sleeve reference: `$1.13M`, `+273.2%` Sum Net, DD `-26.6%`.)*
+- **Live Verification (`2026-11-16` & `2026-11-18`):**
+  - `agent1_v2.py --date=2026-11-16` cleanly unlocked `CGON` (`+24.2%` gap, `T&Q MSYN=+0.59, BlkOFI=-0.31`, `+5.54%`) + `DRTS` (`+9.96%`) + `BXDC` (`-3.15%`).
+  - `agent1_v2.py --date=2026-11-18` confirmed `BLSH` (`+1.34%` @ `08:30 PST`) + `TXT` (`+1.14%` @ `08:30 PST`) with ZERO `_B2` add-ons.
+  - `agent1_long_live.py --date=2026-11-11 --mode=c1` automatically detected open `AXTI/MXL/VOYG` from `Nov 6` and blocked duplicate `AXTI` re-entry; on `2026-11-18` confirmed **`AEHR`** (open `$51.72`, live alert `$48.81`, closed `$49.48`, GTC stop `$45.51`, exits `Mon 2026-11-23 13:00 PST`).
+
+## Prior Session Summary (2026-11-14 to 2026-11-17 — `534`-Stock Walk-Forward Benchmark, Standalone `LONG-ONLY` Isolation, Live `T&Q` Gating in `agent1_v2.py`, and `Nov 4 → Nov 17` 2-Week Live Backtest)
 - **`534`-Stock (`69,610`-Setup) Multi-Horizon Walk-Forward Benchmark (`V6` vs. `V7 SYNERGY 6` vs. `Hybrid L7/L8 LONG-ONLY`):**
   - **`V7. SYNERGY 6 (Full 6-Engine T&Q L+S)`:** Full 24M **`+443.1%` Tot PnL (`$4.15M` from `$100K`, Sharpe `2.91`)**, Last 12M **`+246.9%` (`$883K`, Sharpe `3.67`)**, Last 4M **`+99.0%` (Sharpe `3.79`)**, Last 2M **`+53.5%` (`70.6%` WR, Sharpe `4.77`)**, Last 2W **`+8.6%` (`75.0%` WR, `-1.5%` Max DD, Sharpe `5.73`)**.
   - **`L8. HYBRID LONG-ONLY (Intraday T&Q L4 + C1 Crash Reversal Wed–Fri + Catalyst)`:** Full 24M **`+266.5%` Tot PnL (`$1.05M`, Sharpe `2.32`)**, Last 12M **`+226.3%` (`$776K`, Sharpe `3.36`)**, Last 4M **`+51.4%` (Sharpe `2.29`)**, Last 2M **`+31.0%` (`64.3%` Day WR, Sharpe `3.33`)**, Last 2W **`+5.3%` (`-0.9%` Max DD, Sharpe `4.97`)**.

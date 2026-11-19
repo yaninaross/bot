@@ -221,3 +221,20 @@ leak-free, causal base pipeline:
      - **`SYNERGY 2` (`C2 + Morning & _B2 T&Q Veto` — High-Precision Gatekeeper):** `146t` (`16%` act) | `58.2%` WR | **`+2.16%` avg (`+39%` lift)** | `+150.2%` Tot PnL | **`$365,672` (24M, `+$55.7K`)** | **`-30.8%` DD (`-7.3%` lower DD)** | **`1.57` Sharpe**.
      - **`SYNERGY 4A` (`Full 3-Pillar: SYNERGY 2 + Unlocked 15–30% Gaps + Non-Diluting Kelly 35% Upgraded T&Q Slot-Fill` — #1 Overall Winner):** **`401t` (`51%` act)** | **`60.8%` WR** | **`+175.8%` Tot PnL** | **`$437,129` (24M, `+$127,190` / `+41%` ahead of C2, Sharpe `1.59` #1)** | **`$238,228` (12M, `+102.2%`, Sharpe `1.79` #1 vs `1.42` for C2)** | **`88.9%` Day WR (`8W–1L`, Sharpe `1.89`) in Last 2M** | **`+2.3%` (`$102,291`, `0.0%` DD, Sharpe `4.79`) in Last 2W**.
 
+### Official Production Lock: **`V8.2`** (`V8.2-S` + `V8.2-L`, Choice 1: Max Profit — Deployed 2026-11-19)
+- **Audit Scope:** Full US Market 12.5-Month Split-Proof, Zero-Look-Ahead Orthogonal Ablation (`263` Trading Days: `2025-11-03 → 2026-11-18`, `218` reverse-split penny stocks excluded via `unadj_np_28m.pkl`, `-0.75%` SHORT slip + real IBKR borrow / `-0.30%` LONG slip).
+- **`V8.2-S` (`agent1/agent1_v2.py` — SHORT Bot):**
+  - **IBKR ETB Short-Locate (`+101%` 12.5M lift)** with Colab-proof inline FTP + `$20M/$15` structural fallback.
+  - **Pre-Open Catalyst Veto (`<= 06:30 PST`, `+9%` lift):** Blocks `M&A/Buyout` on all gaps and `Analyst Upgrades` on `<15%` gaps before Top-3 watchlist selection.
+  - **NO `_B2` Midday Bounce Re-Shorts (`+26%` lift):** Short each qualified stock ONCE (`06:33–06:44 PST`). No midday scanning needed!
+  - **Unlock `15%–30%` Gaps ONLY w/ Bearish Peak→Entry `T&Q` (`+40%` lift):** Requires `MSYN >= +0.35` AND `Block_OFI <= -0.15` on the `peak_time → entry_time` reversal window.
+  - **NO `<15%` `T&Q` Veto (`Choice 1` default; pass `--picky` for `Choice 2`).**
+  - **Hard Stop `-10.0%` from entry & NO Trailing Profit Lock** (blanket `+5%` profit lock + `-5%` tight stop lost `-55.7%` Net over 12.5M by chopping big winning shorts).
+  - **Exits (PST):** `08:30 PST` (`<15%` gaps & `$50+ local_high`), `09:30 PST` (`<$50 local_high >=15%`), `11:00 PST` (`bar0_flush >=15%`, 100% flat).
+  - **12.5M Standalone (`$100K`):** `233` trades, **`+86.7%` Sum Net (`$212,105`), Sharpe `1.76`, MaxDD `-26.5%`** (vs Raw `V8.0-Base` `-88.6%` / `$32K`).
+- **`V8.2-L` (`agent1/agent1_long_live.py` — LONG Bot):**
+  - **`Engine C1` (`Wed/Thu/Fri` Crash Reversal `T+3`, `$20–$100` unadj, `-15%` 5d crash, `ret_2d <= +5%`, `-12%` GTC stop)** + **Automatic Causal `No-Duplicate-Open-Position` Guard** (`BLOCK_DUPLICATE_OPEN_C1 = True`, replays last 3 trading days & `-12%` stop-outs, supports `--open=SYM`), plus Intraday `Engine B` & `Engine A`.
+  - **12.5M Standalone (`$100K`):** `39` trades, `69.2%` Net WR, `PF 6.90x`, **`+186.3%` Sum Net (`$527,426`), Sharpe `2.74`, MaxDD `-19.6%`**.
+- **Combined `V8.2` (`$100K` Unleveraged 50/50 Cash Split: `$50K` Short + `$50K` Long):** **`$100K → $361,151` (`+261%` real compounded profit), MaxDD `-13.9%`, Sharpe `3.32`, `12/13` profitable months** *(2x parallel sleeve reference: `$1.13M`, `+273.2%` Sum Net, DD `-26.6%`)*.
+
+

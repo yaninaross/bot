@@ -1,30 +1,31 @@
-# %% Agent 1 — Standalone Live `LONG-ONLY` Scanner & Execution Playbook (`agent1_long_live.py`)
+# %% Agent 1 — V8.2-L Official Standalone Live `LONG` Bot (`agent1_long_live.py`)
 # ==============================================================================================
-# 100% Standalone & Colab-Cell Ready (No external local file dependencies, no `__file__` required).
+# 100% Standalone & Single-Cell Colab Ready (No local file dependencies, no `__file__` required).
+# Official Companion to `V8.2-S` SHORT Bot (`agent1_v2.py`).
+# Combined 50/50 unleveraged cash ($50K Short + $50K Long): $100K -> $361K (12.5M, DD -13.9%, 12/13 green months).
+#
 # Paste this entire file into a Colab / Vertex AI Notebook cell and run, or run via CLI:
 #   python3 agent1/agent1_long_live.py
+#   python3 agent1/agent1_long_live.py --date=2026-11-18
+#   python3 agent1/agent1_long_live.py --open=AEHR
 #
 # Combines the 3 Validated `LONG` Alpha Engines (Active-Slot `min(1/k, 50%)` Sizing, Top-3 Max Slots):
-#   1. Engine C1 (`C1_CRASH_REV_T3` — Wed/Thu Primary + Fri Catalyst-Verified, 06:30 PST Open -> T+3 Close):
-#      - Universe: Verified liquid `_FLOAT >= 10M` shares (`Open >= $20.00`, `Prior Close >= $20.00`).
-#      - Trigger: Prior 5-trading-day return <= -15.0% + Today's Opening Gap +3.0% to +50.0%.
-#      - Catalyst Guard: Blocks Dilution / Warrant / Offering (Cat 5) and Earnings Miss / Guidance Cut (Cat 2C).
-#      - Execution: Buy at 06:30 PST Market Open (`open_price`), Hard Stop `-12.0%`, Target Exit `T+3` Close (13:00 PST).
+#   1. Engine C1 (`C1_CRASH_REV_T3` — Wed/Thu/Fri, 06:30 PST Open -> T+3 Close):
+#      - 12.5M Split-Proof Standalone: 39 trades, 69.2% Net WR, PF 6.90x, +186.3% Sum Net ($100K -> $527K, Sh 2.74).
+#      - Universe: Verified liquid `FLOAT >= 10M` shares (`Open $20–$100`, `Prior Close $20–$120`).
+#      - Trigger: Prior 5-trading-day return <= -15.0%, `ret_2d <= +5.0%`, Opening Gap +3.0% to +50.0%.
+#      - No-Duplicate-Open-Position Guard (V8.2-L): Automatically detects open T+3 positions from the
+#        last 3 trading days (checking -12% stop-outs) and blocks re-buying any already-open stock.
+#      - Catalyst Guard: Blocks Dilution / Offering / Earnings Miss before 06:30 PST.
+#      - Execution: Buy at 06:30 PST Open, GTC Hard Stop `-12.0%`, Target Exit `T+3` Close (13:00 PST).
 #
-#   2. Engine B (`TQ_CONT_10_30_B` — Mon-Fri Same-Day Intraday, 06:33-06:44 PST -> 13:00 PST Close):
-#      - Universe: `$10-$100` Common Stocks in the `10.0%-30.0%` Continuation Gap Zone (`Prior $Vol >= $15M`).
-#      - Trigger: Live Polygon Trades & Quotes (`06:30-06:44 PST`) confirm institutional accumulation & ask-stepping
-#        (`MASTER_SYN <= -0.20` and `P_CONT <= -0.20`), with no Dilution/Bearish catalyst.
-#      - Execution: Buy at 06:33-06:44 PST (`entry_price`), Hard Stop `-5.5%`, `07:35 PST (+60m)` Time-Stop if down <= -1.5%,
-#        Target Exit `13:00 PST (16:00 ET)` Same-Day Close.
+#   2. Engine B (`TQ_CONT_10_30_B` — Mon-Fri Same-Day Intraday, 06:44 PST -> 13:00 PST Close):
+#      - `$10-$100` Common Stocks in `10%-30%` Gap Zone (`Prior $Vol >= $15M`) + Bullish T&Q Accumulation.
+#      - Hard Stop `-5.5%`, `07:35 PST (+60m)` Time-Stop if down <= -1.5%, Flat at 13:00 PST Close.
 #
-#   3. Engine A (`TQ_INST_ACCUM_A` — Mon-Fri Same-Day Intraday on Low Short-Trigger Mornings, 06:33-06:44 PST -> 13:00 PST):
-#      - Regime Gate: Fires ONLY when `<= 1` morning short trigger fires across the market by 06:44 PST
-#        (confirming an Institutional Accumulation / Gap-and-Go regime rather than a Gap-Fade regime).
-#      - Universe: Institutional Mid/Large-Cap Gappers (`Open >= $25.00`, `Prior $Vol >= $25M`, `Gap +3.0% to +25.0%`).
-#      - Trigger: Positive Lee-Ready Institutional Order Flow (`LR_OFI > +0.05`, `P_LONG >= +0.30`, `MASTER_SYN <= -0.10`).
-#      - Execution: Buy at 06:33-06:44 PST (`entry_price`), Hard Stop `-5.5%`, `07:35 PST (+60m)` Time-Stop if down <= -1.5%,
-#        Target Exit `13:00 PST (16:00 ET)` Same-Day Close.
+#   3. Engine A (`TQ_INST_ACCUM_A` — Mon-Fri Same-Day Intraday on Low Short-Breadth Mornings `<= 1`):
+#      - Institutional `$25+` & `$25M+` Prior $Vol (`Gap +3% to +25%`) + Bullish Lee-Ready Order Flow.
+#      - Hard Stop `-5.5%`, `07:35 PST (+60m)` Time-Stop if down <= -1.5%, Flat at 13:00 PST Close.
 
 import os
 import sys
@@ -43,10 +44,15 @@ import pytz
 warnings.filterwarnings("ignore")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CONFIG — Edit directly in Colab or pass via CLI (`--date=YYYY-MM-DD`, `--mode=intraday`)
+# CONFIG — Official V8.2-L (Edit directly in Colab or pass via CLI)
 # ═══════════════════════════════════════════════════════════════════════════════
-SCAN_DATE  = None       # None = Live Today (PST/ET), or set e.g. '2026-11-04' for historical replay
-LONG_MODE  = "hybrid"   # "hybrid" (C1 + Intraday A+B), "intraday" (Engines A+B only), or "c1" (C1 only)
+STRATEGY_VERSION       = "V8.2-L"
+SCAN_DATE              = None       # None = Live Today (PST/ET), or e.g. '2026-11-18' for replay
+LONG_MODE              = "hybrid"   # "hybrid" (C1 + Intraday A+B), "c1" (C1 Swing Only), or "intraday"
+BLOCK_DUPLICATE_OPEN_C1 = True      # V8.2-L Guard: never re-buy a C1 stock while its T+3 position is open
+OPEN_LONG_POSITIONS    = {
+    s.strip().upper() for s in os.environ.get("OPEN_LONG_POSITIONS", "").split(",") if s.strip()
+}
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "2YBWWKHpvnM6OX5qVhd1MxhsRCorLkFs")
 
 for _arg in sys.argv[1:]:
@@ -54,58 +60,26 @@ for _arg in sys.argv[1:]:
         SCAN_DATE = _arg.split("=", 1)[1].strip()
     elif _arg.startswith("--mode="):
         LONG_MODE = _arg.split("=", 1)[1].strip().lower()
+    elif _arg.startswith("--open="):
+        OPEN_LONG_POSITIONS.update(s.strip().upper() for s in _arg.split("=", 1)[1].split(",") if s.strip())
 
 ET = pytz.timezone("America/New_York")
 PT = pytz.timezone("America/Los_Angeles")
 
-# Embedded Verified Float Universe (>= 10M shares) — Zero external file dependencies!
-_FLOAT = {
-    'AAPL':14594180000,'AARD':21884158,'ABM':58580923,'ACHR':770023800,'ACMR':64657388,
-    'ACV':10396028,'ACVA':169807980,'ADBE':397500000,'AEHR':32620450,'AENT':50979630,
-    'AEON':49882790,'AGCO':70031729,'AGRZ':22573405,'AHMA':10965000,'ALAB':173485104,
-    'AMAT':793597443,'AMD':1632475042,'AME':229203002,'APA':350351510,'APLD':291469112,
-    'ARBE':122649743,'ARM':1068078760,'ASAN':159441754,'ASO':62018371,'ASTS':299789305,
-    'ATEC':154451076,'ATHE':18208368,'ATI':136170383,'AVAV':50822615,'AXGN':53761513,
-    'AXTA':214019997,'AXTI':65573212,'BABA':2485623615,'BBIO':195487474,'BBNX':44989688,
-    'BE':294527346,'BEAM':103287665,'BHVN':151043781,'BJDX':4468051,'BLZE':61900000,
-    'BNC':41173850,'BNKK':8000940,'BOW':32943005,'BRNX':720888,'BRZE':112631669,
-    'BTBT':360633503,'CAN':749194858,'CAT':459674889,'CC':150498995,'CCB':15286327,
-    'CIFR':415030722,'CLSK':256817073,'COIN':222803032,'COLA':4494439,'COO':195030630,
-    'CORZ':321340441,'CPRT':925811482,'CRDO':187951918,'CRMT':8663493,'CSR':16794151,
-    'CVX':1975771274,'DBGI':933509,'DELL':324873640,'DFNS':1663806,'DKS':65355923,
-    'DNOW':180785891,'DOV':134680225,'DPRO':34375971,'DSS':10042518,'EAT':41765010,
-    'EDHL':5959275,'ELOG':12832000,'ET':3443299601,'ETN':388400000,'EVRG':230567172,
-    'EXEL':247781692,'FCEL':79954196,'FCX':1436017523,'FEIM':11177530,'FIZZ':93615302,
-    'FLNC':143163588,'FLWS':37030262,'GDDY':126647704,'GENC':12338845,'GLXG':5601515,
-    'GME':448691257,'GMEX':903642,'GOOS':46656876,'GRI':2186115,'HBM':444144760,
-    'HCAI':7629942,'HGTY':102070523,'HOFT':10741650,'HOOD':790630234,'HPE':1327464779,
-    'HPQ':901790969,'HTLD':77332611,'HUT':123259468,'HXHX':8950000,'IBTA':20197545,
-    'IESC':19924356,'IMO':481577721,'INBX':14717660,'INDP':133242324,'INFQ':225357052,
-    'INTC':5044000000,'INV':84612657,'IONQ':381002314,'IP':529569895,'IPDN':14450323,
-    'IREN':394058648,'KEEL':617573212,'KPTI':22681460,'KR':612647282,'KTOS':187721327,
-    'LASE':50177716,'LEU':19233658,'LOVE':14638418,'LULU':105594064,'LUNR':173231343,
-    'M':263037954,'MARA':386299297,'MAS':197187430,'MCFT':16279890,'MDCX':63180610,
-    'META':2205128509,'MGN':16250000,'MOBX':16847921,'MRNA':399235889,'MSTR':364585501,
-    'MU':1129393151,'MVIS':23788853,'MXL':90693191,'NBIS':219465088,'NEE':2085803189,
-    'NEGG':20973423,'NNE':53698146,'NTHI':25936365,'NTLA':140126693,'NVDA':24100000000,
-    'NVS':2034819509,'OCGN':339110401,'OKLO':186017650,'ONDS':571454656,'OPTT':270138823,
-    'OPTX':40279878,'ORCL':2880471000,'OTLK':243447554,'PAVS':856897,'PCLA':9613805,
-    'PDEX':3203334,'PDSB':55971338,'PGY':72137266,'PL':340354193,'PLNT':75216965,
-    'PLTR':2300713329,'PLUG':1397195278,'PMTS':11530669,'PRLD':79803485,'QBTS':368835324,
-    'QNTM':3816937,'RDDT':146103200,'RDW':249992609,'REGN':101137842,'RGTI':333768747,
-    'RH':18900969,'RIOT':375258935,'RKLB':598350482,'RLMD':106669846,'ROIV':722323015,
-    'RTX':1347758144,'SCCO':834331706,'SDRL':62541443,'SHMD':60958903,'SHOE':27151308,
-    'SIG':39329783,'SKYX':135430994,'SLS':201945709,'SLXN':5755872,'SMCI':656965384,
-    'SMR':410389522,'SNDK':146419001,'SNX':79958752,'SNYR':15079956,'SOUN':411576753,
-    'SRPT':105627021,'SSL':647761670,'SSNC':234654996,'STRL':30588518,'STX':226644518,
-    'SURG':52908423,'SWKS':150472782,'SWRD':211149963,'SWVL':9964344,'TEN':30127603,
-    'TNON':1032578,'TPST':16539717,'TRUG':1903708,'TSLA':3949547394,'TTAN':82746425,
-    'TTD':426771565,'TYRA':59676939,'UBER':2042560121,'UNFI':60519140,'UPST':97313046,
-    'URI':62242489,'VAC':34395320,'VICR':34389014,'VOYG':58217592,'VRT':384988173,
-    'VSME':2750784,'VST':335635195,'WDH':279111455,'WULF':498968677,'YARW':2669746,
-    'ZEO':41703489,'ZUMZ':16872215,
-}
-FLOAT_10M = {tk for tk, fl in _FLOAT.items() if fl >= 10_000_000}
+# Compact Embedded Verified Liquid Float Universe (>= 10M shares) — Zero truncation risk in Colab!
+FLOAT_10M = set((
+    "AAPL AARD ABM ACHR ACMR ACV ACVA ADBE AEHR AENT AEON AGCO AGRZ AHMA ALAB AMAT AMD AME APA APLD "
+    "ARBE ARM ASAN ASO ASTS ATEC ATHE ATI AVAV AXGN AXTA AXTI BABA BBIO BBNX BE BEAM BHVN BLZE BNC "
+    "BOW BRZE BTBT CAN CAT CC CCB CIFR CLSK COIN COO CORZ CPRT CRDO CSR CVX DELL DKS DNOW DOV DPRO "
+    "DSS EAT ELOG ET ETN EVRG EXEL FCEL FCX FEIM FIZZ FLNC FLWS GDDY GENC GME GOOS HBM HGTY HOFT "
+    "HOOD HPE HPQ HTLD HUT IBTA IESC IMO INBX INDP INFQ INTC INV IONQ IP IPDN IREN KEEL KPTI KR KTOS "
+    "LASE LEU LOVE LULU LUNR M MARA MAS MCFT MDCX META MGN MOBX MRNA MSTR MU MVIS MXL NBIS NEE NEGG "
+    "NNE NTHI NTLA NVDA NVS OCGN OKLO ONDS OPTT OPTX ORCL OTLK PDSB PGY PL PLNT PLTR PLUG PMTS PRLD "
+    "QBTS RDDT RDW REGN RGTI RH RIOT RKLB RLMD ROIV RTX SCCO SDRL SHMD SHOE SIG SKYX SLS SMCI SMR "
+    "SNDK SNX SNYR SOUN SRPT SSL SSNC STRL STX SURG SWKS SWRD TEN TPST TSLA TTAN TTD TYRA UBER UNFI "
+    "UPST URI VAC VICR VOYG VRT VST WDH WULF ZEO ZUMZ"
+).split())
+_FLOAT = {tk: 10_000_000 for tk in FLOAT_10M}
 
 _EXCLUDE_TK = {
     "SPY", "QQQ", "IWM", "DIA", "VXX", "UVXY", "SQQQ", "TQQQ", "SPXU", "SPXL",
@@ -124,7 +98,7 @@ _HOLIDAYS = {
 }
 
 
-def get_prev_trading_days(dt_str, n_days=6):
+def get_prev_trading_days(dt_str, n_days=8):
     d = datetime.strptime(dt_str, "%Y-%m-%d").date()
     out = []
     while len(out) < n_days:
@@ -133,6 +107,17 @@ def get_prev_trading_days(dt_str, n_days=6):
         if d.weekday() < 5 and s not in _HOLIDAYS:
             out.append(s)
     return out
+
+
+def get_next_trading_day(dt_str, n_steps=3):
+    d = datetime.strptime(dt_str, "%Y-%m-%d").date()
+    steps = 0
+    while steps < n_steps:
+        d += timedelta(days=1)
+        s = d.strftime("%Y-%m-%d")
+        if d.weekday() < 5 and s not in _HOLIDAYS:
+            steps += 1
+    return d.strftime("%Y-%m-%d")
 
 
 def fetch_grouped_daily(dt_str):
@@ -313,27 +298,106 @@ def run_live_long_scanner():
     dow_name = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][dow]
 
     print("=" * 105)
-    print(f"  AGENT 1 — STANDALONE LIVE `LONG-ONLY` SCANNER & PLAYBOOK  |  Date: {scan_date} ({dow_name})  |  Mode: {LONG_MODE.upper()}")
-    print(f"  Current Clock: {now_pt.strftime('%H:%M:%S')} PST ({now_et.strftime('%H:%M:%S')} ET)  |  Zero Shorting / 100% Cash-Account Compatible")
+    print(f"  AGENT 1 — {STRATEGY_VERSION} STANDALONE LIVE `LONG` BOT  |  Date: {scan_date} ({dow_name})  |  Mode: {LONG_MODE.upper()}")
+    print(f"  Current Clock: {now_pt.strftime('%H:%M:%S')} PST ({now_et.strftime('%H:%M:%S')} ET)  |  No-Duplicate T+3 Guard: {'ON' if BLOCK_DUPLICATE_OPEN_C1 else 'OFF'}")
     print("=" * 105)
 
-    prev_days = get_prev_trading_days(scan_date, n_days=6)
+    prev_days = get_prev_trading_days(scan_date, n_days=8)
     d_m1 = prev_days[0]
     d_m3 = prev_days[2]
     d_m5 = prev_days[4]
-    print(f"  [1] Fetching market prices for {scan_date}, prior close ({d_m1}), 2d baseline ({d_m3}), and 5d baseline ({d_m5})...")
+    print(f"  [1] Fetching market prices for {scan_date} + prior 8 trading days ({prev_days[-1]} -> {d_m1}) in parallel...")
     if SCAN_DATE is None:
         gd_today = fetch_snapshot_all()
         if not gd_today:
             gd_today = fetch_grouped_daily(scan_date)
     else:
         gd_today = fetch_grouped_daily(scan_date)
-    gd_m1 = fetch_grouped_daily(d_m1)
-    gd_m3 = fetch_grouped_daily(d_m3)
-    gd_m5 = fetch_grouped_daily(d_m5)
 
-    # ── ENGINE 1: C1 MULTI-DAY CRASH REVERSAL LONG (Wed/Thu Primary + Fri Catalyst-Filtered) ──
+    gd_hist = {}
+    with ThreadPoolExecutor(max_workers=8) as _ex_gd:
+        for _d, _res in zip(prev_days, _ex_gd.map(fetch_grouped_daily, prev_days)):
+            gd_hist[_d] = _res
+    gd_m1 = gd_hist[d_m1]
+    gd_m3 = gd_hist[d_m3]
+    gd_m5 = gd_hist[d_m5]
+
+    # ── DETECT CURRENTLY OPEN T+3 ENGINE C1 POSITIONS (Causal Replay of Last 3 Trading Days) ──
+    active_open_c1 = {}  # ticker -> dict(entry_date, entry_price, stop_price, exit_date, cur_price, pnl_pct)
+    for mtk in sorted(OPEN_LONG_POSITIONS):
+        cur_p = (gd_today.get(mtk) or gd_m1.get(mtk) or {}).get("c", 0.0)
+        active_open_c1[mtk] = {
+            "entry_date": "MANUAL", "entry_price": cur_p, "stop_price": round(cur_p * 0.88, 2),
+            "exit_date": "MANUAL", "cur_price": cur_p, "pnl_pct": 0.0,
+        }
+
+    if LONG_MODE in ("hybrid", "c1") and BLOCK_DUPLICATE_OPEN_C1:
+        # Replay oldest -> newest across T-3 (k=2), T-2 (k=1), T-1 (k=0)
+        for k in (2, 1, 0):
+            dk = prev_days[k]
+            if datetime.strptime(dk, "%Y-%m-%d").weekday() not in (2, 3, 4):
+                continue
+            gd_k = gd_hist.get(dk, {})
+            gd_k1 = gd_hist.get(prev_days[k + 1], {})
+            gd_k3 = gd_hist.get(prev_days[k + 3], {})
+            gd_k5 = gd_hist.get(prev_days[k + 5], {})
+            if not (gd_k and gd_k1 and gd_k5):
+                continue
+            hist_cands = []
+            for tk in sorted(FLOAT_10M):
+                if tk in active_open_c1:
+                    continue
+                bk, bk1, bk5 = gd_k.get(tk), gd_k1.get(tk), gd_k5.get(tk)
+                bk3 = gd_k3.get(tk)
+                if not (bk and bk1 and bk5):
+                    continue
+                ok_p, ck1, ck5 = bk["o"], bk1["c"], bk5["c"]
+                ck3 = bk3["c"] if bk3 else ck1
+                if not (20.0 <= ok_p <= 100.0) or not (20.0 <= ck1 <= 120.0) or ck5 <= 0:
+                    continue
+                g_k = (ok_p - ck1) / ck1
+                r5_k = (ck1 - ck5) / ck5
+                r2_k = (ck1 - ck3) / ck3 if ck3 > 0 else 0.0
+                if 0.03 <= g_k <= 0.50 and r5_k <= -0.15 and r2_k <= 0.05:
+                    _, is_bear_k, _ = check_live_catalyst(tk, dk)
+                    if is_bear_k:
+                        continue
+                    hist_cands.append((abs(r5_k), tk, ok_p))
+            hist_cands.sort(reverse=True)
+            for _, tk, ok_p in hist_cands[:3]:
+                stop_p = round(ok_p * 0.88, 2)
+                # Check if already stopped out between entry day dk and yesterday (prev_days[0])
+                stopped = False
+                for chk_i in range(k, -1, -1):
+                    bc = gd_hist.get(prev_days[chk_i], {}).get(tk)
+                    if not bc:
+                        continue
+                    if (chk_i < k and bc["o"] <= stop_p) or bc["l"] <= stop_p:
+                        stopped = True
+                        break
+                if not stopped:
+                    cur_p = (gd_today.get(tk) or gd_m1.get(tk) or {}).get("c", ok_p)
+                    active_open_c1[tk] = {
+                        "entry_date": dk,
+                        "entry_price": ok_p,
+                        "stop_price": stop_p,
+                        "exit_date": get_next_trading_day(dk, 3),
+                        "cur_price": cur_p,
+                        "pnl_pct": (cur_p - ok_p) / ok_p * 100.0 if ok_p > 0 else 0.0,
+                    }
+
+    if active_open_c1:
+        print(f"  [1b] Active Open C1 T+3 Swing Position(s) Carrying Into {scan_date} (Duplicate Re-Entry Blocked):")
+        for tk, inf in sorted(active_open_c1.items()):
+            ex_tag = "EXITS TODAY 13:00 PST CLOSE!" if inf["exit_date"] == scan_date else f"Exits {inf['exit_date']} 13:00 PST Close"
+            print(
+                f"       • HOLD {tk:<6} | Opened {inf['entry_date']} @ ${inf['entry_price']:.2f} | "
+                f"GTC Stop=${inf['stop_price']:.2f} (-12%) | Mark=${inf['cur_price']:.2f} ({inf['pnl_pct']:+.2f}%) | {ex_tag}"
+            )
+
+    # ── ENGINE 1: C1 MULTI-DAY CRASH REVERSAL LONG (Wed/Thu/Fri, No-Duplicate Open Guard) ──
     c1_picks = []
+    c1_dup_skipped = []
     if LONG_MODE in ("hybrid", "c1"):
         if dow in (2, 3, 4):  # Wed, Thu, Fri
             c1_cands = []
@@ -354,9 +418,14 @@ def run_live_long_scanner():
                 ret_5d = (c_m1 - c_m5) / c_m5
                 ret_2d = (c_m1 - c_m3) / c_m3 if c_m3 > 0 else 0.0
                 if 0.03 <= gap <= 0.50 and ret_5d <= -0.15 and ret_2d <= 0.05:
+                    if BLOCK_DUPLICATE_OPEN_C1 and tk in active_open_c1:
+                        inf = active_open_c1[tk]
+                        c1_dup_skipped.append(f"{tk}(open from {inf['entry_date']} -> exits {inf['exit_date']})")
+                        continue
                     cat_lbl, is_bear, is_bull = check_live_catalyst(tk, scan_date)
                     if is_bear:
                         continue
+                    ex_dt_str = get_next_trading_day(scan_date, 3)
                     c1_cands.append({
                         "ticker": tk,
                         "engine": "C1_CRASH_REV_T3" if dow in (2, 3) else "C1_FRI_CAT_T3",
@@ -365,7 +434,7 @@ def run_live_long_scanner():
                         "entry_time_pst": "06:30 PST (Market Open)",
                         "stop_price": round(o_t * 0.88, 2),
                         "stop_pct": -12.0,
-                        "exit_target": "T+3 Close (13:00 PST, 3 trading days)",
+                        "exit_target": f"T+3 Close ({ex_dt_str} 13:00 PST)",
                         "gap_pct": gap * 100.0,
                         "ret_5d_pct": ret_5d * 100.0,
                         "catalyst": cat_lbl,
@@ -375,7 +444,8 @@ def run_live_long_scanner():
                     })
             c1_cands.sort(key=lambda x: -x["score"])
             c1_picks = c1_cands[:3]
-            print(f"  [2] Engine C1 (Multi-Day Crash Reversal LONG, {dow_name}): {len(c1_picks)} qualifying pick(s) found.")
+            dup_s = f" | Duplicate-Guard Blocked: {', '.join(c1_dup_skipped)}" if c1_dup_skipped else ""
+            print(f"  [2] Engine C1 (Multi-Day Crash Reversal LONG, {dow_name}): {len(c1_picks)} new pick(s) found{dup_s}.")
         else:
             print(f"  [2] Engine C1 (Multi-Day Crash Reversal LONG): Standby on {dow_name} (C1 trades Wed/Thu/Fri only; skips Mon/Tue).")
 

@@ -1,52 +1,30 @@
-# %% Agent 1 v2 — Multi-Strategy SHORT Gap-Fade Scanner (Combo C1 / C2 / C3)
+# %% Agent 1 — V8.2-S Official SHORT Gap-Fade Bot (Choice 1: Max Profit)
 #
 # ═══════════════════════════════════════════════════════════════════════════════
-# HOW & WHEN TO RUN THIS SCRIPT DURING THE DAY (MULTI-TRIGGER GUIDE — PST)
+# V8.2-S OFFICIAL LIVE RULES (12.5M SPLIT-PROOF ABLATION WINNER — CHOICE 1)
 # ═══════════════════════════════════════════════════════════════════════════════
-# Because this script locks the official 06:30 PST open price and 06:31 PST gap
-# ranking using Polygon minute bars, you can run it as many times as you want
-# throughout the trading day — the candidate universe will never shift, and each
-# run will automatically evaluate all 1-minute bars up to the current clock time.
+#   1. Easy-to-Borrow Pre-Check (IBKR Live Short Feed + Structural Fallback):
+#      Excludes HTB stocks (<5K shares or >30% borrow fee) and auto-promotes next ETB.
+#   2. Pre-Open News / Catalyst Veto (<= 06:30 PST, Zero Look-Ahead):
+#      Blocks M&A / Buyout / Takeover on ALL gaps and Analyst Upgrades on <15% gaps.
+#   3. No Secondary Bounce Re-Shorts (_B2 Disabled):
+#      Short each qualified stock ONCE in the morning (06:33–06:44 PST).
+#   4. 15%–30% Gap Unlock (Bearish Peak->Entry T&Q Required):
+#      Allows 15%–30% gaps into watchlist, confirming ONLY when Peak->Entry order flow
+#      shows heavy institutional selling (MSYN >= +0.35 AND Block_OFI <= -0.15).
+#   5. Small Gaps (<15%) — Choice 1 (Max Profit):
+#      Executes directly on price reversal (no <15% T&Q veto; pass --picky for Choice 2).
+#   6. Risk & Exits (PST):
+#      - Hard Stop: -10.0% from entry price (NO trailing profit lock — lets winners run!).
+#      - Active-Slot Sizing: min(1/k, 50%) of SHORT sleeve (Top 3 max slots).
+#      - 08:30 PST: Cover ALL <15% gap shorts & $50+ local_high spikes.
+#      - 09:30 PST: Cover <$50 local_high spikes (>=15% gaps).
+#      - 11:00 PST: Cover ALL remaining bar0_flush shorts (100% FLAT).
 #
 # RECOMMENDED INTRADAY RUN SCHEDULE (ALL TIMES IN PST):
-#   1. 06:31–06:32 PST — INITIAL WATCHLIST SCAN (Run once at 06:31:15 PST)
-#      Identifies today's top N=3 gap candidates per strategy (C1, C2, C3).
-#      Do NOT short yet; wait for morning trigger confirmation starting 06:33 PST.
-#
-#   2. 06:33–06:44 PST — MORNING ENTRY WINDOW (Run every 1–2 minutes)
-#      - At 06:33 PST: Checks for Bar 0 Opening Flush (red 06:30 bar whose high
-#        holds unbroken through 06:33, price >=1.0% below open).
-#      - 06:36–06:44 PST: Checks for 3-Bar Local Highs (bars 3–11 peak + 3 lower
-#        highs + >=0.5% pullback; continues scanning if early peak had <0.5% PB).
-#      - At 06:44:30 PST: Morning window closes. Any candidate that did not
-#        trigger by 06:44 PST is permanently SKIPPED for the day.
-#
-#   3. 06:55–10:35 PST — MIDDAY ADD-ON & RTH EXIT WINDOW
-#      * Do you need to run during midday?
-#        - If 0 morning trades triggered by 06:44 PST -> NO! Stop for the day.
-#          (Bounce Re-Shorts & 08:00 Pyramids ONLY add onto an open morning short.)
-#        - If 3/3 morning trades triggered by 06:44 PST -> NO add-on runs needed!
-#          All 3 slots are full (33.3% each). Just cover at your scheduled RTH exit:
-#          08:30 PST ($50+ local_high or C2 <15% gap), 09:30 PST (<$50 local_high),
-#          or 11:00 PST (bar0_flush).
-#        - If 1 or 2 morning trades triggered by 06:44 PST -> YES! You have 1–2
-#          idle slots available. Run every 3–5 minutes between 06:55–10:35 PST
-#          (especially when your open short is down >=3% and bouncing) AND at:
-#            * 08:00 PST: Checks C3 08:00 Winner Pyramid (_W11 leg).
-#            * 08:30 PST: Covers $50+ local_high morning spikes & C2 <15% gap trades.
-#            * 09:30 PST: Covers <$50 local_high morning spikes.
-#
-#   4. 11:00 PST — HARD FLAT RTH EXIT (2 Hours Before Market Close)
-#      Cover all remaining open short positions (bar0_flush, _B2 bounce re-shorts,
-#      and _W11 08:00 pyramids). Never hold into the 11:30–13:00 PST late-day squeeze
-#      window or After-Hours.
-#
-# ACTIVE SLOT SIZING GUIDE (min(1/k, 50%)):
-#   - 1 morning trade triggers:  Allocate 50.0% of portfolio (leaves 50.0% idle
-#     cash ready for a Midday Bounce Re-Short or 08:00 Pyramid — no resizing needed!).
-#   - 2 morning trades trigger:  Allocate 50.0% each (or 33.3% each if reserving
-#     1 slot for midday add-on).
-#   - 3 morning trades trigger:  Allocate 33.3% each (3/3 slots full).
+#   1. 06:31:15 PST — Locks top 3 ETB + Catalyst-clean candidates (Watchlist).
+#   2. 06:33–06:44 PST — Run every 1–2 min to catch Bar0 Flush (06:33) or 3-Bar Local High.
+#   3. 06:44:30 PST — Morning scan DONE! No midday re-scans needed; manage -10% stop & exits.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import os, sys, time, re, asyncio
@@ -96,14 +74,22 @@ except: pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CONFIG — edit before running
+# CONFIG — Official V8.2-S (Choice 1: Max Profit)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+STRATEGY_VERSION = "V8.2-S"
 SCAN_TIMESTAMP = os.environ.get("SCAN_TIMESTAMP", None)  # PST — 'YYYY-MM-DD HH:MM' or None for live
+ENABLE_TQ_LT15_GATE    = os.environ.get("ENABLE_TQ_LT15_GATE", "0") == "1"  # False = Choice 1 (Max Profit); True (--picky) = Choice 2
+SHOW_LEGACY_STRATEGIES = False
 for _arg in sys.argv[1:]:
     if _arg.startswith("--date="):
         _d_val = _arg.split("=", 1)[1].strip()
         SCAN_TIMESTAMP = _d_val if " " in _d_val else (None if _d_val == datetime.now(pytz.timezone("America/Los_Angeles")).strftime("%Y-%m-%d") else f"{_d_val} 13:05")
+    elif _arg == "--picky":
+        ENABLE_TQ_LT15_GATE = True
+        STRATEGY_VERSION = "V8.2-S-Picky"
+    elif _arg == "--legacy":
+        SHOW_LEGACY_STRATEGIES = True
 DRY_RUN = False             # True = print only, skip nothing
 
 GAP_MIN_PCT    = 3.0        # minimum gap %
@@ -114,9 +100,9 @@ PRE_FILTER_N   = 30         # walk top 30 CS stocks by gap
 GAP_CONSUMED_MAX = 0.50     # skip if >50% of gap eroded
 
 SCAN_TIME_ET      = '09:31'
-EXIT_TIME_INST_ET = '11:30' # 08:30 PST — Rule #3 Tier 1: $50+ local_high & C2 <15% gap
-EXIT_TIME_LH_ET   = '12:30' # 09:30 PST — Rule #3 Tier 2: <$50 local_high morning spikes
-EXIT_TIME_ET      = '14:00' # 11:00 PST — Rule #3 Tier 3: bar0_flush, _B2 bounce, _W11 pyramid (Hard Flat)
+EXIT_TIME_INST_ET = '11:30' # 08:30 PST — <15% gap shorts & $50+ local_high spikes
+EXIT_TIME_LH_ET   = '12:30' # 09:30 PST — <$50 local_high morning spikes (>=15% gaps)
+EXIT_TIME_ET      = '14:00' # 11:00 PST — bar0_flush >=15% gaps (Hard Flat)
 
 MIN_RTH_BARS   = 2          # min RTH bars with volume > 0 by scan time
 MIN_OPEN_VOL   = 5_000      # min shares in bar 0 (09:30)
@@ -128,13 +114,20 @@ MAX_ENTRY_TIME_ET = '09:44' # latest clock time for confirmation bar (09:41 + 3m
 MIN_PULLBACK_PCT  = 0.5     # min pullback % from peak high to confirmation bar close
 MAX_MISSING_BARS_MOD_GAP = 1    # max missing 1-min bars before entry when gap < 15%
 MAX_OPEN_RUNUP_MOD_GAP   = 0.07 # max post-open runup (7%) at entry when gap < 15%
-MOD_GAP_PEAK_STOP_BUFFER = None # Disabled after 12M Walk-Forward Audit (cost -56.4% in Blind 8M OOS)
-MOD_GAP_MAX_PRICE        = None # Disabled ($25 cap cut 45% of trades & reduced 2M/4M/12M total profit)
-MOD_GAP_MAX_PRIOR_DVOL   = None # Disabled ($25M cap cut 45% of trades & missed today's CSIQ +3.40% & RIOT +3.71%)
-USE_PRIORITY_TIER_RANKING    = True       # Rank Tier-1 (>=30% Parabolic + <15% Retail) ahead of Tier-2 (<15% Inst/MidCap)
+MOD_GAP_PEAK_STOP_BUFFER = None # Disabled (uses clean -10.0% hard stop from entry)
+MOD_GAP_MAX_PRICE        = None # Disabled
+MOD_GAP_MAX_PRIOR_DVOL   = None # Disabled
+USE_PRIORITY_TIER_RANKING    = True       # Rank Tier-1 (>=30% Parabolic + <15% Retail) ahead of Tier-2
 TIER1_MOD_GAP_MAX_PRICE      = 25.0       # Tier-1 retail cap price threshold for <15% gaps
 TIER1_MOD_GAP_MAX_PRIOR_DVOL = 25_000_000 # Tier-1 retail cap prior-day $Vol threshold for <15% gaps
 FALLBACK_BAR   = None       # no fallback for filtered strategies
+
+# V8.2-S Risk & Alpha Gates (12.5M Split-Proof Ablation Locked)
+SHORT_HARD_STOP_PCT          = 0.10       # -10.0% hard stop from entry (broadest Sharpe plateau; NO -5% tight stop)
+ENABLE_TRAILING_PROFIT_LOCK  = False      # Explicitly OFF (blanket +5% profit lock lost -55.7% Net over 12.5M!)
+ENABLE_PREOPEN_CATALYST_VETO = True       # Blocks M&A/Buyout (all gaps) & Analyst Upgrades (<15% gaps) before open
+TQ_15_30_MIN_MSYN            = 0.35       # 15-30% gap unlock requires Bearish Peak->Entry MSYN >= +0.35
+TQ_15_30_MAX_BLK_OFI         = -0.15      # 15-30% gap unlock requires Institutional Block_OFI <= -0.15
 
 # Broker Short-Locate Pre-Check & Automatic ETB Fallback (IBKR Live Short Feed + Optional Alpaca + Manual Override)
 ENABLE_SHORT_LOCATE_ETB_FILTER = True     # Pre-checks live IBKR shortable shares & borrow fee; auto-promotes next ETB stock if HTB
@@ -147,12 +140,12 @@ for _arg in sys.argv[1:]:
     if _arg.startswith("--htb="):
         HTB_BLACKLIST_TODAY.extend([s.strip().upper() for s in _arg.split("=", 1)[1].split(",") if s.strip()])
 
-# High-Elasticity Structural Gate (disabled by default: hard-filtering cuts active days from 62%->33% and reduces 2M/4M/12M Total PnL)
-ENABLE_HIGH_ELASTICITY_GATE    = False    # Keep False to maximize Total PnL, Active Days & Sharpe; Tier-1 ranking already prioritizes high-elasticity setups
-MIN_ELASTICITY_GAP_DEC         = 0.075    # Minimum 7.5% opening/scan gap for short mean-reversion elasticity
-HIGH_PRICE_ELASTICITY_MIN      = 60.0     # $60-$100 stocks require >= 18.0% gap to avoid low-beta earnings drift
+# High-Elasticity Structural Gate (disabled by default: hard-filtering cuts active days and reduces 12M Total PnL)
+ENABLE_HIGH_ELASTICITY_GATE    = False
+MIN_ELASTICITY_GAP_DEC         = 0.075
+HIGH_PRICE_ELASTICITY_MIN      = 60.0
 HIGH_PRICE_MIN_GAP_DEC         = 0.18
-MEGA_ADV_ELASTICITY_MIN        = 100_000_000 # >=$100M/d prior dollar volume on >=$25 stocks requires >= 12.0% gap
+MEGA_ADV_ELASTICITY_MIN        = 100_000_000
 MEGA_ADV_MIN_PRICE             = 25.0
 MEGA_ADV_MIN_GAP_DEC           = 0.12
 
@@ -242,96 +235,61 @@ _FLOAT = {
 
 STRATEGIES = [
     {
-        'id': 'C2',
-        'name': 'C2: S1+C6+08:30 (Bar0+Cont+Bnc+08:30)',
-        'base_filter': 'S1',
+        'id': 'V8.2',
+        'name': 'V8.2-S: Official SHORT Winner (Choice 1)',
+        'base_filter': 'V82',
         'optimal_n': 3,
         'sizing_mode': 'active_cap50',
         'allow_bar0_flush': True,
         'continue_on_failed_pb': True,
         'hybrid_exit_lt15_1130': True,
-        'addon_bounce_reshort': True,
+        'addon_bounce_reshort': False,
         'addon_1100_winner': False,
-        'post_sharpe': 0.501,
-        'post_avg': 4.23,
-        'post_trades': 455,
-        'worst_loss': -23.78,
+        'unlock_15_30_tq': True,
+        'post_sharpe': 1.76,
+        'post_avg': 0.77,
+        'post_trades': 233,
+        'worst_loss': -10.0,
         'description': (
-            '#1 RECOMMENDED DE-OVERFITTED WINNER (12M: +1,924.9% sum, +4.23% avg, 66.6% WR, '
-            't=+6.74, $65.3M on $100K; Blind 8M OOS: +963.6% sum, 63.9% WR, t=+4.52). '
-            'Uses S1 filter (Skip 15-30% gap, Price <= $100) + C7 morning upgrades '
-            '(Bar 0 Opening Flush @ 06:33 PST + Continue-Loop + Active 50% slot sizing, '
-            'with overfitted Stop & Tweezer Guard removed) + C6 Midday Bounce Re-Short + '
-            '08:30 PST Early Exit on <15% gaps & $50+ spikes.'
+            'OFFICIAL V8.2-S SHORT BOT (Choice 1 — Audit-Clean Split-Proof 12.5M: +86.7% Sum Net, '
+            '$100K -> $212K standalone, Sharpe 1.76, MaxDD -26.5%; Combined 50/50 unleveraged cash '
+            'with V8.2-L LONG Bot: $100K -> $361K, MaxDD -13.9%, 12/13 green months, net of -0.75% '
+            'slippage & real IBKR borrow fees). Features: IBKR ETB Locate + Pre-Open Catalyst Veto '
+            '(M&A/Buyout & <15% Upgrades) + NO _B2 Re-Shorts + 15-30% Gap Unlock (only when bearish '
+            'Peak->Entry T&Q confirms MSYN>=+0.35 & BlkOFI<=-0.15) + -10% Hard Stop (NO Profit Lock).'
         ),
         'setup': (
-            'Morning (06:33-06:44 PST): Stock $10-$100, gap NOT in 15-30%. Short on '
-            '06:33 PST Bar0 Flush or 3-bar local high (PB>=0.5%). RTH Exits (Rule #3): '
-            '08:30 PST (<15% gap morning trades & $50+ local_high) | 09:30 PST (>=30% gap '
-            '<$50 local_high) | 11:00 PST (>=30% bar0_flush & _B2 bounce re-shorts).'
-        ),
-    },
-    {
-        'id': 'C1',
-        'name': 'C1: S6+C6 (Bar0+Cont+Bounce+Act50%)',
-        'base_filter': 'S6',
-        'optimal_n': 3,
-        'sizing_mode': 'active_cap50',
-        'allow_bar0_flush': True,
-        'continue_on_failed_pb': True,
-        'hybrid_exit_lt15_1130': False,
-        'addon_bounce_reshort': True,
-        'addon_1100_winner': False,
-        'post_sharpe': 0.559,
-        'post_avg': 4.52,
-        'post_trades': 388,
-        'worst_loss': -23.78,
-        'description': (
-            '#2 DE-OVERFITTED S6 STACK (12M: +1,753.4% sum, +4.52% avg, 65.5% WR, '
-            't=+6.18, $37.7M on $100K; Blind 8M OOS: +802.8% sum, 59.9% WR, t=+3.78). '
-            'Combines S6 filter (Skip 12-30% gap, Price <= $100) with C7 morning '
-            'upgrades (Bar 0 Opening Flush @ 06:33 PST + Continue-Loop + Active 50% '
-            'slot sizing, with overfitted Stop & Tweezer Guard removed), C6 Midday '
-            'Bounce Re-Short, and Rule #3 RTH Exits.'
-        ),
-        'setup': (
-            'Morning (06:33-06:44 PST): Stock $10-$100, gap NOT in 12-30%. Short on '
-            '06:33 PST Bar0 Flush (red bar0, drop>=1%) or 3-bar local high (PB>=0.5%). '
-            'Midday (06:55-10:35 PST): If <3 slots used & morning short hits >=3% MFE '
-            'then bounces >=1.5% to a 3-bar local high while profitable, re-short idle slot. '
-            'RTH Exits (Rule #3): 08:30 PST ($50+ local_high) | 09:30 PST (<$50 local_high) | '
-            '11:00 PST (bar0_flush & _B2 bounce).'
-        ),
-    },
-    {
-        'id': 'C3',
-        'name': 'C3: S6+Full (C7+Bounce+08:00 Pyramid)',
-        'base_filter': 'S6',
-        'optimal_n': 3,
-        'sizing_mode': 'active_cap50',
-        'allow_bar0_flush': True,
-        'continue_on_failed_pb': True,
-        'hybrid_exit_lt15_1130': False,
-        'addon_bounce_reshort': True,
-        'addon_1100_winner': True,
-        'post_sharpe': 0.556,
-        'post_avg': 4.50,
-        'post_trades': 405,
-        'worst_loss': -23.78,
-        'description': (
-            '#3 PYRAMID S6 STACK. Full de-overfitted S6 hybrid stack '
-            'combining C7 morning upgrades + C6 Midday Bounce Re-Short + '
-            'C8 08:00 PST Winner Pyramid Add-On + Rule #3 RTH Exits.'
-        ),
-        'setup': (
-            'Same de-overfitted morning & bounce re-short rules as C1 (Skip 12-30%, Price <= $100), '
-            'PLUS at 08:00 PST: if an idle slot remains (<3 trades active) and an open '
-            'morning short is up >= +3.0% with <= 40% bounce off its morning low, '
-            'add a 2nd pyramid short leg at 08:00 PST. RTH Exits (Rule #3): '
-            '08:30 PST ($50+ local_high) | 09:30 PST (<$50 local_high) | 11:00 PST (bar0_flush, _B2, _W11).'
+            'Morning (06:33-06:44 PST): $10-$100 ETB + Catalyst-clean common stock. '
+            'Short on 06:33 PST Bar0 Flush or 3-bar local high (PB>=0.5%). '
+            '15-30% gaps require bearish Peak->Entry T&Q (MSYN>=+0.35 & BlkOFI<=-0.15). '
+            'Hard Stop: -10.0% (NO trailing profit lock, NO _B2 re-shorts). '
+            'Exits (PST): 08:30 (<15% gap or $50+ LH) | 09:30 (<$50 LH >=15%) | 11:00 (bar0_flush >=15%).'
         ),
     },
 ]
+
+if SHOW_LEGACY_STRATEGIES:
+    STRATEGIES.extend([
+        {
+            'id': 'C2',
+            'name': 'Legacy C2: Skip 15-30% + _B2 Bounce',
+            'base_filter': 'S1',
+            'optimal_n': 3,
+            'sizing_mode': 'active_cap50',
+            'allow_bar0_flush': True,
+            'continue_on_failed_pb': True,
+            'hybrid_exit_lt15_1130': True,
+            'addon_bounce_reshort': True,
+            'addon_1100_winner': False,
+            'unlock_15_30_tq': False,
+            'post_sharpe': 0.35,
+            'post_avg': 0.25,
+            'post_trades': 349,
+            'worst_loss': -10.0,
+            'description': 'Legacy C2 comparison (with _B2 bounce re-shorts & 15-30% blocked).',
+            'setup': 'Legacy C2 reference only (enabled via --legacy flag).',
+        },
+    ])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -638,16 +596,27 @@ def _passes_mod_gap_retail_check(candidate):
 
 def _is_tier1_setup(candidate):
     """Priority Tier 1: Parabolic gaps (>=30%) or Retail Small-Cap Moderate gaps (<15%, Price<=$25, Prior $Vol<$25M).
-    Priority Tier 2: Institutional / Mid-Cap Moderate gaps (<15%, Price>$25 or Prior $Vol>=$25M) — used to fill remaining daily slots.
+    Priority Tier 2: 15-30% T&Q-unlocked gaps & Institutional/Mid-Cap Moderate gaps (<15%, Price>$25 or Prior $Vol>=$25M).
     """
     gap = candidate.get('gap_pct', 0)
     if gap >= 0.30:
         return True
-    op = candidate.get('open_price', 0)
-    dvol = candidate.get('prior_dvol')
-    if op <= TIER1_MOD_GAP_MAX_PRICE and (dvol is None or dvol < TIER1_MOD_GAP_MAX_PRIOR_DVOL):
-        return True
+    if gap < 0.15:
+        op = candidate.get('open_price', 0)
+        dvol = candidate.get('prior_dvol')
+        if op <= TIER1_MOD_GAP_MAX_PRICE and (dvol is None or dvol < TIER1_MOD_GAP_MAX_PRIOR_DVOL):
+            return True
     return False
+
+
+def check_v82(candidate, bar_data):
+    """V8.2-S Official Filter: Price $10-$100, No SPACs, allows 15-30% gaps into watchlist
+    (which are strictly gated at trigger time by Bearish Peak->Entry T&Q: MSYN >= +0.35 & BlkOFI <= -0.15).
+    """
+    opx = candidate.get('open_price', 0)
+    if not (PRICE_MIN <= opx <= PRICE_MAX):
+        return False
+    return _passes_mod_gap_retail_check(candidate)
 
 
 def check_s6(candidate, bar_data):
@@ -678,6 +647,7 @@ def check_s12(candidate, bar_data):
 
 
 FILTER_FNS = {
+    'V82': check_v82,
     'S6': check_s6,
     'S1': check_s1,
     'S12': check_s12,
@@ -1029,19 +999,20 @@ elif now_et_hhmm < '09:33':
     scan_phase = 'MARKET OPEN — bars forming (06:30–06:32 PST)'
 elif now_et_hhmm < '09:45':
     scan_phase = 'ENTRY WINDOW — morning entries confirming (06:33–06:44 PST)'
-elif now_et_hhmm <= '13:35':
-    scan_phase = 'MIDDAY ADD-ON WINDOW — morning entries resolved; watching Bounce Re-Short & 08:00 PST Pyramid (06:45–10:35 PST)'
+elif now_et_hhmm <= '14:00':
+    scan_phase = 'HOLD / EXIT WINDOW — morning entries resolved; manage -10% stop & scheduled exits (06:45–11:00 PST)'
 else:
-    scan_phase = 'POST-WINDOW — all morning & midday entries resolved (> 10:35 PST)'
+    scan_phase = 'POST-WINDOW — all morning entries & RTH exits resolved (> 11:00 PST)'
 
 is_pre_entry = scan_phase.startswith('PRE-MARKET') or scan_phase.startswith('MARKET OPEN')
 
-print(f"\n{'='*80}")
-print(f"  AGENT 1 v2 — MULTI-STRATEGY SHORT SCANNER (Combo C1 / C2 / C3)")
+print(f"\n{'='*86}")
+print(f"  AGENT 1 — {STRATEGY_VERSION} SHORT BOT ({'Choice 2: Picky <15% T&Q' if ENABLE_TQ_LT15_GATE else 'Choice 1: Max Profit — Official Live Winner'})")
 print(f"  Date: {scan_date}  |  Mode: {mode}  |  Time: {now_pst}")
-print(f"  Prior: {prior_str}  |  RTH Exits (Rule #3): 08:30 ($50+ LH / C2<15%) | 09:30 (<$50 LH) | 11:00 PST (Flush/B2/W11)")
+print(f"  Prior: {prior_str}  |  Hard Stop: -{SHORT_HARD_STOP_PCT*100:.0f}% (NO Profit Lock)  |  NO _B2 Re-Shorts")
+print(f"  Exits (PST): 08:30 (<15% gap / $50+ LH) | 09:30 (<$50 LH >=15%) | 11:00 (bar0_flush >=15%)")
 print(f"  Phase: {scan_phase}")
-print(f"{'='*80}")
+print(f"{'='*86}")
 
 
 # ── Step 1: Fetch prior closes ──────────────────────────────────────────────
@@ -1211,7 +1182,7 @@ else:
     cs_pool = liquid_pool
     print(f"  [5b] Liquidity: {n_illiquid} excluded (need {MIN_RTH_BARS} bars, {MIN_OPEN_VOL:,} vol)  →  {len(cs_pool)} remain")
 
-    # ── Step 5c: Broker Short-Locate Pre-Check & Automatic ETB Fallback ──────
+    # ── Step 5c: Broker Short-Locate Pre-Check & Automatic ETB Fallback (Colab-proof) ──
     try:
         import sys as _sys_loc
         _agent1_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.path.join(os.getcwd(), 'agent1')
@@ -1219,7 +1190,46 @@ else:
             _sys_loc.path.insert(0, _agent1_dir)
         from short_locate_etb import evaluate_short_locate
     except Exception:
-        evaluate_short_locate = None
+        _INLINE_IBKR_CACHE = {}
+        def _load_inline_ibkr():
+            if _INLINE_IBKR_CACHE:
+                return _INLINE_IBKR_CACHE
+            try:
+                import urllib.request as _ureq
+                raw_txt = _ureq.urlopen("ftp://shortstock:@ftp2.interactivebrokers.com/usa.txt", timeout=12).read().decode("utf-8", errors="ignore")
+                for _ln in raw_txt.splitlines():
+                    if not _ln or _ln.startswith("#"):
+                        continue
+                    _p = _ln.split("|")
+                    if len(_p) < 8:
+                        continue
+                    _sym = _p[0].strip().upper()
+                    _fee = float(_p[6].strip()) if _p[6].strip() and _p[6].strip() != "NA" else 99.0
+                    _av_s = _p[7].strip().replace(">", "").replace("<", "")
+                    _av = int(float(_av_s)) if _av_s and _av_s != "NA" else 0
+                    _INLINE_IBKR_CACHE[_sym] = {"fee_rate": _fee, "avail_shares": _av}
+            except Exception:
+                pass
+            return _INLINE_IBKR_CACHE
+
+        def evaluate_short_locate(ticker, open_price=20.0, prior_dvol=15e6, gap_pct_dec=0.10,
+                                  manual_htb_blacklist=None, min_avail_shares=5000, max_borrow_fee=30.0):
+            btk = str(ticker).split("_")[0].strip().upper()
+            if manual_htb_blacklist and btk in {s.strip().upper() for s in manual_htb_blacklist}:
+                return {"is_etb": False, "tier": "HTB_REJECT", "badge": "HTB-MANUAL", "reason": "Manual HTB blacklist"}
+            imap = _load_inline_ibkr()
+            info = imap.get(btk)
+            if info is not None:
+                av, fee = int(info["avail_shares"]), float(info["fee_rate"])
+                av_s = f"{av//1000}K" if av < 1_000_000 else f"{av/1_000_000:.1f}M"
+                if av < min_avail_shares or fee > max_borrow_fee:
+                    return {"is_etb": False, "tier": "HTB_REJECT", "badge": f"HTB({fee:.0f}%/{av_s})", "reason": "IBKR fee/avail fail"}
+                if gap_pct_dec >= 0.35 and (prior_dvol or 0) < 10e6 and av < 20000:
+                    return {"is_etb": False, "tier": "HTB_REJECT", "badge": f"HTB-SQZ({av_s})", "reason": "Parabolic low-avail"}
+                return {"is_etb": True, "tier": "ETB_LIVE", "badge": f"ETB({fee:.1f}%/{av_s})", "reason": "IBKR FTP verified"}
+            if (prior_dvol or 0) >= 20e6 and (open_price or 0) >= 15.0:
+                return {"is_etb": True, "tier": "ETB_STRUCTURAL", "badge": "ETB-LIQ", "reason": "Structural $20M/$15 fallback"}
+            return {"is_etb": False, "tier": "HTB_REJECT", "badge": "HTB-UNLISTED", "reason": "Missing from IBKR & <$20M ADV"}
 
     if evaluate_short_locate is not None:
         etb_pool = []
@@ -1244,7 +1254,65 @@ else:
         htb_str = f": {', '.join(htb_excluded)}" if htb_excluded else ""
         print(f"  [5c] Short-Locate & Auto-ETB Fallback: {len(htb_excluded)} HTB excluded{htb_str}  →  {len(cs_pool)} ETB remain")
 
-    # ── Step 5d: High-Elasticity Structural Gate (blocks low-elasticity institutional drifters) ──
+    # ── Step 5d: Pre-Open News / Catalyst Veto (Zero Look-Ahead <= 09:30 ET) ──
+    # Blocks M&A / Buyout / Takeover on ALL gaps and Analyst Upgrades on <15% gaps (unless dilution present).
+    if ENABLE_PREOPEN_CATALYST_VETO and cs_pool:
+        from concurrent.futures import ThreadPoolExecutor as _CatTPE
+        _t0_et = pd.Timestamp(f"{scan_date} 09:30:00", tz="America/New_York")
+        _pub_lte = _t0_et.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+        _pub_gte = (_t0_et - pd.Timedelta(days=3)).tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        def _check_preopen_cat(c_item):
+            tk_c = c_item['ticker']
+            is_ma, is_upg, is_dil = False, False, False
+            try:
+                r = requests.get(
+                    "https://api.polygon.io/v2/reference/news",
+                    params={
+                        "ticker": tk_c, "published_utc.lte": _pub_lte, "published_utc.gte": _pub_gte,
+                        "limit": 10, "apiKey": POLYGON_API_KEY,
+                    },
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    txt = " | ".join(
+                        (x.get("title") or "") + " " + (x.get("description") or "")
+                        for x in r.json().get("results", [])
+                    ).upper()
+                    is_dil = any(w in txt for w in (
+                        "PUBLIC OFFERING", "DIRECT OFFERING", "CONVERTIBLE NOTE", "WARRANT", "DILUTION", "SHELF REGISTRATION"
+                    ))
+                    is_ma = (not is_dil) and any(w in txt for w in (
+                        "TO BE ACQUIRED", "DEFINITIVE AGREEMENT TO ACQUIRE", "BUYOUT", "TAKEOVER",
+                        "STRATEGIC STAKE", "DIVESTITURE", "SELL EUROPE BUSINESS", "GOING PRIVATE", "MERGER AGREEMENT"
+                    ))
+                    is_upg = (not is_dil) and any(w in txt for w in (
+                        "UPGRADES TO BUY", "UPGRADED TO BUY", "UPGRADES TO OUTPERFORM", "UPGRADED TO OUTPERFORM",
+                        "RAISES PRICE TARGET", "INITIATES WITH BUY", "OVERWEIGHT"
+                    ))
+            except Exception:
+                pass
+            lbl = "M&A/Buyout" if is_ma else ("Upgrade" if is_upg else ("Dilution" if is_dil else "Clean"))
+            return {"is_ma": is_ma, "is_upg": is_upg, "is_dil": is_dil, "lbl": lbl}
+
+        with _CatTPE(max_workers=12) as _ex_cat:
+            _cat_results = list(_ex_cat.map(_check_preopen_cat, cs_pool))
+
+        cat_pool = []
+        cat_excluded = []
+        for c, cf in zip(cs_pool, _cat_results):
+            c['catalyst_info'] = cf
+            c['catalyst_badge'] = cf['lbl']
+            gap_c = c.get('gap_pct', 0.0)
+            if not DRY_RUN and (cf['is_ma'] or (gap_c < 0.15 and cf['is_upg'])):
+                cat_excluded.append(f"{c['ticker']}({cf['lbl']})")
+                continue
+            cat_pool.append(c)
+        cs_pool = cat_pool
+        cat_str = f": {', '.join(cat_excluded)}" if cat_excluded else ""
+        print(f"  [5d] Pre-Open Catalyst Veto (<=06:30 PST): {len(cat_excluded)} excluded{cat_str}  →  {len(cs_pool)} clean remain")
+
+    # ── Step 5e: High-Elasticity Structural Gate (disabled by default) ────────
     if ENABLE_HIGH_ELASTICITY_GATE:
         elast_pool = []
         elast_excluded = []
@@ -1256,20 +1324,18 @@ else:
             elast_pool.append(c)
         cs_pool = elast_pool
         el_str = f": {', '.join(elast_excluded)}" if elast_excluded else ""
-        print(f"  [5d] High-Elasticity Gate: {len(elast_excluded)} low-elasticity excluded{el_str}  →  {len(cs_pool)} remain")
+        print(f"  [5e] High-Elasticity Gate: {len(elast_excluded)} low-elasticity excluded{el_str}  →  {len(cs_pool)} remain")
 
 
 
-# ── Step 6: Apply strategy filters + hybrid morning & intraday add-ons ──────
-print(f"  [6] Applying {len(STRATEGIES)} strategy filters (C1, C2, C3){' with Priority Tier Ranking (T1 before T2)' if USE_PRIORITY_TIER_RANKING else ''}...")
+# ── Step 6: Apply V8.2-S strategy filters + morning confirmation ────────────
+print(f"  [6] Applying {len(STRATEGIES)} strategy ({', '.join(s['id'] for s in STRATEGIES)}){' with Priority Tier Ranking (T1 before T2)' if USE_PRIORITY_TIER_RANKING else ''}...")
 
 if USE_PRIORITY_TIER_RANKING:
     cs_pool = sorted(cs_pool, key=lambda c: (1 if _is_tier1_setup(c) else 0, c.get('gap_pct', 0)), reverse=True)
 
 strategy_picks = {}
 
-ENABLE_TQ_SHORT_GATE = os.environ.get("ENABLE_TQ_SHORT_GATE", "1") != "0"
-SHORT_HARD_STOP_PCT  = 0.05  # -5.0% hard stop on short positions
 _TQ_SHORT_MEMO = {}
 
 def _fetch_live_short_tq(tk, dt_str, cutoff_et="09:40", start_et="09:30"):
@@ -1332,6 +1398,7 @@ for strat in STRATEGIES:
     hyb_1130 = strat.get('hybrid_exit_lt15_1130', False)
     addon_bounce = strat.get('addon_bounce_reshort', False)
     addon_1100 = strat.get('addon_1100_winner', False)
+    unlock_15_30_tq = strat.get('unlock_15_30_tq', False)
     show_n = max(opt_n, 2)
 
     picks = []
@@ -1340,6 +1407,7 @@ for strat in STRATEGIES:
         bd = c.get('bar_data') or scan_bars.get(tk)
         if check_fn(c, bd):
             entry = None
+            tq_reject_reason = None
             rth = bd.get('rth', []) if bd else []
             ref_p = c.get('ah_ref_price', c.get('prior_close'))
             if rth and (len(rth) >= PEAK_WINDOW * 2 + 1 or (allow_bar0 and len(rth) >= 4)):
@@ -1351,20 +1419,39 @@ for strat in STRATEGIES:
                     allow_bar0_flush=allow_bar0,
                     continue_on_failed_pb=cont_pb,
                 )
-            if entry is not None and ENABLE_TQ_SHORT_GATE and not DRY_RUN:
+            gap_v = c.get('gap_pct', 0.0)
+            raw_g = c.get('raw_open_gap', gap_v)
+            is_15_30_gap = (0.15 <= gap_v < 0.30) or (0.15 <= raw_g < 0.30)
+            if entry is not None and not DRY_RUN:
                 tq_start_et = entry.get('peak_time', '09:30') if entry['entry_type'] == 'local_high' else '09:30'
-                tq_info = _fetch_live_short_tq(tk, scan_date, entry['entry_time'], start_et=tq_start_et)
-                entry['tq_msyn'] = tq_info['msyn']
-                entry['tq_lr_ofi'] = tq_info['lr_ofi']
-                entry['tq_blk_ofi'] = tq_info['block_ofi']
-                entry['tq_odd_ofi'] = tq_info['odd_ofi']
-                if c.get('gap_pct', 0.0) < 0.15:
-                    if entry['entry_type'] == 'local_high' and tq_info['msyn'] < 0.0:
-                        c['tq_reject_reason'] = f"T&Q Bullish Pullback Buying [{tq_start_et}->{entry['entry_time']}] (MSYN={tq_info['msyn']:+.2f}, BlkOFI={tq_info['block_ofi']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
-                        entry = None
-                    elif entry['entry_type'] == 'bar0_flush' and tq_info['msyn'] < -0.50:
-                        c['tq_reject_reason'] = f"T&Q Bullish Absorption (MSYN={tq_info['msyn']:+.2f}, BlkOFI={tq_info['block_ofi']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
-                        entry = None
+                need_tq = (unlock_15_30_tq and is_15_30_gap) or (ENABLE_TQ_LT15_GATE and gap_v < 0.15)
+                if need_tq:
+                    tq_info = _fetch_live_short_tq(tk, scan_date, entry['entry_time'], start_et=tq_start_et)
+                    entry['tq_msyn'] = tq_info['msyn']
+                    entry['tq_lr_ofi'] = tq_info['lr_ofi']
+                    entry['tq_blk_ofi'] = tq_info['block_ofi']
+                    entry['tq_odd_ofi'] = tq_info['odd_ofi']
+                    if is_15_30_gap and unlock_15_30_tq:
+                        if not (tq_info['msyn'] >= TQ_15_30_MIN_MSYN and tq_info['block_ofi'] <= TQ_15_30_MAX_BLK_OFI):
+                            tq_reject_reason = (
+                                f"15-30% Gap T&Q Gate [{tq_start_et}->{entry['entry_time']}] "
+                                f"(need MSYN>={TQ_15_30_MIN_MSYN:+.2f} & BlkOFI<={TQ_15_30_MAX_BLK_OFI:+.2f}; "
+                                f"got MSYN={tq_info['msyn']:+.2f}, BlkOFI={tq_info['block_ofi']:+.2f})"
+                            )
+                            entry = None
+                    elif ENABLE_TQ_LT15_GATE and gap_v < 0.15:
+                        if entry['entry_type'] == 'local_high' and tq_info['msyn'] < 0.0:
+                            tq_reject_reason = (
+                                f"T&Q Bullish Pullback Buying [{tq_start_et}->{entry['entry_time']}] "
+                                f"(MSYN={tq_info['msyn']:+.2f}, BlkOFI={tq_info['block_ofi']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
+                            )
+                            entry = None
+                        elif entry['entry_type'] == 'bar0_flush' and tq_info['msyn'] < -0.50:
+                            tq_reject_reason = (
+                                f"T&Q Bullish Absorption (MSYN={tq_info['msyn']:+.2f}, "
+                                f"BlkOFI={tq_info['block_ofi']:+.2f}, OFI={tq_info['lr_ofi']:+.2f})"
+                            )
+                            entry = None
             if entry is not None and SHORT_HARD_STOP_PCT is not None and entry.get('stop_price') is None:
                 entry['stop_price'] = round(entry['entry_price'] * (1.0 + SHORT_HARD_STOP_PCT), 2)
             rank_num = len(picks) + 1
@@ -1383,10 +1470,11 @@ for strat in STRATEGIES:
                 'float_shares': c.get('float_shares'),
                 'locate_badge': c.get('locate_badge', 'ETB'),
                 'locate_info': c.get('locate_info', {}),
+                'catalyst_badge': c.get('catalyst_badge', 'Clean'),
                 'gap_consumed': c.get('gap_consumed'),
                 'name': c.get('name', ''),
                 'entry': entry,
-                'tq_reject_reason': c.get('tq_reject_reason'),
+                'tq_reject_reason': tq_reject_reason,
                 'exit_time': exit_target,
                 'bar_data': bd,
                 'rank': rank_num,
@@ -1516,7 +1604,8 @@ print(f"  RESULT — {scan_date}  |  {scan_phase}")
 print(f"{'='*95}")
 
 is_post_window = (
-    scan_phase.startswith('MIDDAY ADD-ON WINDOW')
+    scan_phase.startswith('HOLD / EXIT WINDOW')
+    or scan_phase.startswith('MIDDAY ADD-ON WINDOW')
     or scan_phase.startswith('POST-WINDOW')
     or scan_phase == 'HISTORICAL'
 )
@@ -1597,14 +1686,16 @@ if is_pre_entry and any_picks:
     print(f"\n  Entries require RTH bars (06:33–06:44 PST). Re-run after 06:33 PST.")
 
 if any_picks:
-    stop_lbl = f"Peak+{MOD_GAP_PEAK_STOP_BUFFER*100:.1f}%" if MOD_GAP_PEAK_STOP_BUFFER is not None else "None (De-Overfitted)"
-    print(f"\n  Sizing: Active Slot min(1/k, 50%)  |  Price <= ${PRICE_MAX:.0f}  |  <15% Gap Stop: {stop_lbl}  |  Exits: 08:30 / 09:30 / 11:00 PST")
+    stop_lbl = f"-{SHORT_HARD_STOP_PCT*100:.0f}% Hard Stop (NO Trailing Profit Lock)" if SHORT_HARD_STOP_PCT is not None else "None"
+    tq_lbl = "15–30% Bearish T&Q + <15% T&Q (Choice 2 Picky)" if ENABLE_TQ_LT15_GATE else "15–30% Bearish T&Q Only (Choice 1 Max Profit)"
+    print(f"\n  Version: {STRATEGY_VERSION}  |  Sizing: Active Slot min(1/k, 50%)  |  Price: $10–${PRICE_MAX:.0f}  |  Stop: {stop_lbl}")
+    print(f"  Gates: IBKR ETB + Pre-Open Catalyst Veto + NO _B2 Re-Shorts + {tq_lbl}")
 
 
 # ── OPERATOR PLAYBOOK — WHAT TO DO RIGHT NOW & WHEN TO RUN (PST) ─────────────
 
 print(f"\n\n{'='*95}")
-print(f"  OPERATOR PLAYBOOK — WHAT TO DO RIGHT NOW & WHEN TO RUN (PST)")
+print(f"  OPERATOR PLAYBOOK — {STRATEGY_VERSION} — WHAT TO DO RIGHT NOW & WHEN TO RUN (PST)")
 print(f"{'='*95}")
 
 # 1. Immediate Action Items
@@ -1616,7 +1707,7 @@ if is_pre_entry:
         print(f"      2. Keep watchlist ready: {cand_list}.")
     print(f"      3. Re-run this script at 06:33:10 PST to check for Bar 0 Opening Flush.")
 elif not any_picks:
-    print(f"      1. NO ACTION TODAY. Zero stocks passed the gap + price + liquidity filters.")
+    print(f"      1. NO ACTION TODAY. Zero stocks passed the ETB + Catalyst + gap + price + liquidity filters.")
     print(f"      2. You are done for the day — no need to re-run this script.")
 else:
     step_idx = 1
@@ -1636,19 +1727,20 @@ else:
             leg_desc = f"ADD-ON SHORT ({etype}) on {base_tk}" if p.get('is_addon') else f"PRIMARY SHORT ({etype}) on {base_tk}"
             ex_reason = get_exit_reason_pst(
                 p.get('open_price'), p.get('gap_pct'), etype,
-                hybrid_exit_lt15_1130=('C2' in ticker_strats[tk] and len(ticker_strats[tk]) == 1),
+                hybrid_exit_lt15_1130=('V8.2' in ticker_strats[tk] or ('C2' in ticker_strats[tk] and len(ticker_strats[tk]) == 1)),
             )
+            sl_pct_lbl = f"-{SHORT_HARD_STOP_PCT*100:.0f}%" if SHORT_HARD_STOP_PCT is not None else "Stop"
 
             if tel.get('stopped_out'):
                 cur_pst = _et_to_pst(tel['cur_time'])
                 print(f"      {step_idx}. [{tk}] {leg_desc} [{strats}]:")
-                print(f"         -> STOPPED OUT (Peak+1.70% Stop ${e['stop_price']:.2f} Hit @ {cur_pst} PST): "
+                print(f"         -> STOPPED OUT ({sl_pct_lbl} Hard Stop ${e['stop_price']:.2f} Hit @ {cur_pst} PST): "
                       f"Triggered @ ${e['entry_price']:.2f} ({ent_pst} PST, peak=${e['peak_high']:.2f}) | "
                       f"Covered @ ${tel['cur_price']:.2f} | Locked PnL: {tel['pnl_pct']:+.2f}% (Size: {sz:.1f}%)")
                 print(f"         -> WARNING: DO NOT ENTER LATE! If still short {base_tk}, COVER IMMEDIATELY.")
             elif tel.get('exited'):
                 cur_pst = _et_to_pst(tel['cur_time'])
-                stop_ok_s = f" (Stop ${e['stop_price']:.2f} held)" if e.get('stop_price') is not None else ""
+                stop_ok_s = f" ({sl_pct_lbl} Stop ${e['stop_price']:.2f} held)" if e.get('stop_price') is not None else ""
                 print(f"      {step_idx}. [{tk}] {leg_desc} [{strats}]:")
                 print(f"         -> COMPLETED: Entered @ ${e['entry_price']:.2f} ({ent_pst} PST){stop_ok_s} | "
                       f"Covered @ ${tel['cur_price']:.2f} ({cur_pst} PST — {ex_reason}) | "
@@ -1656,18 +1748,13 @@ else:
             else:
                 live_s = f" | Now ${tel['cur_price']:.2f} ({tel['pnl_pct']:+.2f}%, MFE +{tel['mfe_pct']:.1f}%)" if tel else ""
                 stop_line = (
-                    f" | Hard Stop: ${e['stop_price']:.2f} (+1.7% above ${e['peak_high']:.2f} peak — cover & do not enter above this level)"
+                    f" | {sl_pct_lbl} Hard Stop: ${e['stop_price']:.2f} (+{SHORT_HARD_STOP_PCT*100:.0f}% above ${e['entry_price']:.2f} entry — NO trailing profit lock)"
                     if e.get('stop_price') is not None else ""
                 )
                 print(f"      {step_idx}. [{tk}] {leg_desc} [{strats}]:")
                 print(f"         -> ACTION: Ensure SHORT is open on {base_tk} (triggered @ ${e['entry_price']:.2f} at {ent_pst} PST){live_s}{stop_line}")
-                if 'C2' in ticker_strats[tk] and not p.get('is_addon') and p['gap_pct'] < 0.15 and p.get('exit_time') != EXIT_TIME_INST_ET:
-                    other_s = [s for s in ticker_strats[tk] if s != 'C2']
-                    print(f"         -> SIZE & EXIT: Allocate {sz:.1f}% of portfolio. "
-                          f"Cover at {ex_pst} PST for {', '.join(other_s)} ({ex_reason}); for C2, cover at 08:30 PST.")
-                else:
-                    print(f"         -> SIZE & EXIT: Allocate {sz:.1f}% of portfolio. "
-                          f"Hold and COVER at {ex_pst} PST ({ex_reason}).")
+                print(f"         -> SIZE & EXIT: Allocate {sz:.1f}% of SHORT sleeve. "
+                      f"Hold and COVER at {ex_pst} PST ({ex_reason}).")
             step_idx += 1
 
     if not is_post_window and n_candidate > 0:
@@ -1677,92 +1764,37 @@ else:
         step_idx += 1
     elif is_post_window and n_confirmed == 0:
         print(f"      1. NO TRADES TRIGGERED BY 06:44 PST. All morning candidates failed confirmation.")
-        print(f"      2. DO NOT SHORT anything today. Midday add-ons only apply when a morning trade is open.")
+        print(f"      2. DO NOT SHORT anything today. Scanning is complete for {scan_date}.")
 
-# 2. Midday Multi-Trigger Status & Next Run Guidance
+# 2. Next Run Guidance
 print(f"\n  [B] WHEN & HOW OFTEN TO RUN THIS SCRIPT NEXT (PST):")
-strats_with_midday_watch = []
-any_untriggered_w11 = False
-for strat in STRATEGIES:
-    sid = strat['id']
-    picks = strategy_picks[sid]
-    if not picks:
-        continue
-    n_morn = picks[0].get('n_morning_confirmed', 0)
-    idle_rem = picks[0].get('idle_slots_remaining', 0)
-    if n_morn >= 1 and idle_rem >= 1:
-        existing_tks = {p['ticker'] for p in picks if p.get('entry')}
-        open_prim = [
-            p for p in picks
-            if not p.get('is_addon') and p.get('entry')
-            and not (p.get('telemetry') or {}).get('stopped_out')
-            and not (p.get('telemetry') or {}).get('exited')
-        ]
-        pending_addons = []
-        for op in open_prim:
-            b2_tk = f"{op['ticker']}_B2"
-            w11_tk = f"{op['ticker']}_W11"
-            can_b2 = strat.get('addon_bounce_reshort') and (b2_tk not in existing_tks) and (now_et_hhmm <= '13:35')
-            can_w11 = strat.get('addon_1100_winner') and (w11_tk not in existing_tks) and (now_et_hhmm <= '11:00')
-            if can_w11:
-                any_untriggered_w11 = True
-            if can_b2 or can_w11:
-                tel = op.get('telemetry') or {}
-                mfe_v = tel.get('mfe_pct', 0.0)
-                armed_tag = "ARMED (MFE >= 3%)" if tel.get('bounce_armed') else f"waiting for >=3% drop (MFE +{mfe_v:.1f}%)"
-                types_left = []
-                if can_b2: types_left.append("Bounce _B2")
-                if can_w11: types_left.append("08:00 _W11")
-                pending_addons.append(f"{op['ticker']} ({'+'.join(types_left)}: {armed_tag})")
-        if pending_addons:
-            strats_with_midday_watch.append((sid, idle_rem, strat['optimal_n'], ', '.join(pending_addons)))
-
+any_addon_strat = any(s.get('addon_bounce_reshort') or s.get('addon_1100_winner') for s in STRATEGIES)
 if now_et_hhmm < '09:45':
     print(f"      • RIGHT NOW (Morning Window 06:33–06:44 PST):")
     print(f"        Run every 1–2 minutes (or at 06:33, 06:37, 06:41, and 06:44:30 PST) to catch morning triggers.")
-elif now_et_hhmm <= '13:35':
-    if strats_with_midday_watch:
-        print(f"      • MIDDAY ADD-ON WATCH IS ACTIVE (06:55–10:35 PST):")
-        for sid, irem, optn, ainfo in strats_with_midday_watch:
-            print(f"        - {sid}: {irem}/{optn} idle slot(s) open | Watching: {ainfo}")
-        print(f"      • HOW OFTEN TO RUN NOW:")
-        print(f"        1. Run every 3–5 minutes between 06:55 and 10:35 PST whenever an open morning short has dropped")
-        print(f"           >=3.0% (ARMED) and starts bouncing — the script will confirm '_B2' (Bounce Re-Short)")
-        print(f"           as soon as a 3-bar bounce peak pulls back >=0.5%.")
-        if any_untriggered_w11 and now_et_hhmm <= '11:01':
-            print(f"        2. Run at 08:00:15 PST to check if C3 triggers a '_W11' 08:00 PST Winner Pyramid.")
-        if now_et_hhmm <= '11:31':
-            print(f"        3. At 08:30:00 PST, cover $50+ local_high morning spikes & C2 <15% gap trades.")
-        if now_et_hhmm <= '12:31':
-            print(f"        4. At 09:30:00 PST, cover <$50 local_high morning spikes.")
-    else:
-        print(f"      • NO MORE ADD-ON RUNS NEEDED TODAY:")
-        if n_confirmed == 0:
-            print(f"        0 morning trades triggered by 06:44 PST. Midday Bounce Re-Shorts & 08:00 PST Pyramids")
-            print(f"        only add onto an open morning short. Your scanning is DONE for the day!")
-        else:
-            print(f"        All possible morning & midday add-on legs for today's active stocks have already")
-            print(f"        triggered ({n_confirmed} confirmed leg(s)). You do NOT need to re-run for new entries!")
-            print(f"        Just execute your scheduled Rule #3 RTH exits (08:30, 09:30, or 11:00 PST).")
-else:
-    print(f"      • ENTRY & ADD-ON WINDOWS CLOSED (Now past 10:35 PST):")
+elif not any_addon_strat:
+    print(f"      • MORNING WINDOW CLOSED (V8.2-S has NO midday _B2 re-shorts):")
     if n_confirmed > 0:
-        print(f"        No new entries can trigger today. Cover any remaining open legs by 11:00 PST (Hard Flat).")
+        print(f"        {n_confirmed} morning short(s) active. No more scans needed today!")
+        print(f"        Keep your -10% hard stop active and cover at your scheduled exit (08:30 / 09:30 / 11:00 PST).")
     else:
-        print(f"        No trades triggered today. Scanning is complete for {scan_date}.")
+        print(f"        0 trades triggered by 06:44 PST. You are DONE for the day!")
+elif now_et_hhmm <= '13:35':
+    print(f"      • LEGACY MIDDAY ADD-ON MODE ACTIVE (06:55–10:35 PST).")
+else:
+    print(f"      • ENTRY WINDOW CLOSED (Now past 10:35 PST). Cover any remaining open shorts by 11:00 PST (Hard Flat).")
 
 # 3. Quick Reference Daily Schedule (PST)
-print(f"\n  [C] DAILY MULTI-TRIGGER RUN & RTH EXIT SCHEDULE (PST TIME ZONE):")
+print(f"\n  [C] DAILY {STRATEGY_VERSION} SHORT RUN & EXIT SCHEDULE (PST TIME ZONE):")
 print(f"      ┌──────────────────┬──────────────────────┬───────────────────────────────────────────────────────────┐")
 print(f"      │ Window (PST)     │ How Often to Run     │ What the Script Checks & What You Do                      │")
 print(f"      ├──────────────────┼──────────────────────┼───────────────────────────────────────────────────────────┤")
-print(f"      │ 06:31–06:32 PST  │ Once at 06:31:15 PST │ Locks top 3 gap candidates per strategy (Watchlist)       │")
+print(f"      │ 06:31–06:32 PST  │ Once at 06:31:15 PST │ Locks top 3 ETB + Catalyst-clean candidates (Watchlist)   │")
 print(f"      │ 06:33–06:44 PST  │ Every 1–2 minutes    │ Confirms Bar0 Flush (06:33) & 3-Bar Local High shorts     │")
-print(f"      │ 06:55–10:35 PST  │ Every 3–5 minutes*   │ *Only if 1-2 morning shorts open: checks Bounce (_B2)     │")
-print(f"      │ 08:00 PST        │ Once at 08:00:15 PST │ *Only if C3 has idle slot: checks 08:00 Pyramid (_W11)    │")
-print(f"      │ 08:30 PST        │ Exit Checkpoint #1   │ Cover $50+ local_high morning spikes & C2 <15% gap trades │")
-print(f"      │ 09:30 PST        │ Exit Checkpoint #2   │ Cover <$50 local_high morning spikes (Rule #3 Tier 2)     │")
-print(f"      │ 11:00 PST        │ Exit Checkpoint #3   │ Cover all bar0_flush, _B2 bounce & _W11 pyramid (FLAT)    │")
+print(f"      │ 06:44:30 PST     │ Morning Scan DONE    │ No _B2 re-shorts! Place -10% hard stop & let winners run  │")
+print(f"      │ 08:30 PST        │ Exit Checkpoint #1   │ Cover ALL <15% gap shorts & $50+ local_high spikes        │")
+print(f"      │ 09:30 PST        │ Exit Checkpoint #2   │ Cover <$50 local_high spikes (>=15% gaps)                 │")
+print(f"      │ 11:00 PST        │ Exit Checkpoint #3   │ Cover ALL remaining bar0_flush shorts (100% FLAT)         │")
 print(f"      └──────────────────┴──────────────────────┴───────────────────────────────────────────────────────────┘")
 
 
@@ -1779,8 +1811,8 @@ for strat in STRATEGIES:
 
     print(f"\n  {'─'*90}")
     print(f"  ┌ {strat['name']}  |  N={opt_n}  |  "
-          f"3M Sh={strat['post_sharpe']:.3f}  Avg={strat['post_avg']:+.2f}%  "
-          f"Worst={strat['worst_loss']:+.2f}%")
+          f"12.5M Sh={strat['post_sharpe']:.2f}  AvgNet={strat['post_avg']:+.2f}%  "
+          f"HardStop={strat['worst_loss']:+.1f}%")
     print(f"  │ {strat['setup']}")
 
     if not picks:
@@ -1824,8 +1856,9 @@ for strat in STRATEGIES:
                              f"(08:00 PnL +{entry.get('pullback_pct', 0):.2f}%, bounce {entry.get('bounce_frac_pct', 0):.1f}% of drop){sz_s}{ex_s}{tel_inline}")
             else:
                 pb_str = f", pullback -{entry.get('pullback_pct', 0):.2f}%" if entry.get('pullback_pct') is not None else ""
+                tq_s = (f" | T&Q MSYN={entry['tq_msyn']:+.2f}, BlkOFI={entry['tq_blk_ofi']:+.2f}" if 'tq_msyn' in entry else "")
                 entry_str = (f"SHORT ({etype.upper()}) @ ${entry['entry_price']:.2f} "
-                             f"(peak bar {entry['peak_bar']} @ ${entry['peak_high']:.2f}{pb_str} → entry {ent_pst} PST){sz_s}{ex_s}{tel_inline}")
+                             f"(peak bar {entry['peak_bar']} @ ${entry['peak_high']:.2f}{pb_str} → entry {ent_pst} PST){sz_s}{ex_s}{tq_s}{tel_inline}")
         elif is_post_window:
             status_tag = 'SKIPPED'
             if p.get('tq_reject_reason'):
@@ -1863,9 +1896,10 @@ for strat in STRATEGIES:
                     pm_info += f"  2bar={drop_2b:+.1f}%"
 
         loc_b = p.get('locate_badge', 'ETB')
+        cat_b = p.get('catalyst_badge', 'Clean')
         print(f"  │ [{status_tag}] #{rank}  {p['ticker']:8s}  "
               f"gap={p['gap_pct']*100:+.1f}%  ${p['open_price']:.2f}  "
-              f"float={fs_str}  locate={loc_b}{rank_label}")
+              f"float={fs_str}  locate={loc_b}  cat={cat_b}{rank_label}")
         print(f"  │   → {entry_str}")
         if pm_info:
             print(f"  │   {pm_info}")
@@ -1873,33 +1907,20 @@ for strat in STRATEGIES:
     if picks:
         idle_rem = picks[0].get('idle_slots_remaining', 0)
         n_morn = picks[0].get('n_morning_confirmed', 0)
-        existing_tks = {p['ticker'] for p in picks if p.get('entry')}
-        open_prim = [
-            p for p in picks
-            if not p.get('is_addon') and p.get('entry')
-            and not (p.get('telemetry') or {}).get('stopped_out')
-            and not (p.get('telemetry') or {}).get('exited')
-        ]
-        can_still_addon = any(
-            (strat.get('addon_bounce_reshort') and f"{op['ticker']}_B2" not in existing_tks and now_et_hhmm <= '13:35') or
-            (strat.get('addon_1100_winner') and f"{op['ticker']}_W11" not in existing_tks and now_et_hhmm <= '11:00')
-            for op in open_prim
-        )
-        if n_morn == 0 and is_post_window:
-            print(f"  │   [Idle Slots: {idle_rem}/{opt_n} unused — 0 morning triggers confirmed, so no Midday Add-Ons can fire today]")
+        if not (strat.get('addon_bounce_reshort') or strat.get('addon_1100_winner')):
+            print(f"  │   [Active Slots: {n_morn}/{opt_n} morning short(s) | _B2 Midday Re-Shorts OFF (V8.2-S)]")
+        elif n_morn == 0 and is_post_window:
+            print(f"  │   [Idle Slots: {idle_rem}/{opt_n} unused — 0 morning triggers confirmed]")
         elif idle_rem == 0:
-            print(f"  │   [Slots Full: {opt_n}/{opt_n} active slots filled — no idle slots left for further add-ons]")
-        elif not can_still_addon and is_post_window:
-            print(f"  │   [Idle Slots: {idle_rem}/{opt_n} unused — all eligible add-on legs on today's morning short(s) have already resolved]")
+            print(f"  │   [Slots Full: {opt_n}/{opt_n} active slots filled]")
         elif n_morn >= 1 and idle_rem > 0:
-            print(f"  │   [Idle Slots: {idle_rem}/{opt_n} open — watching active morning short(s) for Midday Bounce Re-Short (06:55-10:35 PST)"
-                  f"{' & 08:00 PST Pyramid' if strat.get('addon_1100_winner') else ''}]")
+            print(f"  │   [Idle Slots: {idle_rem}/{opt_n} open — legacy midday add-on watch active]")
     print(f"  └{'─'*89}")
 
 
-# ── CROSS-STRATEGY AGREEMENT ─────────────────────────────────────────────────
+# ── CROSS-STRATEGY AGREEMENT (only when multiple strategies active via --legacy) ─
 
-if len(ticker_strats) > 1:
+if len(STRATEGIES) > 1 and len(ticker_strats) > 1:
     print(f"\n\n{'='*95}")
     print(f"  CROSS-STRATEGY AGREEMENT")
     print(f"{'='*95}")

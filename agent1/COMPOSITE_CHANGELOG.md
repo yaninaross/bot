@@ -1,5 +1,32 @@
 # Agent 1 — Composite Backtest Changelog
 
+## 2026-11-19 — Official **`V8.2`** Production Release (`Choice 1: Max Profit` — `agent1/agent1_v2.py` [`V8.2-S`] + `agent1/agent1_long_live.py` [`V8.2-L`]): Full 12.5M Split-Proof Orthogonal Ablation & `730+`-Stock `T&Q` Expansion
+
+**Scripts Updated:** `agent1/agent1_v2.py` (`V8.2-S`), `agent1/agent1_long_live.py` (`V8.2-L`)
+**Audit Horizon:** Full US Market 12.5 Months (`2025-11-03 → 2026-11-18`, `263` Trading Days), split-proof (`$10–$100` unadjusted open, `split_factor <= 1.25x`, **`218` reverse-split penny stocks excluded**), zero look-ahead, `-0.75%` SHORT slip + real IBKR borrow / `-0.30%` LONG slip.
+
+### 1. Orthogonal Feature Scorecard (12.5M Full-Year SHORT Impact vs. Raw `V8.0-Base` `-88.6%` / `$32K`)
+- ✅ **KEEP — IBKR Easy-to-Borrow Locate:** **`+101.0%`** lift (`-88.6% → +12.3%`, now includes Colab-proof inline IBKR FTP fallback inside `agent1_v2.py`).
+- ✅ **KEEP — Pre-Open Catalyst Veto (`<= 06:30 PST`):** **`+8.9%`** lift (`+12.3% → +21.1%`; blocks `M&A/Buyout` on all gaps & `Analyst Upgrades` on `<15%` gaps before selecting Top 3 watchlist).
+- ✅ **KEEP — Remove `_B2` Midday Bounce Re-Shorts:** **`+25.8%`** lift (`+21.1% → +47.1%`, cuts Max DD `-52.7% → -35.1%`; short each qualified stock once in the morning).
+- ✅ **KEEP — Unlock `15%–30%` Gaps ONLY w/ Bearish Peak→Entry `T&Q` (`MSYN >= +0.35 & Block_OFI <= -0.15`):** **`+39.5%`** lift (`+47.1% → +86.7%`, `$212,105`, Sharpe `1.76`, MaxDD `-26.5%`).
+- ✅ **KEEP — No-Duplicate Open-Position Guard on `V8.2-L` (`Engine C1`):** Automatically replays last 3 trading days (tracking `-12%` GTC stop-outs) & blocks re-buying already-open `T+3` longs (blocked `Nov 11 AXTI -12.3%`, saving `+6.1%` Net in Last 2W).
+- ❌ **SKIP — Tight `-5%` Stop & Blanket `+5%` Trailing Profit Lock:** **`-55.7%` WORSE** over 12.5M (`+69.5% → +13.8%`, turning `>=30%` parabolics from `+20.4% → -32.5%` by chopping massive winners like `EEIQ +25.1% → +3.3%`, `FIRY +25.7% → +6.9%`, `ALMS +19.7% → +2.7%`). Reverted to **`-10.0%` hard stop (highest Sharpe plateau)** and **`ENABLE_TRAILING_PROFIT_LOCK = False`**.
+- **Choice 1 Selected (`V8.2-S` default):** NO `<15%` `T&Q` veto (`233` short trades, `$212K` standalone / `$361K` combined 50/50 unleveraged cash; pass `--picky` for Choice 2 `155` trades / `$333K` combined).
+
+### 2. Official **`V8.2`** Verified 12.5M Performance (`$100K` Starting Capital)
+| Portfolio (`263` Trading Days: `2025-11-03 → 2026-11-18`) | Trades | Net WR | PF | Sum Net% | Ending Value (`$100K`) | Max DD% | Ann. Sharpe | Green Months |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Old Raw Short Bot (`V8.0-Base`) | `407` | `47.7%` | `0.84x` | `-88.6%` | `$32,092` | `-76.8%` | `-1.23` | `5 / 13` |
+| **`V8.2-S` SHORT Bot Alone (`agent1_v2.py`)** | `233` | `52.4%` | `1.36x` | **`+86.7%`** | **`$212,105`** | `-26.5%` | **`1.76`** | `8 / 13` |
+| **`V8.2-L` LONG Bot (`Engine C1`, `agent1_long_live.py`)** | `39` | `69.2%` | `6.90x` | **`+186.3%`** | **`$527,426`** | `-19.6%` | **`2.74`** | `12 / 13` |
+| **`V8.2` Combined — Unleveraged 50/50 Cash (`$50K` S + `$50K` L)** | `272` | `54.8%` | `2.12x` | **`+136.6%`** | **`$361,151`** | **`-13.9%`** | **`3.32`** | **`12 / 13`** |
+| *`V8.2` Combined — 2x Parallel Margin Reference (`$100K` S + `$100K` L)* | *`272`* | *`54.8%`* | *`2.12x`* | *`+273.2%`* | *`$1,128,145`* | *`-26.6%`* | *`3.32`* | *`12 / 13`* |
+
+- **Background `T&Q` Expansion Milestone:** Completed **`Ranks #581 → #730` (`151/151` stocks, `0` errors)** via `gcp_parallel_tq_worker.py` (total GCS `T&Q` universe now `730+` priority stocks).
+
+---
+
 ## 2026-11-17 — Agent 1 v2.7 (`agent1/agent1_v2.py`, `agent1/agent1_long_live.py`, `agent1/short_locate_etb.py`): `534`-Stock `T&Q` Expansion (`69,610` Setups), Live `T&Q` Order-Flow Gate on `SHORT`, Standalone `LONG-ONLY` Live Scanner, and `2026-11-04 → 2026-11-17` 2-Week Live Backtest
 
 **Scripts Added/Updated:** `agent1/agent1_v2.py`, `agent1/agent1_long_live.py`, `agent1/short_locate_etb.py`, `data_ops/gcp_parallel_tq_worker.py`
